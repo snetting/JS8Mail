@@ -351,7 +351,7 @@ class Handler(BaseHTTPRequestHandler):
     async def send_rf(self, text: str, message_id: str | None = None) -> None:
         """Reserve conservative airtime before handing a frame to JS8Call."""
         async with self.tx_lock:
-            await self._send_rf_serialized(text, message_id)
+            await Handler._send_rf_serialized(self, text, message_id)
 
     async def _send_rf_serialized(self, text: str, message_id: str | None = None) -> None:
         """Submit one frame after leaving a listening opportunity."""
