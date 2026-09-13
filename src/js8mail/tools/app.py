@@ -50,6 +50,7 @@ from js8mail.radio_policy import AirtimeBudget, estimate_airtime_ms
 from js8mail.storage import Database
 
 DIRECT_RESPONSE_DEADLINE_MS = 2 * 60 * 1000
+AUTOMATED_TX_GAP_MS = 30 * 1000
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>JS8Mail</title><style>
@@ -96,6 +97,8 @@ class Handler(BaseHTTPRequestHandler):
     announced_destinations: set[str]
     airtime_budget: AirtimeBudget
     message_budgets: dict[str, AirtimeBudget]
+    tx_lock: asyncio.Lock
+    last_tx_at_ms: int | None
 
     def reply(self, code: int, value: Any, content_type: str = "application/json") -> None:
         data = value.encode() if isinstance(value, str) else json.dumps(value).encode()
@@ -347,6 +350,21 @@ class Handler(BaseHTTPRequestHandler):
 
     async def send_rf(self, text: str, message_id: str | None = None) -> None:
         """Reserve conservative airtime before handing a frame to JS8Call."""
+        async with self.tx_lock:
+            await self._send_rf_serialized(text, message_id)
+
+    async def _send_rf_serialized(self, text: str, message_id: str | None = None) -> None:
+        """Submit one frame after leaving a listening opportunity."""
+        now = utc_now_ms()
+        if self.last_tx_at_ms is not None:
+            wait_ms = self.last_tx_at_ms + AUTOMATED_TX_GAP_MS - now
+            if wait_ms > 0:
+                self.service.database.audit(
+                    "radio.tx_pacing_wait",
+                    {"message_id": message_id, "wait_ms": wait_ms},
+                )
+                await asyncio.sleep(wait_ms / 1000)
+                now = utc_now_ms()
         try:
             speed = int(self.status.get("speed", 1))
         except (TypeError, ValueError):
@@ -377,6 +395,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 raise RuntimeError("message airtime budget exhausted")
         await self.client.send_message(text)
+        self.last_tx_at_ms = utc_now_ms()
         self.airtime_budget.spend_at(airtime_ms, now)
         if message_budget is not None:
             message_budget.spend_at(airtime_ms, now)
@@ -425,6 +444,8 @@ async def run(args: argparse.Namespace) -> None:
             "announced_destinations": set(),
             "airtime_budget": airtime_budget,
             "message_budgets": {},
+            "tx_lock": asyncio.Lock(),
+            "last_tx_at_ms": None,
         },
     )
     server = ThreadingHTTPServer((args.ui_host, args.ui_port), handler)
