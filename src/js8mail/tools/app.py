@@ -520,7 +520,16 @@ async def run(args: argparse.Namespace) -> None:
                                 if part_ack is not None and part_ack.missing:
                                     detail = f"missing parts: {','.join(map(str, part_ack.missing))}"
                                     try:
-                                        parts = split_human_message(message_id, str(message["body"]))
+                                        parts = split_human_message(message_id, str(receipt_message["body"]))
+                                        for part in parts:
+                                            database.upsert_message_part(
+                                                part.message_id,
+                                                part.number,
+                                                part.total,
+                                                part.payload,
+                                                direction="outgoing",
+                                                peer=source,
+                                            )
                                         for number in part_ack.missing:
                                             if number <= len(parts):
                                                 await client.send_message(
@@ -543,7 +552,27 @@ async def run(args: argparse.Namespace) -> None:
                                 accumulator = reassembly.setdefault(
                                     part.message_id, MultipartAccumulator(part.message_id, part.total)
                                 )
+                                if not accumulator.receipt().received:
+                                    for stored in database.list_message_parts(
+                                        part.message_id, direction="incoming", peer=source
+                                    ):
+                                        accumulator.add(
+                                            MessagePart(
+                                                part.message_id,
+                                                int(stored["part_number"]),
+                                                int(stored["total_parts"]),
+                                                str(stored["payload"]),
+                                            )
+                                        )
                                 accumulator.add(part)
+                                database.upsert_message_part(
+                                    part.message_id,
+                                    part.number,
+                                    part.total,
+                                    part.payload,
+                                    direction="incoming",
+                                    peer=source,
+                                )
                                 if accumulator.should_ack(utc_now_ms()):
                                     await client.send_message(f"{source} {format_part_ack(accumulator.receipt())}")
                                     database.audit("message.part_ack_submitted", {"message_id": part.message_id, "to": source})

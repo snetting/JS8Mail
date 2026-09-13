@@ -35,3 +35,15 @@ def test_message_retry_is_durable_and_progressively_scheduled(tmp_path: Path) ->
     reopened = Database(tmp_path / "mail.sqlite3")
     assert reopened.get_message("m1")["retry_count"] == 1  # type: ignore[index]
     reopened.close()
+
+
+def test_message_parts_are_idempotent_and_survive_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "mail.sqlite3"
+    database = Database(path)
+    database.upsert_message_part("m1", 2, 2, "SECOND", direction="incoming", peer="N0CALL")
+    database.upsert_message_part("m1", 2, 2, "SECOND", direction="incoming", peer="N0CALL")
+    assert database.list_message_parts("m1", direction="incoming", peer="n0call")[0]["payload"] == "SECOND"
+    database.close()
+    reopened = Database(path)
+    assert len(reopened.list_message_parts("m1", direction="incoming", peer="N0CALL")) == 1
+    reopened.close()

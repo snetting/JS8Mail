@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class Database:
@@ -101,6 +101,24 @@ class Database:
                 ALTER TABLE messages ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
                 ALTER TABLE messages ADD COLUMN next_attempt_at_ms INTEGER;
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (4, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 5:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS message_parts (
+                    message_id TEXT NOT NULL,
+                    part_number INTEGER NOT NULL CHECK(part_number > 0),
+                    total_parts INTEGER NOT NULL CHECK(total_parts > 0),
+                    payload TEXT NOT NULL,
+                    direction TEXT NOT NULL CHECK(direction IN ('outgoing', 'incoming')),
+                    peer TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(message_id, part_number, direction, peer)
+                );
+                CREATE INDEX IF NOT EXISTS message_parts_lookup_idx
+                    ON message_parts(message_id, direction, peer);
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (5, strftime('%s','now') * 1000);
                 """
             )
         self.connection.commit()
@@ -244,6 +262,41 @@ class Database:
         rows = self.connection.execute(
             "SELECT * FROM message_attempts WHERE message_id = ? ORDER BY created_at_ms",
             (message_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_message_part(
+        self,
+        message_id: str,
+        part_number: int,
+        total_parts: int,
+        payload: str,
+        *,
+        direction: str,
+        peer: str,
+    ) -> None:
+        if direction not in {"outgoing", "incoming"}:
+            raise ValueError("invalid message part direction")
+        if not 1 <= part_number <= total_parts or total_parts > 255:
+            raise ValueError("invalid message part position")
+        if len(payload.encode()) > 4096 or len(peer) > 16:
+            raise ValueError("message part is too large")
+        self.connection.execute(
+            "INSERT INTO message_parts(message_id, part_number, total_parts, payload, direction, peer, updated_at_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(message_id, part_number, direction, peer) DO UPDATE SET "
+            "total_parts=excluded.total_parts, payload=excluded.payload, updated_at_ms=excluded.updated_at_ms",
+            (message_id, part_number, total_parts, payload, direction, peer.upper(), utc_now_ms()),
+        )
+        self.connection.commit()
+
+    def list_message_parts(
+        self, message_id: str, *, direction: str, peer: str
+    ) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM message_parts WHERE message_id = ? AND direction = ? AND peer = ? "
+            "ORDER BY part_number",
+            (message_id, direction, peer.upper()),
         ).fetchall()
         return [dict(row) for row in rows]
 
