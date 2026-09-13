@@ -15,7 +15,10 @@ SCHEMA_VERSION = 2
 class Database:
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
-        self.connection = sqlite3.connect(self.path)
+        # The local UI serves requests in worker threads while the daemon
+        # records radio events. SQLite's serialized connection mode plus the
+        # application-level small operations make this safe for this slice.
+        self.connection = sqlite3.connect(self.path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA journal_mode = WAL")
@@ -147,3 +150,38 @@ class Database:
             ("message.state_changed", message_id, json.dumps({"from": current, "to": target}), now),
         )
         self.connection.commit()
+
+    def list_messages(self, state: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM messages"
+        parameters: tuple[str, ...] = ()
+        if state is not None:
+            query += " WHERE state = ?"
+            parameters = (state,)
+        query += " ORDER BY created_at_ms DESC"
+        return [dict(row) for row in self.connection.execute(query, parameters).fetchall()]
+
+    def get_message(self, message_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT * FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def recent_observations(self, limit: int = 50) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(limit, 500))
+        rows = self.connection.execute(
+            "SELECT id, event_type, value, params_json, observed_at_ms "
+            "FROM observations ORDER BY observed_at_ms DESC LIMIT ?",
+            (bounded_limit,),
+        ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["params"] = json.loads(item.pop("params_json"))
+            result.append(item)
+        return result
+
+    def message_counts(self) -> dict[str, int]:
+        rows = self.connection.execute(
+            "SELECT state, COUNT(*) AS count FROM messages GROUP BY state"
+        ).fetchall()
+        return {str(row["state"]): int(row["count"]) for row in rows}

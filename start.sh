@@ -16,5 +16,5 @@ if [[ ! -f "${VENV_DIR}/.js8mail-installed" || "${SCRIPT_DIR}/pyproject.toml" -n
     touch "${VENV_DIR}/.js8mail-installed"
 fi
 
-echo "Starting JS8Mail receive-only API probe. No RF transmission is enabled."
-exec "${VENV_DIR}/bin/python" -m js8mail.tools.probe_js8call_api "$@"
+echo "Starting JS8Mail local mailbox. RF transmission requires --tx-mode approve."
+exec "${VENV_DIR}/bin/python" -m js8mail.tools.app "$@"

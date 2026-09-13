@@ -2,11 +2,11 @@
 
 Offline-first messaging above an unmodified JS8Call instance.
 
-The current implementation is deliberately receive-first. It provides bounded
+The current implementation is deliberately conservative. It provides bounded
 JS8Call JSON parsing, passive observation capture, durable SQLite message
-queueing, guarded lifecycle transitions, dry-run transmit decisions, and
-optional-topology request signing primitives. It does not submit RF
-transmissions yet.
+queueing, guarded lifecycle transitions, a local mailbox UI, and explicit
+operator-approved JS8Call transmission. It does not perform automatic routing
+or claim end-to-end delivery yet.
 
 ## Development
 
@@ -19,12 +19,21 @@ python -m pip install -e '.[test]'
 pytest
 ```
 
-The receive-only probe can be run against a locally configured JS8Call API:
+The local mailbox can be run against a locally configured JS8Call API:
 
 ```sh
-python -m js8mail.tools.probe_js8call_api --host 127.0.0.1 --port 2442
+./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode observe
 ```
 
-The probe never constructs a transmit command. See
+Open http://127.0.0.1:8765 in a browser. `observe` allows queueing but no RF
+submission. For a deliberate per-message Send button during low-power testing:
+
+```sh
+./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode approve
+```
+
+The Send action only submits text to JS8Call; it does not report delivery.
+Use a dummy load and suitable low-power test setup. The original receive-only
+probe remains available as `js8mail-probe`. See
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the staged
 implementation and safety boundaries.

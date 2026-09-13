@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -32,3 +33,30 @@ async def test_client_captures_events_and_ignores_malformed_frames() -> None:
 
     assert len(received) == 1
     assert received[0].event_type == "RX.ACTIVITY"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_client_sends_explicit_two_step_message() -> None:
+    received: list[dict[str, object]] = []
+
+    async def server_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        for _ in range(2):
+            line = await reader.readline()
+            received.append(json.loads(line))
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(server_handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = Js8CallClient(port=port)
+    try:
+        await client.connect()
+        await client.send_message("N0CALL test")
+        await asyncio.sleep(0)
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+    assert [packet["type"] for packet in received] == ["TX.SET_TEXT", "TX.SEND_MESSAGE"]
+    assert received[0]["value"] == "N0CALL test"
