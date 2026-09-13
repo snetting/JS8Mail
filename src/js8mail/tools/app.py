@@ -631,10 +631,12 @@ async def run(args: argparse.Namespace) -> None:
                 promising = service.promising_stations(destination)[:3]
                 if message.get("retry_count", 0) >= 3:
                     candidate_custodian = next((candidate for candidate in promising if candidate != destination), None)
-                    if candidate_custodian is not None and not any(
-                        item["custodian"] == candidate_custodian and item["status"] == "accepted"
+                    active_custody = {
+                        str(item["custodian"]).upper()
                         for item in database.list_custody(str(message["id"]))
-                    ):
+                        if item["status"] in {"offered", "accepted", "retrieval_pending", "forwarded"}
+                    }
+                    if candidate_custodian is not None and candidate_custodian.upper() not in active_custody:
                         try:
                             await handler.transmit_store(cast(Handler, handler), str(message["id"]), candidate_custodian)
                         except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
