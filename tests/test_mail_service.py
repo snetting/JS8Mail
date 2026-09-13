@@ -52,3 +52,13 @@ def test_recently_heard_does_not_count_as_a_directed_answer(tmp_path: Path) -> N
     )
     assert service.recently_answered("M8YRT", "OH3SPN", now_ms=2_500, window_ms=10_000)
     database.close()
+
+
+def test_message_graph_omits_self_links(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("OH3SPN", "test", "body")
+    database.record_attempt(message_id, "direct", "OH3SPN", "submitted", "self test")
+    graph = service.message_graph(message_id, "OH3SPN")
+    assert graph["edges"] == []
+    database.close()

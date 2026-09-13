@@ -421,6 +421,11 @@ async def run(args: argparse.Namespace) -> None:
     saved_airtime = database.airtime_state()
     saved_window_start = saved_airtime.get("window_started_at_ms")
     airtime_budget = AirtimeBudget(
+        # The radio-wide budget is governed by its rolling duty-cycle
+        # window.  The five-minute ceiling is intentionally reserved for
+        # each individual message budget below; applying it here would
+        # eventually block the entire station after a few unrelated tests.
+        message_limit_ms=15 * 60 * 1000,
         window_used_ms=int(saved_airtime.get("window_used_ms") or 0),
         window_started_at_ms=int(saved_window_start) if saved_window_start is not None else None,
     )

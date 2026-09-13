@@ -171,7 +171,9 @@ class MailService:
             if not isinstance(source, str) or not isinstance(target, str):
                 continue
             source, target = source.upper(), target.upper()
-            if target.startswith("@") or source.startswith("@"):
+            # A self-directed test (or a JS8Call echo) is not a usable RF
+            # link and makes the route graph misleading.
+            if target.startswith("@") or source.startswith("@") or source == target:
                 continue
             nodes.update((source, target))
             key = (source, target)
@@ -187,7 +189,7 @@ class MailService:
 
         for attempt in self.database.list_attempts(message_id):
             target = str(attempt["target"]).upper()
-            if target.startswith("@") or target == "ROUTE":
+            if target.startswith("@") or target == "ROUTE" or target == origin:
                 continue
             nodes.add(target)
             key = (origin, target)
