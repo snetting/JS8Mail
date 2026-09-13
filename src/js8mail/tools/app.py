@@ -367,6 +367,9 @@ class Handler(BaseHTTPRequestHandler):
         message_budget = None
         if message_id is not None:
             message_budget = self.message_budgets.setdefault(message_id, AirtimeBudget())
+            saved_message_airtime = self.service.database.message_airtime_used(message_id)
+            if saved_message_airtime and message_budget.message_used_ms == 0:
+                message_budget.message_used_ms = saved_message_airtime
             if not message_budget.can_spend_at(airtime_ms, now):
                 self.service.database.record_attempt(
                     message_id, "airtime_budget", "message", "blocked",
@@ -377,6 +380,13 @@ class Handler(BaseHTTPRequestHandler):
         self.airtime_budget.spend_at(airtime_ms, now)
         if message_budget is not None:
             message_budget.spend_at(airtime_ms, now)
+            if message_id is not None:
+                self.service.database.save_message_airtime(message_id, message_budget.message_used_ms)
+        self.service.database.save_airtime_state(
+            self.airtime_budget.window_started_at_ms,
+            self.airtime_budget.window_used_ms,
+            self.airtime_budget.message_used_ms,
+        )
         self.service.database.audit(
             "radio.airtime_reserved", {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed}
         )
@@ -389,6 +399,12 @@ async def run(args: argparse.Namespace) -> None:
         database.ensure_group(group, description)
     client = Js8CallClient(args.host, args.port)
     loop = asyncio.get_running_loop()
+    saved_airtime = database.airtime_state()
+    saved_window_start = saved_airtime.get("window_started_at_ms")
+    airtime_budget = AirtimeBudget(
+        window_used_ms=int(saved_airtime.get("window_used_ms") or 0),
+        window_started_at_ms=int(saved_window_start) if saved_window_start is not None else None,
+    )
     status: dict[str, Any] = {
         "connected": False,
         "host": args.host,
@@ -407,7 +423,7 @@ async def run(args: argparse.Namespace) -> None:
             "loop": loop,
             "status": status,
             "announced_destinations": set(),
-            "airtime_budget": AirtimeBudget(),
+            "airtime_budget": airtime_budget,
             "message_budgets": {},
         },
     )

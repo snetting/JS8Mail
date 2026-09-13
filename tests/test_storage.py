@@ -37,6 +37,24 @@ def test_message_retry_is_durable_and_progressively_scheduled(tmp_path: Path) ->
     reopened.close()
 
 
+def test_airtime_accounting_survives_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "mail.sqlite3"
+    database = Database(path)
+    database.save_airtime_state(1_000, 12_000, 0)
+    database.enqueue_message("m1", "N0CALL", "hello")
+    database.save_message_airtime("m1", 4_000)
+    database.close()
+
+    reopened = Database(path)
+    assert reopened.airtime_state() == {
+        "window_started_at_ms": 1_000,
+        "window_used_ms": 12_000,
+        "message_used_ms": 0,
+    }
+    assert reopened.message_airtime_used("m1") == 4_000
+    reopened.close()
+
+
 def test_message_parts_are_idempotent_and_survive_reopen(tmp_path: Path) -> None:
     path = tmp_path / "mail.sqlite3"
     database = Database(path)

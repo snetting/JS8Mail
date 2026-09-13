@@ -1,8 +1,8 @@
-"""Provisional JS8Mail multipart delivery primitives.
+"""JS8Mail enhanced envelope v1 delivery primitives.
 
-The wire grammar is intentionally isolated here until the measured v1 envelope
-is ratified. The important behavior is selective acknowledgement, durable
-deduplication, bounded reassembly, and honest delivery evidence.
+The grammar is defined in ``docs/PROTOCOL_V1.md``. The important behavior is
+selective acknowledgement, durable deduplication, bounded reassembly, and
+honest delivery evidence.
 """
 
 from __future__ import annotations
@@ -137,7 +137,7 @@ class MultipartAccumulator:
 
 
 def format_part_ack(receipt: PartReceipt) -> str:
-    """Format the provisional selective ACK for later protocol ratification."""
+    """Format the v1 selective part acknowledgement."""
     return f"J8M1 PA {receipt.message_id} {receipt.total} {receipt.as_bitmap()}"
 
 
@@ -227,7 +227,7 @@ def parse_delivery_ack(text: str) -> tuple[str, int, tuple[str, ...]] | None:
 
 
 def parse_ack(text: str) -> tuple[str, str, str | None] | None:
-    """Parse bounded provisional ACK syntax.
+    """Parse bounded v1 acknowledgement syntax.
 
     Returns ``(kind, message_id, bitmap)`` for ``PA`` and ``DELIVERED``
     frames. Unknown or malformed frames are ignored by design.
@@ -257,7 +257,7 @@ def format_human_data_part(part: MessagePart) -> str:
 
     The body is intentionally not compressed or binary-packed here. JS8Call
     receives readable text and remains responsible for its own token/varicode
-    encoding. The prefix is provisional until protocol v1 is ratified.
+    encoding. The prefix is defined by the v1 protocol specification.
     """
     return f"J8M1 D {part.message_id} {part.number}/{part.total} {part.payload}"
 

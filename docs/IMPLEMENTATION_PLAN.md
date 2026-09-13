@@ -446,7 +446,7 @@ Do not freeze syntax from visual intuition. Produce `docs/PROTOCOL_V1.md` and a 
 JS8Mail traffic has two deliberately different classes:
 
 - **Control metadata**—capability announcements, message IDs, part numbers, selective ACKs, custody, and delivery/read receipts—must carry an unmistakable compact `J8M1` marker. Its fields may be optimized for airtime and do not need to be pleasant prose, but they must remain bounded, parseable, versioned, and visible to the operator.
-- **Message data**—the subject/body content presented to the user—must remain human-readable. JS8Mail may add a small correlation prefix such as the provisional `J8M1 D <MID> <part>/<total>`; it must not replace the body with an opaque binary or application-compressed payload. Pass readable text to JS8Call and let JS8Call apply its own token/varicode encoding.
+- **Message data**—the subject/body content presented to the user—must remain human-readable. JS8Mail may add the v1 correlation prefix `J8M1 D <MID> <part>/<total>`; it must not replace the body with an opaque binary or application-compressed payload. Pass readable text to JS8Call and let JS8Call apply its own token/varicode encoding. See [`PROTOCOL_V1.md`](PROTOCOL_V1.md).
 
 This means “compressed” in the airtime discussion refers to JS8Call's underlying encoding of readable text, not a hidden JS8Mail compression layer. The frame-count experiment must measure the actual JS8Call output for representative body text and separately measure compact metadata overhead.
 
@@ -467,7 +467,7 @@ Rules:
 - late duplicate parts and duplicate delivery receipts remain idempotent;
 - read receipts remain opt-in and separate from delivery receipts.
 
-The current implementation contains these semantics in `js8mail.protocol.MultipartAccumulator`; its `J8M1 PA` formatter is provisional and must not be used on air until the envelope experiment and protocol review ratify the syntax.
+The current implementation contains these semantics in `js8mail.protocol.MultipartAccumulator`; the v1 wire grammar is published in [`PROTOCOL_V1.md`](PROTOCOL_V1.md).
 
 ### 8.1.2 Delivery confidence presentation
 
@@ -484,7 +484,7 @@ Use an evidence label with an explanation rather than a misleading probability. 
 
 “Confidence” is the strength of evidence, not a statistical probability. The UI must show missing part numbers, last receipt time, retry count, current custodian, and expiry for incomplete multipart messages.
 
-### 8.2 Candidate grammar to measure, not yet ratify
+### 8.2 Airtime measurement notes
 
 ```text
 J8M1 <TYPE> <MID> [<PART>/<TOTAL>] <PAYLOAD> [*<CHECK>]
