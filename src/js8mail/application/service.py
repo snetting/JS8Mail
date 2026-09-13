@@ -65,11 +65,13 @@ class MailService:
             snr = params.get("SNR", -30)
             snr_value = float(snr) if isinstance(snr, (int, float)) else -30.0
             score = max(0.25, min(1.0, 0.55 + (snr_value + 20.0) / 40.0))
+            reported_age = params.get("AGE_MIN", 0)
+            age_ms = int(reported_age) * 60_000 if isinstance(reported_age, int) else 0
             graph.add(
                 LinkEvidence(
                     source,
                     target,
-                    observation["observed_at_ms"],
+                    observation["observed_at_ms"] - age_ms,
                     score,
                     expected_airtime_ms=1000,
                 )

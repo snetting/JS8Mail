@@ -15,7 +15,13 @@ from urllib.parse import parse_qs, urlparse
 from js8mail.adapters.js8call.client import Js8CallClient
 from js8mail.application.lifecycle import MessageState
 from js8mail.application.service import MailService
-from js8mail.discovery import QueryScheduler, call_query, messages_query, snr_query
+from js8mail.discovery import (
+    QueryScheduler,
+    call_query,
+    messages_query,
+    parse_query_call_response,
+    snr_query,
+)
 from js8mail.domain import NormalizedEvent, utc_now_ms
 from js8mail.protocol import (
     MessagePart,
@@ -222,6 +228,7 @@ async def run(args: argparse.Namespace) -> None:
     query_scheduler = QueryScheduler()
     inbox_scheduler = QueryScheduler(base_delay_ms=1_800_000, max_delay_ms=21_600_000)
     reassembly: dict[str, MultipartAccumulator] = {}
+    recent_call_queries: list[tuple[int, str]] = []
 
     async def submit_query(
         key: str,
@@ -229,6 +236,7 @@ async def run(args: argparse.Namespace) -> None:
         action: str,
         target: str,
         scheduler: QueryScheduler = query_scheduler,
+        route_destination: str | None = None,
     ) -> bool:
         now = int(asyncio.get_running_loop().time() * 1000)
         if not client.connected or not scheduler.due(key, now):
@@ -239,6 +247,9 @@ async def run(args: argparse.Namespace) -> None:
                 "discovery.query_submitted", {"action": action, "target": target, "text": text}
             )
             scheduler.record(key, now)
+            if route_destination is not None:
+                recent_call_queries.append((now, route_destination))
+                del recent_call_queries[:-16]
             return True
         except (ConnectionError, RuntimeError):
             scheduler.record(key, now)
@@ -313,6 +324,7 @@ async def run(args: argparse.Namespace) -> None:
                                     f"{candidate} QUERY CALL {destination}",
                                     "candidate_query_call",
                                     candidate,
+                                    route_destination=destination,
                                 )
                                 database.record_attempt(
                                     str(message["id"]),
@@ -323,7 +335,11 @@ async def run(args: argparse.Namespace) -> None:
                                 )
                     else:
                         allcall_submitted = await submit_query(
-                            call_key, call_query(destination), "allcall_query_call", "@ALLCALL"
+                            call_key,
+                            call_query(destination),
+                            "allcall_query_call",
+                            "@ALLCALL",
+                            route_destination=destination,
                         )
                         database.record_attempt(
                             str(message["id"]),
@@ -355,6 +371,38 @@ async def run(args: argparse.Namespace) -> None:
                     database.record_observation(event)
                     ack = parse_ack(event.value)
                     source = event.params.get("FROM")
+                    query_response = parse_query_call_response(event.value)
+                    if query_response is not None and isinstance(source, str):
+                        now = utc_now_ms()
+                        recent_call_queries[:] = [
+                            item for item in recent_call_queries if now - item[0] <= 180_000
+                        ]
+                        if recent_call_queries:
+                            _, queried_destination = recent_call_queries[-1]
+                            snr, age_minutes = query_response
+                            database.record_observation(
+                                NormalizedEvent(
+                                    "QUERY.CALL.RESPONSE",
+                                    event.value,
+                                    {
+                                        "FROM": source.upper(),
+                                        "TO": queried_destination,
+                                        "SNR": snr,
+                                        "AGE_MIN": age_minutes,
+                                        "EVIDENCE": "remote_query_call_yes",
+                                    },
+                                    now,
+                                )
+                            )
+                            for message in database.list_messages(MessageState.WAITING_ROUTE):
+                                if str(message["destination"]).upper() == queried_destination.upper():
+                                    database.record_attempt(
+                                        str(message["id"]),
+                                        "route_evidence",
+                                        source.upper(),
+                                        "received",
+                                        f"heard {queried_destination} at {snr} dB, {age_minutes} minute(s) ago",
+                                    )
                     if (
                         isinstance(source, str)
                         and event.event_type in {"RX.DIRECTED.ME", "RX.DIRECTED"}
