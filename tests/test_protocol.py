@@ -1,0 +1,27 @@
+import pytest
+
+from js8mail.adapters.js8call.protocol import (
+    ApiProtocolError,
+    decode_line,
+    encode_read_only_request,
+)
+
+
+def test_decode_valid_event() -> None:
+    message = decode_line(b'{"type":"RX.DIRECTED","value":"N0CALL: HI","params":{"SNR":-10}}')
+    assert message.type == "RX.DIRECTED"
+    assert message.params["SNR"] == -10
+
+
+def test_decode_rejects_malformed_and_oversized_frames() -> None:
+    with pytest.raises(ApiProtocolError):
+        decode_line(b"not json")
+    with pytest.raises(ApiProtocolError):
+        decode_line(b'{"type":"RX.ACTIVITY","value":"' + b"x" * 20_000 + b'"}')
+
+
+def test_request_encoder_is_receive_only() -> None:
+    request = encode_read_only_request("STATION.GET_STATUS", request_id="probe-1")
+    assert b"STATION.GET_STATUS" in request
+    with pytest.raises(ApiProtocolError):
+        encode_read_only_request("TX.SEND_MESSAGE", request_id="no-send")

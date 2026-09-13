@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "js8mail"
+version = "0.0.1"
+description = "Offline-first mail automation above JS8Call"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[project.scripts]
+js8mail-probe = "js8mail.tools.probe_js8call_api:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
