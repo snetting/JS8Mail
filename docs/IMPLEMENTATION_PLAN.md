@@ -965,3 +965,11 @@ The next model should begin with Milestone 0, not the daemon skeleton. Its first
 7. stop for review before implementing anything that can key PTT.
 
 This order intentionally resolves the highest-risk unknowns—the API safety envelope, delivery semantics, durable transitions, and on-air protocol cost—before they become expensive compatibility commitments.
+
+## 17. Active routing improvement
+
+- use a short per-attempt direct response deadline;
+- persist every attempted path;
+- prefer currently viable untried paths after a failed direct or relay attempt;
+- retain previously successful/high-scoring paths for later retries after propagation or custodian availability changes;
+- progressively back off and reconsider the full route set rather than permanently blacklisting a path.
