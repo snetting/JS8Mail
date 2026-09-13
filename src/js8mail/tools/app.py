@@ -561,6 +561,7 @@ async def run(args: argparse.Namespace) -> None:
 
                 async def handle(event: NormalizedEvent) -> None:
                     database.record_observation(event)
+                    database.record_link_projection(event)
                     for group in extract_groups(event.value, *[str(value) for value in event.params.values()]):
                         database.observe_group(group, default_group_description(group))
                     ack = parse_ack(event.value)

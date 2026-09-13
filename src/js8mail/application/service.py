@@ -71,6 +71,19 @@ class MailService:
     def plan_route(self, origin: str, destination: str, now_ms: int | None = None) -> RoutePlan:
         now = utc_now_ms() if now_ms is None else now_ms
         graph = TemporalGraph()
+        for link in self.database.temporal_link_views(5000):
+            snr = link.get("max_snr")
+            snr_value = float(snr) if isinstance(snr, (int, float)) else -30.0
+            score = max(0.25, min(1.0, 0.55 + (snr_value + 20.0) / 40.0))
+            graph.add(
+                LinkEvidence(
+                    str(link["source"]),
+                    str(link["destination"]),
+                    int(link["last_observed_at_ms"]),
+                    score,
+                    expected_airtime_ms=1000,
+                )
+            )
         for observation in self.database.recent_observations(500):
             params = observation["params"]
             source = params.get("FROM")

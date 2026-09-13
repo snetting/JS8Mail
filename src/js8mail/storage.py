@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class Database:
@@ -184,6 +184,36 @@ class Database:
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (9, strftime('%s','now') * 1000);
                 """
             )
+        if current < 10:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS station_sessions (
+                    station TEXT NOT NULL,
+                    session_bucket TEXT NOT NULL,
+                    first_seen_at_ms INTEGER NOT NULL,
+                    last_seen_at_ms INTEGER NOT NULL,
+                    observation_count INTEGER NOT NULL DEFAULT 0,
+                    band TEXT NOT NULL DEFAULT '',
+                    speed TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY(station, session_bucket)
+                );
+                CREATE TABLE IF NOT EXISTS temporal_links (
+                    source TEXT NOT NULL,
+                    destination TEXT NOT NULL,
+                    band TEXT NOT NULL DEFAULT '',
+                    speed TEXT NOT NULL DEFAULT '',
+                    first_observed_at_ms INTEGER NOT NULL,
+                    last_observed_at_ms INTEGER NOT NULL,
+                    observation_count INTEGER NOT NULL DEFAULT 0,
+                    max_snr REAL,
+                    success_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(source, destination, band, speed)
+                );
+                CREATE INDEX IF NOT EXISTS temporal_links_recent_idx
+                    ON temporal_links(last_observed_at_ms DESC);
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (10, strftime('%s','now') * 1000);
+                """
+            )
         self.connection.commit()
 
     def record_observation(self, event: NormalizedEvent) -> int:
@@ -202,6 +232,42 @@ class Database:
         if cursor.lastrowid is None:
             raise RuntimeError("SQLite did not return an observation row id")
         return int(cursor.lastrowid)
+
+    def record_link_projection(self, event: NormalizedEvent) -> None:
+        source = event.params.get("FROM")
+        destination = event.params.get("TO")
+        if not isinstance(source, str) or not isinstance(destination, str):
+            return
+        if not source or not destination or source.startswith("@") or destination.startswith("@"):
+            return
+        observed = event.received_at_ms
+        band = str(event.params.get("BAND", ""))[:32]
+        speed = str(event.params.get("SPEED", ""))[:32]
+        snr = event.params.get("SNR")
+        snr_value = float(snr) if isinstance(snr, (int, float)) else None
+        bucket = str(observed // (30 * 60 * 1000))
+        for station in (source.upper(), destination.upper()):
+            self.connection.execute(
+                "INSERT INTO station_sessions(station, session_bucket, first_seen_at_ms, last_seen_at_ms, observation_count, band, speed) "
+                "VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT(station, session_bucket) DO UPDATE SET "
+                "last_seen_at_ms=excluded.last_seen_at_ms, observation_count=station_sessions.observation_count+1",
+                (station, bucket, observed, observed, band, speed),
+            )
+        self.connection.execute(
+            "INSERT INTO temporal_links(source, destination, band, speed, first_observed_at_ms, last_observed_at_ms, observation_count, max_snr) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, ?) ON CONFLICT(source, destination, band, speed) DO UPDATE SET "
+            "last_observed_at_ms=excluded.last_observed_at_ms, observation_count=temporal_links.observation_count+1, "
+            "max_snr=CASE WHEN excluded.max_snr IS NULL THEN temporal_links.max_snr WHEN temporal_links.max_snr IS NULL THEN excluded.max_snr ELSE MAX(temporal_links.max_snr, excluded.max_snr) END",
+            (source.upper(), destination.upper(), band, speed, observed, observed, snr_value),
+        )
+        self.connection.commit()
+
+    def temporal_link_views(self, limit: int = 500) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM temporal_links ORDER BY last_observed_at_ms DESC LIMIT ?",
+            (max(1, min(limit, 5000)),),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def audit(
         self, event_type: str, payload: dict[str, Any], correlation_id: str | None = None

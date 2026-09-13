@@ -114,3 +114,15 @@ def test_unsubscribed_stale_groups_expire_but_catalog_groups_remain(tmp_path: Pa
     assert "@OLD" not in {item["name"] for item in database.list_groups()}
     assert "@EMCOMM" in {item["name"] for item in database.list_groups()}
     database.close()
+
+
+def test_link_projection_persists_sessions_and_aggregates(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    event = NormalizedEvent(
+        "RX.DIRECTED", "", {"FROM": "A", "TO": "B", "SNR": -8, "BAND": "20M", "SPEED": "1"}, 1_000
+    )
+    database.record_link_projection(event)
+    database.record_link_projection(event)
+    assert database.temporal_link_views()[0]["observation_count"] == 2
+    assert database.connection.execute("SELECT COUNT(*) FROM station_sessions").fetchone()[0] == 2
+    database.close()
