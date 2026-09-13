@@ -45,16 +45,19 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 <section><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section><h2>Outbox</h2><div id=messages>Loading…</div></section><section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
 <section><h2>Live route preview</h2><p>Uses only locally captured RF evidence. The graph is rebuilt as observations arrive.</p><form id=route>Origin<input name=origin maxlength=16 required placeholder=OH3SPN>Destination<input name=destination maxlength=16 required placeholder=G0XYZ><button>Preview route</button></form><div id=route-result>No route selected.</div></section>
+<section><h2>Message route graph</h2><div id=graph-result>Select Graph on a message to inspect its evidence and attempts.</div></section>
 <script>
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let routeQuery='';
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
 const confidenceName={uncertain:'No delivery evidence',discovery_in_progress:'Discovery in progress',submitted_to_js8call:'Message submitted to JS8Call',radio_acknowledged:'Radio acknowledged (hop only)',delivered_to_js8mail:'Delivered to JS8Mail client'};
-async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;if(s.callsign&&!document.querySelector('#route input[name=origin]').value)document.querySelector('#route input[name=origin]').value=s.callsign;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State / confidence / timeline</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><b>${esc(x.state)}</b><br><span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?`<div class=mono>next retry: ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (attempt ${x.retry_count})</div>`:''}${(x.attempts||[]).map(a=>`<div class=mono>${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}</div>`).join('')}</td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td>${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>';if(routeQuery){let r=await api('/api/route?'+routeQuery);document.getElementById('route-result').innerHTML=`<p><b>${esc(r.action)}</b>: ${esc(r.explanation)}</p><p class=mono>${esc(r.path.join(' → '))}</p>`}}
+async function showGraph(id){try{let s=await api('/api/status'),g=await api('/api/graph?message_id='+encodeURIComponent(id)+'&origin='+encodeURIComponent(s.callsign||''));let w=860,h=280, nodes=g.nodes, pos={};nodes.forEach((n,i)=>pos[n]={x:60+(i%4)*250,y:70+Math.floor(i/4)*120});let edges=g.edges.map(e=>{let a=pos[e.from],b=pos[e.to];return `<line x1=${a.x} y1=${a.y} x2=${b.x} y2=${b.y} stroke='${e.kind==='confirmed'?'#17823b':e.kind==='attempted'?'#c77800':'#78909c'}' stroke-width=3 marker-end='url(#arrow)'/><text x=${(a.x+b.x)/2} y=${(a.y+b.y)/2-6} font-size=12>${esc(e.kind)}${e.snr!=null?' '+esc(e.snr)+'dB':''}</text>`}).join('');let circles=nodes.map(n=>`<circle cx=${pos[n].x} cy=${pos[n].y} r=28 fill='${n===g.origin?'#1769aa':n===g.destination?'#a33':'#e8edf2'}' stroke='#18222d'/><text x=${pos[n].x} y=${pos[n].y+4} text-anchor=middle font-size=12 fill='${n===g.origin||n===g.destination?'white':'#18222d'}'>${esc(n)}</text>`).join('');document.getElementById('graph-result').innerHTML=`<p><b>${esc(g.origin)} → ${esc(g.destination)}</b> · green confirmed, orange attempted, grey observed</p><svg viewBox='0 0 ${w} ${h}' width='100%' height=280><defs><marker id=arrow markerWidth=8 markerHeight=8 refX=6 refY=3 orient=auto><path d='M0,0 L0,6 L7,3 z' fill='#555'/></marker></defs>${edges}${circles}</svg>`}catch(e){document.getElementById('graph-result').textContent=e}}
+async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;if(s.callsign&&!document.querySelector('#route input[name=origin]').value)document.querySelector('#route input[name=origin]').value=s.callsign;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State / confidence / timeline</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><b>${esc(x.state)}</b><br><span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?`<div class=mono>next retry: ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (attempt ${x.retry_count})</div>`:''}${(x.attempts||[]).map(a=>`<div class=mono>${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}</div>`).join('')}</td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>';if(routeQuery){let r=await api('/api/route?'+routeQuery);document.getElementById('route-result').innerHTML=`<p><b>${esc(r.action)}</b>: ${esc(r.explanation)}</p><p class=mono>${esc(r.path.join(' → '))}</p>`}}
 async function act(id,a){try{await api(`/api/messages/${id}/${a}`,{method:'POST'});refresh()}catch(e){alert(e)}}
+function addMessageControls(){document.querySelectorAll('#messages tr').forEach(row=>{let id=row.querySelector('small')?.textContent.trim(),state=row.querySelector('b')?.textContent.trim(),cell=row.lastElementChild;if(!id||!cell||row.dataset.controls)return;row.dataset.controls='1';if(['queued','waiting_route'].includes(state)){let b=document.createElement('button');b.textContent='Retry now';b.onclick=()=>act(id,'retry-now');cell.appendChild(b)}if(state!=='in_progress'){let b=document.createElement('button');b.textContent='Remove';b.className='danger';b.onclick=()=>act(id,'delete');cell.appendChild(b)}})}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
 document.getElementById('route').onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);routeQuery=new URLSearchParams({origin:f.get('origin'),destination:f.get('destination')});refresh()}
-refresh();setInterval(refresh,3000);
+refresh().then(addMessageControls);setInterval(()=>refresh().then(addMessageControls),3000);
 </script>"""
 
 
@@ -83,6 +86,14 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, self.service.message_views())
         elif path == "/api/observations":
             self.reply(200, self.service.database.recent_observations(12))
+        elif path == "/api/graph":
+            query = parse_qs(urlparse(self.path).query)
+            message_id = query.get("message_id", [""])[0]
+            origin = query.get("origin", [""])[0]
+            if not message_id or not origin:
+                self.reply(400, {"error": "message_id and origin are required"})
+            else:
+                self.reply(200, self.service.message_graph(message_id, origin))
         elif path == "/api/route":
             query = parse_qs(urlparse(self.path).query)
             origin = query.get("origin", [""])[0]
@@ -119,6 +130,13 @@ class Handler(BaseHTTPRequestHandler):
             message_id, action = parts[2], parts[3]
             if action == "cancel":
                 self.service.cancel(message_id)
+            elif action == "delete":
+                self.service.delete(message_id)
+            elif action == "retry-now":
+                self.service.retry_now(message_id)
+                if self.status["tx_mode"] == "automatic":
+                    future = asyncio.run_coroutine_threadsafe(self.prepare(message_id), self.loop)
+                    future.result(timeout=30)
             elif action == "retry":
                 self.service.retry(message_id)
             elif action == "send":

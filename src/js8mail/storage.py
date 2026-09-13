@@ -253,3 +253,14 @@ class Database:
             "SELECT next_attempt_at_ms FROM messages WHERE id = ?", (message_id,)
         ).fetchone()
         return row is not None and (row["next_attempt_at_ms"] is None or row["next_attempt_at_ms"] <= utc_now_ms())
+
+    def delete_message(self, message_id: str) -> None:
+        row = self.connection.execute("SELECT state FROM messages WHERE id = ?", (message_id,)).fetchone()
+        if row is None:
+            raise KeyError(message_id)
+        if row["state"] == "in_progress":
+            raise ValueError("cannot remove a message currently in progress")
+        self.connection.execute("DELETE FROM message_attempts WHERE message_id = ?", (message_id,))
+        self.connection.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+        self.connection.commit()
+        self.audit("message.removed", {"message_id": message_id})

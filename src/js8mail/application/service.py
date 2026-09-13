@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from typing import Any
 
 from js8mail.application.lifecycle import MessageState
 from js8mail.domain import utc_now_ms
@@ -50,6 +51,22 @@ class MailService:
         )
         self.database.connection.commit()
         self.database.audit("message.requeued", {"message_id": message_id})
+
+    def retry_now(self, message_id: str) -> None:
+        message = self.database.get_message(message_id)
+        if message is None:
+            raise KeyError(message_id)
+        if message["state"] not in {MessageState.QUEUED, MessageState.WAITING_ROUTE}:
+            raise ValueError("only queued or waiting messages can be retried now")
+        self.database.connection.execute(
+            "UPDATE messages SET state = ?, next_attempt_at_ms = NULL, updated_at_ms = ? WHERE id = ?",
+            (MessageState.QUEUED, utc_now_ms(), message_id),
+        )
+        self.database.connection.commit()
+        self.database.record_attempt(message_id, "manual_retry", "route", "requested", "operator requested immediate retry")
+
+    def delete(self, message_id: str) -> None:
+        self.database.delete_message(message_id)
 
     def plan_route(self, origin: str, destination: str, now_ms: int | None = None) -> RoutePlan:
         now = utc_now_ms() if now_ms is None else now_ms
@@ -107,6 +124,58 @@ class MailService:
                 view["confidence"] = "uncertain"
             views.append(view)
         return views
+
+    def message_graph(self, message_id: str, origin: str) -> dict[str, object]:
+        message = self.database.get_message(message_id)
+        if message is None:
+            raise KeyError(message_id)
+        destination = str(message["destination"]).upper()
+        origin = origin.strip().upper()
+        nodes: set[str] = {origin, destination}
+        edges: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for observation in self.database.recent_observations(500):
+            params = observation["params"]
+            source, target = params.get("FROM"), params.get("TO")
+            if not isinstance(source, str) or not isinstance(target, str):
+                continue
+            source, target = source.upper(), target.upper()
+            if target.startswith("@") or source.startswith("@"):
+                continue
+            nodes.update((source, target))
+            key = (source, target)
+            edge = edges.setdefault(
+                key,
+                {"from": source, "to": target, "kind": "observed", "count": 0, "latest": 0, "snr": None},
+            )
+            edge["count"] = int(edge["count"]) + 1
+            edge["latest"] = max(int(edge["latest"]), int(observation["observed_at_ms"]))
+            snr = params.get("SNR")
+            if isinstance(snr, (int, float)):
+                edge["snr"] = snr if edge["snr"] is None else max(float(edge["snr"]), float(snr))
+
+        for attempt in self.database.list_attempts(message_id):
+            target = str(attempt["target"]).upper()
+            if target.startswith("@") or target == "ROUTE":
+                continue
+            nodes.add(target)
+            key = (origin, target)
+            edge = edges.setdefault(
+                key,
+                {"from": origin, "to": target, "kind": "attempted", "count": 0, "latest": 0, "snr": None},
+            )
+            if attempt["status"] in {"received", "available"}:
+                edge["kind"] = "confirmed"
+            elif edge["kind"] == "observed":
+                edge["kind"] = "attempted"
+
+        return {
+            "message_id": message_id,
+            "origin": origin,
+            "destination": destination,
+            "nodes": sorted(nodes),
+            "edges": list(edges.values()),
+        }
 
     def recently_heard(
         self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000
