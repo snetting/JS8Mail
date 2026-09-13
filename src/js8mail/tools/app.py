@@ -254,10 +254,24 @@ async def run(args: argparse.Namespace) -> None:
                         database.record_attempt(
                             str(message["id"]), "route", destination, "available", "recent local RF evidence"
                         )
-                        future = asyncio.create_task(
-                            handler.transmit(cast(Handler, handler), str(message["id"]))
-                        )
-                        await future
+                        try:
+                            future = asyncio.create_task(
+                                handler.transmit(cast(Handler, handler), str(message["id"]))
+                            )
+                            await future
+                        except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
+                            database.record_attempt(
+                                str(message["id"]),
+                                "direct",
+                                destination,
+                                "deferred",
+                                f"probe/queue still busy: {type(exc).__name__}",
+                            )
+                            database.defer_message(
+                                str(message["id"]),
+                                60_000,
+                                "route known but JS8Call TX slot was still occupied",
+                            )
                     continue
                 if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(str(message["id"])):
                     continue
