@@ -169,16 +169,32 @@ class Handler(BaseHTTPRequestHandler):
         origin = str(self.status.get("callsign", "")).upper()
         plan = self.service.plan_route(origin, destination) if origin else None
         path = plan.path if plan is not None else (origin, destination)
+        peer = self.service.database.peer_capabilities(destination)
+        enhanced_parts = (
+            split_human_message(message_id, str(message["body"]))
+            if peer is not None and "MP" in peer[1]
+            else ()
+        )
+        wire_texts: tuple[str, ...]
         if plan is not None and len(path) >= 3:
-            text = format_relay_message(path, str(message["body"]))
+            payloads = tuple(format_human_data_part(part) for part in enhanced_parts) or (str(message["body"]),)
+            wire_texts = tuple(format_relay_message(path, payload) for payload in payloads)
             action = "relay"
             target = path[1]
             detail = f"discovered path: {'→'.join(path)}"
+        elif enhanced_parts:
+            wire_texts = tuple(
+                format_ordinary_message(destination, format_human_data_part(part))
+                for part in enhanced_parts
+            )
+            action = "multipart"
+            target = destination
+            detail = f"{len(enhanced_parts)} JS8Mail parts"
         else:
-            text = format_ordinary_message(destination, str(message["body"]), announce)
+            wire_texts = (format_ordinary_message(destination, str(message["body"]), announce),)
             action = "direct"
             target = destination
-        detail = "initial direct attempt"
+            detail = "initial direct attempt"
         if destination not in self.announced_destinations and self.service.database.peer_capabilities(destination) is None:
             try:
                 await self.client.send_message(f"{destination} {format_capability()}")
@@ -195,7 +211,8 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
-            await self.client.send_message(text)
+            for text in wire_texts:
+                await self.client.send_message(text)
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(
                 message_id, "direct", destination, "failed", type(exc).__name__
@@ -205,7 +222,8 @@ class Handler(BaseHTTPRequestHandler):
             message_id, action, target, "submitted", "queued in JS8Call for next TX cycle"
         )
         self.service.database.audit(
-            "message.submitted_to_js8call", {"message_id": message_id, "text_length": len(text)}
+            "message.submitted_to_js8call",
+            {"message_id": message_id, "text_length": sum(len(text) for text in wire_texts), "frames": len(wire_texts)},
         )
         self.announced_destinations.add(destination)
 
