@@ -47,3 +47,14 @@ def test_message_parts_are_idempotent_and_survive_reopen(tmp_path: Path) -> None
     reopened = Database(path)
     assert len(reopened.list_message_parts("m1", direction="incoming", peer="N0CALL")) == 1
     reopened.close()
+
+
+def test_peer_capabilities_expire_and_are_durable(tmp_path: Path) -> None:
+    path = tmp_path / "mail.sqlite3"
+    database = Database(path)
+    database.upsert_peer_capabilities("n0call", 1, ("E2E", "MP"), 9_999_999_999_999)
+    assert database.peer_capabilities("N0CALL") == (1, ("E2E", "MP"))
+    database.close()
+    reopened = Database(path)
+    assert reopened.peer_capabilities("N0CALL") == (1, ("E2E", "MP"))
+    reopened.close()

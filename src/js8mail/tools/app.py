@@ -24,14 +24,17 @@ from js8mail.discovery import (
 )
 from js8mail.domain import NormalizedEvent, utc_now_ms
 from js8mail.protocol import (
+    CAPABILITY_TTL_MS,
     MessagePart,
     MultipartAccumulator,
+    format_capability,
     format_delivery_ack,
     format_human_data_part,
     format_ordinary_message,
     format_part_ack,
     format_relay_message,
     parse_ack,
+    parse_capability,
     parse_delivery_ack,
     parse_part_ack,
     split_human_message,
@@ -175,7 +178,17 @@ class Handler(BaseHTTPRequestHandler):
             text = format_ordinary_message(destination, str(message["body"]), announce)
             action = "direct"
             target = destination
-            detail = "initial direct attempt"
+        detail = "initial direct attempt"
+        if destination not in self.announced_destinations and self.service.database.peer_capabilities(destination) is None:
+            try:
+                await self.client.send_message(f"{destination} {format_capability()}")
+                self.service.database.record_attempt(
+                    message_id, "capability", destination, "submitted", "JS8Mail capability advertisement"
+                )
+            except (ConnectionError, OSError, RuntimeError) as exc:
+                self.service.database.record_attempt(
+                    message_id, "capability", destination, "failed", type(exc).__name__
+                )
         self.service.database.record_attempt(
             message_id, action, target, "started", detail
         )
@@ -439,6 +452,20 @@ async def run(args: argparse.Namespace) -> None:
                     database.record_observation(event)
                     ack = parse_ack(event.value)
                     source = event.params.get("FROM")
+                    capability = parse_capability(event.value)
+                    if capability is not None and isinstance(source, str):
+                        version, features = capability
+                        database.upsert_peer_capabilities(
+                            source, version, features, utc_now_ms() + CAPABILITY_TTL_MS
+                        )
+                        try:
+                            await client.send_message(f"{source} {format_capability(features)}")
+                            database.audit(
+                                "peer.capability_ack_submitted",
+                                {"peer": source.upper(), "version": version},
+                            )
+                        except (ConnectionError, RuntimeError):
+                            database.audit("peer.capability_ack_failed", {"peer": source.upper()})
                     query_response = parse_query_call_response(event.value)
                     if query_response is not None and isinstance(source, str):
                         now = utc_now_ms()

@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class Database:
@@ -119,6 +119,19 @@ class Database:
                 CREATE INDEX IF NOT EXISTS message_parts_lookup_idx
                     ON message_parts(message_id, direction, peer);
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (5, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 6:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS peer_capabilities (
+                    peer TEXT PRIMARY KEY,
+                    protocol_version INTEGER NOT NULL,
+                    capabilities_json TEXT NOT NULL,
+                    observed_at_ms INTEGER NOT NULL,
+                    expires_at_ms INTEGER NOT NULL
+                );
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (6, strftime('%s','now') * 1000);
                 """
             )
         self.connection.commit()
@@ -299,6 +312,27 @@ class Database:
             (message_id, direction, peer.upper()),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def upsert_peer_capabilities(
+        self, peer: str, protocol_version: int, capabilities: tuple[str, ...], expires_at_ms: int
+    ) -> None:
+        self.connection.execute(
+            "INSERT INTO peer_capabilities(peer, protocol_version, capabilities_json, observed_at_ms, expires_at_ms) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(peer) DO UPDATE SET protocol_version=excluded.protocol_version, "
+            "capabilities_json=excluded.capabilities_json, observed_at_ms=excluded.observed_at_ms, "
+            "expires_at_ms=excluded.expires_at_ms",
+            (peer.upper(), protocol_version, json.dumps(capabilities), utc_now_ms(), expires_at_ms),
+        )
+        self.connection.commit()
+
+    def peer_capabilities(self, peer: str) -> tuple[int, tuple[str, ...]] | None:
+        row = self.connection.execute(
+            "SELECT protocol_version, capabilities_json, expires_at_ms FROM peer_capabilities WHERE peer = ?",
+            (peer.upper(),),
+        ).fetchone()
+        if row is None or int(row["expires_at_ms"]) <= utc_now_ms():
+            return None
+        return int(row["protocol_version"]), tuple(json.loads(row["capabilities_json"]))
 
     def defer_message(self, message_id: str, delay_ms: int, detail: str) -> None:
         from js8mail.application.lifecycle import MessageState, can_transition

@@ -13,10 +13,38 @@ MAX_PARTS = 255
 MAX_PART_BYTES = 4096
 MAX_FRAME_BYTES = 4096
 DISPLAY_VERSION = "JS8Mail/0.0.1"
+CAPABILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 
 class MultipartError(ValueError):
     """Raised for invalid or inconsistent multipart data."""
+
+
+def format_capability(capabilities: tuple[str, ...] = ("E2E", "MP", "PA")) -> str:
+    """Format the small, versioned capability advertisement."""
+    allowed = {"E2E", "MP", "PA", "RR"}
+    if not capabilities or any(cap not in allowed for cap in capabilities):
+        raise MultipartError("invalid JS8Mail capability")
+    result = f"J8M1 CAP 1 {','.join(dict.fromkeys(capabilities))}"
+    if len(result.encode()) > MAX_FRAME_BYTES:
+        raise MultipartError("capability advertisement is too large")
+    return result
+
+
+def parse_capability(text: str) -> tuple[int, tuple[str, ...]] | None:
+    """Parse a bounded capability advertisement from a received frame."""
+    fields = text.strip().split()
+    if len(fields) != 4 or fields[:2] != ["J8M1", "CAP"]:
+        return None
+    try:
+        version = int(fields[2])
+    except ValueError:
+        return None
+    capabilities = tuple(fields[3].split(","))
+    allowed = {"E2E", "MP", "PA", "RR"}
+    if version < 1 or len(capabilities) > 8 or any(cap not in allowed for cap in capabilities):
+        return None
+    return version, capabilities
 
 
 @dataclass(frozen=True, slots=True)

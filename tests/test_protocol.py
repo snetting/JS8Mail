@@ -5,6 +5,7 @@ from js8mail.adapters.js8call.protocol import (
     decode_line,
     encode_read_only_request,
 )
+from js8mail.protocol import format_capability, parse_capability
 
 
 def test_decode_valid_event() -> None:
@@ -25,3 +26,10 @@ def test_request_encoder_is_receive_only() -> None:
     assert b"STATION.GET_STATUS" in request
     with pytest.raises(ApiProtocolError):
         encode_read_only_request("TX.SEND_MESSAGE", request_id="no-send")
+
+
+def test_capability_advertisement_is_versioned_and_bounded() -> None:
+    encoded = format_capability()
+    assert encoded == "J8M1 CAP 1 E2E,MP,PA"
+    assert parse_capability(encoded) == (1, ("E2E", "MP", "PA"))
+    assert parse_capability("J8M1 CAP 1 E2E,UNKNOWN") is None
