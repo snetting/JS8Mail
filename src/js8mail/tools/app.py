@@ -690,7 +690,14 @@ async def run(args: argparse.Namespace) -> None:
                 delay = 1.0
 
                 async def handle(event: NormalizedEvent) -> None:
-                    if event.event_type.startswith("TX"):
+                    # RIG.PTT is the authoritative live TX/RX transition. A
+                    # TX.FRAME event proves a frame was produced, but may be
+                    # followed by a delayed or missing UI refresh; using it
+                    # alone leaves the TX LED stuck on.
+                    if event.event_type == "RIG.PTT":
+                        ptt = event.params.get("PTT")
+                        status["radio_activity"] = "TX" if ptt is True or str(event.value).lower() == "on" else "RX"
+                    elif event.event_type.startswith("TX"):
                         status["radio_activity"] = "TX"
                     elif event.event_type.startswith("RX"):
                         status["radio_activity"] = "DCD"
