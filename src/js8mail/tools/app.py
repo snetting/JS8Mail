@@ -670,11 +670,13 @@ async def run(args: argparse.Namespace) -> None:
                             )
                             database.defer_message(str(message["id"]), 60_000, "custodian offer unavailable")
                         continue
-                if (
-                    message["state"] == MessageState.WAITING_ROUTE
-                    and not database.due_for_retry(str(message["id"]))
-                    and not promising
+                if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(
+                    str(message["id"])
                 ):
+                    # A defer deadline is authoritative even when fresh
+                    # indirect evidence exists. QueryScheduler controls when
+                    # the next targeted query is allowed; do not append a new
+                    # message defer every five-second loop iteration.
                     continue
                 call_key = f"call-query:{destination}"
                 if query_scheduler.due(call_key, now):
