@@ -11,6 +11,7 @@ from js8mail.protocol import (
     format_resend_request,
     format_store_message,
     parse_part_ack,
+    parse_resend_request,
     split_human_message,
 )
 
@@ -27,6 +28,8 @@ def test_reassembly_reports_missing_parts_and_assembles_in_order() -> None:
     parsed = parse_part_ack(format_part_ack(receipt))
     assert parsed is not None and parsed.missing == (3,)
     assert format_resend_request("m1", 3, parsed.missing) == "J8M1 REQ m1 3 4"
+    requested = parse_resend_request(format_resend_request("m1", 3, parsed.missing))
+    assert requested == ("m1", 3, (3,))
     assert accumulator.add(MessagePart("m1", 3, 3, "C"))
     assert accumulator.assembled() == "ABC"
 
