@@ -40,6 +40,13 @@ async def test_client_sends_explicit_two_step_message() -> None:
     received: list[dict[str, object]] = []
 
     async def server_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        request = json.loads(await reader.readline())
+        writer.write(
+            (
+                json.dumps({"type": "TX.TEXT", "value": "", "params": request["params"]}) + "\n"
+            ).encode()
+        )
+        await writer.drain()
         for _ in range(2):
             line = await reader.readline()
             received.append(json.loads(line))
@@ -49,10 +56,16 @@ async def test_client_sends_explicit_two_step_message() -> None:
     server = await asyncio.start_server(server_handler, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     client = Js8CallClient(port=port)
+
+    async def ignore_event(_: object) -> None:
+        return
+
     try:
         await client.connect()
+        reader_task = asyncio.create_task(client.read_events(ignore_event))
         await client.send_message("N0CALL test")
         await asyncio.sleep(0)
+        await reader_task
     finally:
         await client.close()
         server.close()
