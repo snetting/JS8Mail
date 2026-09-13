@@ -68,3 +68,14 @@ def test_custody_status_is_durable_and_distinct_from_delivery(tmp_path: Path) ->
     reopened = Database(path)
     assert reopened.list_custody("m1")[0]["status"] == "accepted"
     reopened.close()
+
+
+def test_partial_inbox_message_is_updated_idempotently(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.upsert_inbox_message("n0call", "m1", "A[MISSING PART 2/2]", 2, (1,), False)
+    database.upsert_inbox_message("n0call", "m1", "AB", 2, (1, 2), True, ("N0CALL", "ME"))
+    inbox = database.list_inbox()
+    assert len(inbox) == 1
+    assert inbox[0]["complete"] is True
+    assert inbox[0]["received_parts"] == (1, 2)
+    database.close()

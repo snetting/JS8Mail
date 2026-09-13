@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class Database:
@@ -147,6 +147,26 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS custody_status_idx ON custody(status, updated_at_ms);
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (7, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 8:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS inbox_messages (
+                    sender TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    total_parts INTEGER NOT NULL CHECK(total_parts > 0),
+                    received_parts_json TEXT NOT NULL,
+                    complete INTEGER NOT NULL CHECK(complete IN (0, 1)),
+                    path TEXT NOT NULL DEFAULT '',
+                    first_received_at_ms INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(sender, message_id)
+                );
+                CREATE INDEX IF NOT EXISTS inbox_messages_updated_idx
+                    ON inbox_messages(updated_at_ms DESC);
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (8, strftime('%s','now') * 1000);
                 """
             )
         self.connection.commit()
@@ -365,6 +385,45 @@ class Database:
             "SELECT * FROM custody WHERE message_id = ? ORDER BY updated_at_ms", (message_id,)
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def upsert_inbox_message(
+        self,
+        sender: str,
+        message_id: str,
+        body: str,
+        total_parts: int,
+        received_parts: tuple[int, ...],
+        complete: bool,
+        path: tuple[str, ...] = (),
+    ) -> None:
+        if not sender or not message_id or not 1 <= total_parts <= 255:
+            raise ValueError("invalid inbox message")
+        if len(body) > 100_000 or any(not 1 <= part <= total_parts for part in received_parts):
+            raise ValueError("invalid inbox message content")
+        now = utc_now_ms()
+        self.connection.execute(
+            "INSERT INTO inbox_messages(sender, message_id, body, total_parts, received_parts_json, complete, path, first_received_at_ms, updated_at_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sender, message_id) DO UPDATE SET body=excluded.body, "
+            "total_parts=excluded.total_parts, received_parts_json=excluded.received_parts_json, complete=excluded.complete, "
+            "path=excluded.path, updated_at_ms=excluded.updated_at_ms",
+            (
+                sender.upper(), message_id, body, total_parts, json.dumps(received_parts),
+                int(complete), "→".join(path), now, now,
+            ),
+        )
+        self.connection.commit()
+
+    def list_inbox(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM inbox_messages ORDER BY updated_at_ms DESC"
+        ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["received_parts"] = tuple(json.loads(item.pop("received_parts_json")))
+            item["complete"] = bool(item["complete"])
+            result.append(item)
+        return result
 
     def defer_message(self, message_id: str, delay_ms: int, detail: str) -> None:
         from js8mail.application.lifecycle import MessageState, can_transition
