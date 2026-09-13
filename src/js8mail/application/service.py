@@ -6,6 +6,7 @@ import secrets
 
 from js8mail.application.lifecycle import MessageState
 from js8mail.domain import utc_now_ms
+from js8mail.routing import LinkEvidence, RouteEngine, RoutePlan, TemporalGraph
 from js8mail.storage import Database
 
 
@@ -42,3 +43,28 @@ class MailService:
         )
         self.database.connection.commit()
         self.database.audit("message.requeued", {"message_id": message_id})
+
+    def plan_route(self, origin: str, destination: str, now_ms: int | None = None) -> RoutePlan:
+        now = utc_now_ms() if now_ms is None else now_ms
+        graph = TemporalGraph()
+        for observation in self.database.recent_observations(500):
+            params = observation["params"]
+            source = params.get("FROM")
+            target = params.get("TO")
+            if not isinstance(source, str) or not isinstance(target, str):
+                continue
+            if not source or not target or target.startswith("@"):
+                continue
+            snr = params.get("SNR", -30)
+            snr_value = float(snr) if isinstance(snr, (int, float)) else -30.0
+            score = max(0.25, min(1.0, 0.55 + (snr_value + 20.0) / 40.0))
+            graph.add(
+                LinkEvidence(
+                    source,
+                    target,
+                    observation["observed_at_ms"],
+                    score,
+                    expected_airtime_ms=1000,
+                )
+            )
+        return RouteEngine(graph).choose(origin, destination, now_ms=now)

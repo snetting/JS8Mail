@@ -11,10 +11,11 @@ import argparse
 import asyncio
 import json
 import threading
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from js8mail.adapters.js8call.client import Js8CallClient
 from js8mail.application.lifecycle import MessageState
@@ -29,12 +30,15 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 </style><h1>JS8Mail</h1><p>Offline-first mailbox · operator-approved RF prototype</p><section><div id=status>Loading…</div></section>
 <section><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section><h2>Outbox</h2><div id=messages>Loading…</div></section><section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
+<section><h2>Live route preview</h2><p>Uses only locally captured RF evidence. The graph is rebuilt as observations arrive.</p><form id=route>Origin<input name=origin maxlength=16 required placeholder=OH3SPN>Destination<input name=destination maxlength=16 required placeholder=G0XYZ><button>Preview route</button></form><div id=route-result>No route selected.</div></section>
 <script>
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let routeQuery='';
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
-async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td>${esc(x.state)}<br><small>${esc(x.id)}</small></td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td>${s.tx_mode==='approve'&&['queued','waiting_route'].includes(x.state)?`<button onclick="act('${x.id}','send')">Approve &amp; send</button>`:''}${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
+async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td>${esc(x.state)}<br><small>${esc(x.id)}</small></td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td>${s.tx_mode==='approve'&&['queued','waiting_route'].includes(x.state)?`<button onclick="act('${x.id}','send')">Approve &amp; send</button>`:''}${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>';if(routeQuery){let r=await api('/api/route?'+routeQuery);document.getElementById('route-result').innerHTML=`<p><b>${esc(r.action)}</b>: ${esc(r.explanation)}</p><p class=mono>${esc(r.path.join(' → '))}</p>`}}
 async function act(id,a){try{await api(`/api/messages/${id}/${a}`,{method:'POST'});refresh()}catch(e){alert(e)}}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
+document.getElementById('route').onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);routeQuery=new URLSearchParams({origin:f.get('origin'),destination:f.get('destination')});refresh()}
 refresh();setInterval(refresh,3000);
 </script>"""
 
@@ -63,6 +67,14 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, self.service.database.list_messages())
         elif path == "/api/observations":
             self.reply(200, self.service.database.recent_observations())
+        elif path == "/api/route":
+            query = parse_qs(urlparse(self.path).query)
+            origin = query.get("origin", [""])[0]
+            destination = query.get("destination", [""])[0]
+            if not origin or not destination:
+                self.reply(400, {"error": "origin and destination are required"})
+            else:
+                self.reply(200, asdict(self.service.plan_route(origin, destination)))
         else:
             self.reply(404, {"error": "not found"})
 
