@@ -695,7 +695,21 @@ async def run(args: argparse.Namespace) -> None:
                     f"no current route; discovery will retry in {delay_ms // 60000} minute(s)",
                 )
 
-    discovery_task = asyncio.create_task(discovery_loop())
+    async def discovery_supervisor() -> None:
+        """Keep discovery alive and make unexpected failures auditable."""
+        while True:
+            try:
+                await discovery_loop()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - scheduler must survive unexpected adapter/data errors
+                database.audit(
+                    "discovery.loop_error",
+                    {"error": type(exc).__name__, "detail": str(exc)[:160]},
+                )
+                await asyncio.sleep(1)
+
+    discovery_task = asyncio.create_task(discovery_supervisor())
     try:
         while True:
             try:
