@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 from js8mail.adapters.js8call.client import Js8CallClient
 from js8mail.application.lifecycle import MessageState
 from js8mail.application.service import MailService
-from js8mail.discovery import QueryScheduler, call_query, hearing_query, messages_query, snr_query
+from js8mail.discovery import QueryScheduler, call_query, messages_query, snr_query
 from js8mail.domain import NormalizedEvent, utc_now_ms
 from js8mail.protocol import (
     MessagePart,
@@ -300,21 +300,8 @@ async def run(args: argparse.Namespace) -> None:
                     and not promising
                 ):
                     continue
-                hearing_key = f"hearing:{destination}"
-                if query_scheduler.due(hearing_key, now):
-                    hearing_submitted = await submit_query(
-                        hearing_key, hearing_query(destination), "hearing_query", destination
-                    )
-                    database.record_attempt(
-                        str(message["id"]),
-                        "hearing_query",
-                        destination,
-                        "submitted" if hearing_submitted else "blocked",
-                        "recent evidence absent" if hearing_submitted else "JS8Call TX slot unavailable or query cooldown",
-                    )
-                state = query_scheduler.state(hearing_key)
                 call_key = f"call-query:{destination}"
-                if state.attempts >= 1 and query_scheduler.due(call_key, now):
+                if query_scheduler.due(call_key, now):
                     candidates = promising
                     if candidates:
                         for candidate in candidates:
