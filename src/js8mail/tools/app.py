@@ -251,7 +251,7 @@ class Handler(BaseHTTPRequestHandler):
             self.service.database.record_message_path(message_id, path)
         if destination not in self.announced_destinations and self.service.database.peer_capabilities(destination) is None:
             try:
-                await self.send_rf(f"{destination} {format_capability()}", message_id)
+                await Handler.send_rf(self, f"{destination} {format_capability()}", message_id)
                 self.service.database.record_attempt(
                     message_id, "capability", destination, "submitted", "JS8Mail capability advertisement"
                 )
@@ -271,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
                     direction="outgoing", peer=destination,
                 )
             for text in wire_texts:
-                await self.send_rf(text, message_id)
+                await Handler.send_rf(self, text, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(
                 message_id, "direct", destination, "failed", type(exc).__name__
@@ -302,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
-            await self.send_rf(text, message_id)
+            await Handler.send_rf(self, text, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(message_id, "store", custodian, "failed", type(exc).__name__)
             self.service.database.upsert_custody(message_id, custodian, "failed", type(exc).__name__)
@@ -328,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
             message_id, "snr_probe", destination, "started", "destination not recently heard"
         )
         try:
-            await self.send_rf(probe, message_id)
+            await Handler.send_rf(self, probe, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(
                 message_id, "snr_probe", destination, "failed", type(exc).__name__
