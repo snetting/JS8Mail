@@ -18,6 +18,16 @@ def test_compose_cancel_and_retry(tmp_path: Path) -> None:
     assert database.get_message(message_id)["state"] == "cancelled"  # type: ignore[index]
     service.retry(message_id)
     assert database.get_message(message_id)["state"] == "queued"  # type: ignore[index]
+
+
+def test_cancelled_message_does_not_report_active_discovery(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("MM0ZFG", "test", "body")
+    database.record_attempt(message_id, "hearing_query", "MM0ZFG", "submitted", "probe")
+    service.cancel(message_id)
+    view = service.message_views()[0]
+    assert view["confidence"] == "cancelled"
     database.close()
 
 

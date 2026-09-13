@@ -115,7 +115,14 @@ class MailService:
             view["attempts"] = self.database.list_attempts(str(message["id"]))
             view["custody"] = self.database.list_custody(str(message["id"]))
             attempts = view["attempts"]
-            if any(
+            state = str(message["state"])
+            if state == "cancelled":
+                view["confidence"] = "cancelled"
+            elif state == "failed":
+                view["confidence"] = "delivery_failed"
+            elif state == "expired":
+                view["confidence"] = "expired"
+            elif any(
                 attempt["action"] == "delivery_ack" and attempt["status"] == "received"
                 for attempt in attempts
             ):
