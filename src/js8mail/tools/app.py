@@ -573,7 +573,11 @@ async def run(args: argparse.Namespace) -> None:
                                 database.record_link_outcome(
                                     origin, destination, max(0, min(4, speed)), None, False
                                 )
-                if service.recently_answered(destination, str(status.get("callsign", ""))) and not direct_expired:
+                if (
+                    service.recently_answered(destination, str(status.get("callsign", "")))
+                    and not direct_expired
+                    and database.due_for_retry(str(message["id"]))
+                ):
                     if message["state"] == MessageState.WAITING_ROUTE:
                         database.record_attempt(
                             str(message["id"]), "route", destination, "available", "recent local RF evidence"
