@@ -9,6 +9,8 @@ from js8mail.domain import utc_now_ms
 from js8mail.routing import LinkEvidence, RouteEngine, RoutePlan, TemporalGraph
 from js8mail.storage import Database
 
+DEFAULT_MESSAGE_TTL_MS = 3 * 24 * 60 * 60 * 1000
+
 
 class MailService:
     def __init__(self, database: Database) -> None:
@@ -24,7 +26,12 @@ class MailService:
             raise ValueError("priority must be between 0 and 3")
         message_id = secrets.token_hex(8)
         self.database.enqueue_message(
-            message_id, destination, body, subject=subject.strip()[:120], priority=priority
+            message_id,
+            destination,
+            body,
+            subject=subject.strip()[:120],
+            priority=priority,
+            expires_at_ms=utc_now_ms() + DEFAULT_MESSAGE_TTL_MS,
         )
         return message_id
 
@@ -92,10 +99,15 @@ class MailService:
                 return True
         return False
 
-    def promising_stations(self, destination: str) -> list[str]:
+    def promising_stations(
+        self, destination: str, now_ms: int | None = None, window_ms: int = 600_000
+    ) -> list[str]:
         wanted = destination.strip().upper()
+        now = utc_now_ms() if now_ms is None else now_ms
         scores: dict[str, float] = {}
         for observation in self.database.recent_observations(500):
+            if now - int(observation["observed_at_ms"]) > window_ms:
+                continue
             params = observation["params"]
             source, target = params.get("FROM"), params.get("TO")
             if (

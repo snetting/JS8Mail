@@ -262,6 +262,13 @@ async def run(args: argparse.Namespace) -> None:
                 if message["state"] not in {MessageState.IN_PROGRESS, MessageState.WAITING_ROUTE}:
                     continue
                 destination = str(message["destination"])
+                expires_at_ms = message.get("expires_at_ms")
+                if isinstance(expires_at_ms, int) and expires_at_ms <= utc_now_ms():
+                    database.transition_message(str(message["id"]), MessageState.EXPIRED)
+                    database.record_attempt(
+                        str(message["id"]), "expiry", destination, "expired", "retry window elapsed"
+                    )
+                    continue
                 if service.recently_heard(destination):
                     if message["state"] == MessageState.WAITING_ROUTE:
                         database.record_attempt(
@@ -286,7 +293,12 @@ async def run(args: argparse.Namespace) -> None:
                                 "route known but JS8Call TX slot was still occupied",
                             )
                     continue
-                if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(str(message["id"])):
+                promising = service.promising_stations(destination)[:3]
+                if (
+                    message["state"] == MessageState.WAITING_ROUTE
+                    and not database.due_for_retry(str(message["id"]))
+                    and not promising
+                ):
                     continue
                 hearing_key = f"hearing:{destination}"
                 if query_scheduler.due(hearing_key, now) and await submit_query(
@@ -302,7 +314,7 @@ async def run(args: argparse.Namespace) -> None:
                 call_key = f"call-query:{destination}"
                 state = query_scheduler.state(hearing_key)
                 if state.attempts >= 1 and query_scheduler.due(call_key, now):
-                    candidates = service.promising_stations(destination)[:3]
+                    candidates = promising
                     if candidates:
                         for candidate in candidates:
                             candidate_key = f"candidate-query:{candidate}:{destination}"
@@ -330,7 +342,10 @@ async def run(args: argparse.Namespace) -> None:
                                 "submitted",
                                 destination,
                             )
-                delay_ms = min(60_000 * (2 ** min(int(message.get("retry_count", 0)), 5)), 1_800_000)
+                delay_ms = min(
+                    60_000 * (2 ** min(int(message.get("retry_count", 0)), 8)),
+                    21_600_000,
+                )
                 database.defer_message(
                     str(message["id"]),
                     delay_ms,
