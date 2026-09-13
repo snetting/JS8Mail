@@ -736,7 +736,11 @@ async def run(args: argparse.Namespace) -> None:
                         def clear_dcd() -> None:
                             if status["radio_activity"] == "DCD":
                                 status["radio_activity"] = "RX"
-                        loop.call_later(2.0, clear_dcd)
+                        # The browser polls status every three seconds. Hold
+                        # DCD longer than one polling interval so a decode is
+                        # visible without pretending the radio is not
+                        # continuously receiving between decoder passes.
+                        loop.call_later(4.5, clear_dcd)
                     database.record_observation(event)
                     database.record_link_projection(event)
                     for group in extract_groups(event.value, *[str(value) for value in event.params.values()]):
