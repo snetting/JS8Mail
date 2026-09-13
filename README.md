@@ -2,7 +2,7 @@
 
 Reliable offline-first radio mail above an unmodified JS8Call instance.
 
-JS8Mail is intended for dependable communications when Internet access is
+JS8Mail is intended for dependable comms when Internet access is
 unavailable, including emergency and disaster scenarios. It keeps the mailbox,
 observations, routing decisions, retries, and audit history locally, then uses
 JS8Call for the actual RF modem and transmission. A message can be sent direct,
