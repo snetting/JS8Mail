@@ -79,3 +79,15 @@ def test_partial_inbox_message_is_updated_idempotently(tmp_path: Path) -> None:
     assert inbox[0]["complete"] is True
     assert inbox[0]["received_parts"] == (1, 2)
     database.close()
+
+
+def test_observation_retention_does_not_remove_audit_or_mail(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.record_observation(NormalizedEvent("OLD", "", {}, 1_000))
+    database.audit("test.keep", {})
+    database.enqueue_message("m1", "N0CALL", "hello")
+    assert database.prune_observations(now_ms=100_000, retention_ms=60_000) == 1
+    assert database.recent_observations() == []
+    assert database.get_message("m1") is not None
+    assert database.connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 2
+    database.close()

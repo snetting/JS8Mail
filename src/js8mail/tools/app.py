@@ -364,8 +364,13 @@ async def run(args: argparse.Namespace) -> None:
 
     async def discovery_loop() -> None:
         inbox_key = "inbox:broadcast"
+        last_prune_at_ms = 0
         while True:
             await asyncio.sleep(5)
+            now_wall_ms = utc_now_ms()
+            if now_wall_ms - last_prune_at_ms >= 60 * 60 * 1000:
+                database.prune_observations(now_ms=now_wall_ms)
+                last_prune_at_ms = now_wall_ms
             if not client.connected or args.tx_mode != "automatic":
                 continue
             now = int(asyncio.get_running_loop().time() * 1000)

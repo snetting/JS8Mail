@@ -287,6 +287,17 @@ class Database:
             result.append(item)
         return result
 
+    def prune_observations(self, *, now_ms: int | None = None, retention_ms: int = 7 * 24 * 60 * 60 * 1000) -> int:
+        """Bound detailed RF evidence without touching mailbox or audit data."""
+        if retention_ms < 60_000:
+            raise ValueError("observation retention is too short")
+        cutoff = (utc_now_ms() if now_ms is None else now_ms) - retention_ms
+        cursor = self.connection.execute(
+            "DELETE FROM observations WHERE observed_at_ms < ?", (cutoff,)
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
+
     def message_counts(self) -> dict[str, int]:
         rows = self.connection.execute(
             "SELECT state, COUNT(*) AS count FROM messages GROUP BY state"
