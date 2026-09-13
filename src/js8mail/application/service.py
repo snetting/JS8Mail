@@ -81,6 +81,24 @@ class MailService:
         for message in self.database.list_messages():
             view = dict(message)
             view["attempts"] = self.database.list_attempts(str(message["id"]))
+            attempts = view["attempts"]
+            if any(
+                attempt["action"] == "delivery_ack" and attempt["status"] == "received"
+                for attempt in attempts
+            ):
+                view["confidence"] = "delivered_to_js8mail"
+            elif any(
+                attempt["action"] in {"hop_ack", "standard_ack"}
+                and attempt["status"] == "received"
+                for attempt in attempts
+            ):
+                view["confidence"] = "radio_acknowledged"
+            elif any(
+                attempt["status"] == "submitted" for attempt in attempts
+            ):
+                view["confidence"] = "submitted_to_js8call"
+            else:
+                view["confidence"] = "uncertain"
             views.append(view)
         return views
 

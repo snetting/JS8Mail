@@ -43,7 +43,8 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let routeQuery='';
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
-async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;if(s.callsign&&!document.querySelector('#route input[name=origin]').value)document.querySelector('#route input[name=origin]').value=s.callsign;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State / timeline</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><b>${esc(x.state)}</b><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?`<div class=mono>next retry: ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (attempt ${x.retry_count})</div>`:''}${(x.attempts||[]).map(a=>`<div class=mono>${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}</div>`).join('')}</td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td>${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>';if(routeQuery){let r=await api('/api/route?'+routeQuery);document.getElementById('route-result').innerHTML=`<p><b>${esc(r.action)}</b>: ${esc(r.explanation)}</p><p class=mono>${esc(r.path.join(' → '))}</p>`}}
+const confidenceName={uncertain:'No delivery evidence',submitted_to_js8call:'Submitted to JS8Call',radio_acknowledged:'Radio acknowledged (hop only)',delivered_to_js8mail:'Delivered to JS8Mail client'};
+async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;if(s.callsign&&!document.querySelector('#route input[name=origin]').value)document.querySelector('#route input[name=origin]').value=s.callsign;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State / confidence / timeline</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><b>${esc(x.state)}</b><br><span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?`<div class=mono>next retry: ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (attempt ${x.retry_count})</div>`:''}${(x.attempts||[]).map(a=>`<div class=mono>${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}</div>`).join('')}</td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td>${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>';if(routeQuery){let r=await api('/api/route?'+routeQuery);document.getElementById('route-result').innerHTML=`<p><b>${esc(r.action)}</b>: ${esc(r.explanation)}</p><p class=mono>${esc(r.path.join(' → '))}</p>`}}
 async function act(id,a){try{await api(`/api/messages/${id}/${a}`,{method:'POST'});refresh()}catch(e){alert(e)}}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
 document.getElementById('route').onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);routeQuery=new URLSearchParams({origin:f.get('origin'),destination:f.get('destination')});refresh()}
@@ -354,18 +355,32 @@ async def run(args: argparse.Namespace) -> None:
                     database.record_observation(event)
                     ack = parse_ack(event.value)
                     source = event.params.get("FROM")
+                    if (
+                        isinstance(source, str)
+                        and event.event_type in {"RX.DIRECTED.ME", "RX.DIRECTED"}
+                        and event.value.strip().split()[1:] == ["ACK"]
+                    ):
+                        for message in database.list_messages(MessageState.IN_PROGRESS):
+                            if str(message["destination"]).upper() == source.upper():
+                                database.record_attempt(
+                                    str(message["id"]),
+                                    "standard_ack",
+                                    source,
+                                    "received",
+                                    "standard JS8Call ACK; hop acknowledged, delivery unproven",
+                                )
                     if ack and isinstance(source, str):
                         kind, message_id, bitmap = ack
-                        message = database.get_message(message_id)
-                        if message is not None:
-                            if kind == "delivered" and source.upper() == str(message["destination"]).upper():
+                        receipt_message = database.get_message(message_id)
+                        if receipt_message is not None:
+                            if kind == "delivered" and source.upper() == str(receipt_message["destination"]).upper():
                                 metadata = parse_delivery_ack(event.value)
                                 detail = "end-to-end receipt"
                                 if metadata is not None:
                                     _, delivered_at_ms, path = metadata
                                     detail = f"delivered_at={delivered_at_ms}; path={'→'.join(path)}"
                                 database.record_attempt(message_id, "delivery_ack", source, "received", detail)
-                                if message["state"] == MessageState.IN_PROGRESS:
+                                if receipt_message["state"] == MessageState.IN_PROGRESS:
                                     database.transition_message(message_id, MessageState.DELIVERED)
                             else:
                                 part_ack = parse_part_ack(event.value)
