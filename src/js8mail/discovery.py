@@ -40,6 +40,10 @@ def hearing_query(callsign: str) -> str:
     return f"{callsign.strip().upper()} HEARING?"
 
 
+def snr_query(callsign: str) -> str:
+    return f"{callsign.strip().upper()} SNR?"
+
+
 def call_query(callsign: str) -> str:
     return f"@ALLCALL QUERY CALL {callsign.strip().upper()}"
 

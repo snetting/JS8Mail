@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 from js8mail.adapters.js8call.client import Js8CallClient
 from js8mail.application.lifecycle import MessageState
 from js8mail.application.service import MailService
-from js8mail.discovery import QueryScheduler, call_query, hearing_query, messages_query
+from js8mail.discovery import QueryScheduler, call_query, hearing_query, messages_query, snr_query
 from js8mail.domain import NormalizedEvent, utc_now_ms
 from js8mail.protocol import (
     MessagePart,
@@ -167,19 +167,19 @@ class Handler(BaseHTTPRequestHandler):
         if self.service.recently_heard(destination):
             await self.transmit(message_id)
             return
-        probe = hearing_query(destination)
+        probe = snr_query(destination)
         self.service.database.record_attempt(
-            message_id, "hearing_probe", destination, "started", "destination not recently heard"
+            message_id, "snr_probe", destination, "started", "destination not recently heard"
         )
         try:
             await self.client.send_message(probe)
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(
-                message_id, "hearing_probe", destination, "failed", type(exc).__name__
+                message_id, "snr_probe", destination, "failed", type(exc).__name__
             )
         else:
             self.service.database.record_attempt(
-                message_id, "hearing_probe", destination, "submitted", "waiting for RF evidence"
+                message_id, "snr_probe", destination, "submitted", "waiting for RF evidence"
             )
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.defer_message(
