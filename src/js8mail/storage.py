@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class Database:
@@ -93,6 +93,14 @@ class Database:
                 CREATE INDEX IF NOT EXISTS message_attempts_message_idx
                     ON message_attempts(message_id, created_at_ms);
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (3, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 4:
+            self.connection.executescript(
+                """
+                ALTER TABLE messages ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE messages ADD COLUMN next_attempt_at_ms INTEGER;
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (4, strftime('%s','now') * 1000);
                 """
             )
         self.connection.commit()
@@ -222,3 +230,26 @@ class Database:
             (message_id,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def defer_message(self, message_id: str, delay_ms: int, detail: str) -> None:
+        from js8mail.application.lifecycle import MessageState, can_transition
+
+        row = self.connection.execute("SELECT state, retry_count FROM messages WHERE id = ?", (message_id,)).fetchone()
+        if row is None:
+            raise KeyError(message_id)
+        current = MessageState(row["state"])
+        if current != MessageState.WAITING_ROUTE and not can_transition(current, MessageState.WAITING_ROUTE):
+            raise ValueError(f"Cannot defer message in state {current}")
+        now = utc_now_ms()
+        self.connection.execute(
+            "UPDATE messages SET state = ?, retry_count = ?, next_attempt_at_ms = ?, updated_at_ms = ? WHERE id = ?",
+            (MessageState.WAITING_ROUTE, int(row["retry_count"]) + 1, now + max(1000, delay_ms), now, message_id),
+        )
+        self.connection.commit()
+        self.record_attempt(message_id, "defer", "route", "waiting", detail)
+
+    def due_for_retry(self, message_id: str) -> bool:
+        row = self.connection.execute(
+            "SELECT next_attempt_at_ms FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        return row is not None and (row["next_attempt_at_ms"] is None or row["next_attempt_at_ms"] <= utc_now_ms())

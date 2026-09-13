@@ -84,9 +84,12 @@ class MailService:
         wanted = callsign.strip().upper()
         for observation in self.database.recent_observations(500):
             source = observation["params"].get("FROM")
-            if isinstance(source, str) and source.upper() == wanted:
-                if now - int(observation["observed_at_ms"]) <= window_ms:
-                    return True
+            if (
+                isinstance(source, str)
+                and source.upper() == wanted
+                and now - int(observation["observed_at_ms"]) <= window_ms
+            ):
+                return True
         return False
 
     def promising_stations(self, destination: str) -> list[str]:

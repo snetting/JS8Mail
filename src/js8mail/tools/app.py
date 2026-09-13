@@ -1,9 +1,4 @@
-"""Run the local JS8Mail mailbox and daemon.
-
-The first UI slice supports durable compose/cancel/retry and explicitly
-operator-approved transmission. Automatic routing and end-to-end receipts are
-not enabled yet.
-"""
+"""Run the local JS8Mail mailbox and daemon."""
 
 from __future__ import annotations
 
@@ -14,21 +9,33 @@ import threading
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 from js8mail.adapters.js8call.client import Js8CallClient
 from js8mail.application.lifecycle import MessageState
 from js8mail.application.service import MailService
 from js8mail.discovery import QueryScheduler, call_query, hearing_query, messages_query
-from js8mail.domain import NormalizedEvent
+from js8mail.domain import NormalizedEvent, utc_now_ms
+from js8mail.protocol import (
+    MessagePart,
+    MultipartAccumulator,
+    format_delivery_ack,
+    format_human_data_part,
+    format_ordinary_message,
+    format_part_ack,
+    parse_ack,
+    parse_delivery_ack,
+    parse_part_ack,
+    split_human_message,
+)
 from js8mail.storage import Database
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>JS8Mail</title><style>
 body{font:15px system-ui;max-width:1100px;margin:2em auto;padding:0 1em;background:#f5f7f9;color:#18222d}
 section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em;margin:1em 0}input,textarea,select{box-sizing:border-box;width:100%;padding:.5em;margin:.25em 0 .7em}textarea{height:110px}button{background:#1769aa;color:#fff;border:0;border-radius:5px;padding:.5em .8em;margin:.2em;cursor:pointer}.danger{background:#a33}.pill{display:inline-block;padding:.3em .6em;border-radius:1em;background:#e8edf2;margin:.2em}.ok{background:#d8f3dc}.warn{background:#fff1c2}.mono{font:12px monospace;white-space:pre-wrap}td,th{text-align:left;border-bottom:1px solid #e4e9ee;padding:.5em;vertical-align:top}
-</style><h1>JS8Mail</h1><p>Offline-first mailbox · operator-approved RF prototype</p><section><div id=status>Loading…</div></section>
+</style><h1>JS8Mail</h1><p>Offline-first mailbox · automatic RF handoff prototype</p><section><div id=status>Loading…</div></section>
 <section><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section><h2>Outbox</h2><div id=messages>Loading…</div></section><section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
 <section><h2>Live route preview</h2><p>Uses only locally captured RF evidence. The graph is rebuilt as observations arrive.</p><form id=route>Origin<input name=origin maxlength=16 required placeholder=OH3SPN>Destination<input name=destination maxlength=16 required placeholder=G0XYZ><button>Preview route</button></form><div id=route-result>No route selected.</div></section>
@@ -36,7 +43,7 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let routeQuery='';
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
-async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;if(s.callsign&&!document.querySelector('#route input[name=origin]').value)document.querySelector('#route input[name=origin]').value=s.callsign;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State / timeline</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><b>${esc(x.state)}</b><br><small>${esc(x.id)}</small>${(x.attempts||[]).map(a=>`<div class=mono>${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}</div>`).join('')}</td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td>${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>';if(routeQuery){let r=await api('/api/route?'+routeQuery);document.getElementById('route-result').innerHTML=`<p><b>${esc(r.action)}</b>: ${esc(r.explanation)}</p><p class=mono>${esc(r.path.join(' → '))}</p>`}}
+async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;if(s.callsign&&!document.querySelector('#route input[name=origin]').value)document.querySelector('#route input[name=origin]').value=s.callsign;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State / timeline</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><b>${esc(x.state)}</b><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?`<div class=mono>next retry: ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (attempt ${x.retry_count})</div>`:''}${(x.attempts||[]).map(a=>`<div class=mono>${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}</div>`).join('')}</td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td>${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>';if(routeQuery){let r=await api('/api/route?'+routeQuery);document.getElementById('route-result').innerHTML=`<p><b>${esc(r.action)}</b>: ${esc(r.explanation)}</p><p class=mono>${esc(r.path.join(' → '))}</p>`}}
 async function act(id,a){try{await api(`/api/messages/${id}/${a}`,{method:'POST'});refresh()}catch(e){alert(e)}}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
 document.getElementById('route').onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);routeQuery=new URLSearchParams({origin:f.get('origin'),destination:f.get('destination')});refresh()}
@@ -49,6 +56,7 @@ class Handler(BaseHTTPRequestHandler):
     client: Js8CallClient
     loop: asyncio.AbstractEventLoop
     status: dict[str, Any]
+    announced_destinations: set[str]
 
     def reply(self, code: int, value: Any, content_type: str = "application/json") -> None:
         data = value.encode() if isinstance(value, str) else json.dumps(value).encode()
@@ -123,9 +131,11 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("message is not ready to send")
         # Keep the first vertical slice ordinary-JS8Call compatible. Enhanced
         # envelopes will be added later, behind peer capability detection.
-        text = f"{message['destination']} MSG {message['body']}"
+        destination = str(message["destination"])
+        announce = destination not in self.announced_destinations
+        text = format_ordinary_message(destination, str(message["body"]), announce)
         self.service.database.record_attempt(
-            message_id, "direct", str(message["destination"]), "started", "initial direct attempt"
+            message_id, "direct", destination, "started", "initial direct attempt"
         )
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
@@ -133,19 +143,20 @@ class Handler(BaseHTTPRequestHandler):
             await self.client.send_message(text)
         except Exception as exc:
             self.service.database.record_attempt(
-                message_id, "direct", str(message["destination"]), "failed", type(exc).__name__
+                message_id, "direct", destination, "failed", type(exc).__name__
             )
             raise
         self.service.database.record_attempt(
             message_id,
             "direct",
-            str(message["destination"]),
+            destination,
             "submitted",
             "queued in JS8Call for next TX cycle",
         )
         self.service.database.audit(
             "message.submitted_to_js8call", {"message_id": message_id, "text_length": len(text)}
         )
+        self.announced_destinations.add(destination)
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -163,10 +174,16 @@ async def run(args: argparse.Namespace) -> None:
         "tx_mode": args.tx_mode,
         "callsign": "",
     }
-    handler = type(
+    handler: type[Handler] = type(
         "BoundHandler",
         (Handler,),
-        {"service": service, "client": client, "loop": loop, "status": status},
+        {
+            "service": service,
+            "client": client,
+            "loop": loop,
+            "status": status,
+            "announced_destinations": set(),
+        },
     )
     server = ThreadingHTTPServer((args.ui_host, args.ui_port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -174,6 +191,7 @@ async def run(args: argparse.Namespace) -> None:
     print(f"JS8Mail UI: http://{args.ui_host}:{args.ui_port}", flush=True)
     delay = 1.0
     query_scheduler = QueryScheduler()
+    reassembly: dict[str, MultipartAccumulator] = {}
 
     async def submit_query(key: str, text: str, action: str, target: str) -> bool:
         now = int(asyncio.get_running_loop().time() * 1000)
@@ -202,12 +220,21 @@ async def run(args: argparse.Namespace) -> None:
             for message in database.list_messages():
                 if message["state"] not in {MessageState.IN_PROGRESS, MessageState.WAITING_ROUTE}:
                     continue
+                if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(str(message["id"])):
+                    continue
                 destination = str(message["destination"])
                 if service.recently_heard(destination):
+                    if message["state"] == MessageState.WAITING_ROUTE:
+                        database.record_attempt(
+                            str(message["id"]), "route", destination, "available", "recent local RF evidence"
+                        )
+                        future = asyncio.create_task(
+                            handler.transmit(cast(Handler, handler), str(message["id"]))
+                        )
+                        await future
                     continue
                 hearing_key = f"hearing:{destination}"
-                if query_scheduler.due(hearing_key, now):
-                    if await submit_query(
+                if query_scheduler.due(hearing_key, now) and await submit_query(
                         hearing_key, hearing_query(destination), "hearing_query", destination
                     ):
                         database.record_attempt(
@@ -224,8 +251,7 @@ async def run(args: argparse.Namespace) -> None:
                     if candidates:
                         for candidate in candidates:
                             candidate_key = f"candidate-query:{candidate}:{destination}"
-                            if query_scheduler.due(candidate_key, now):
-                                if await submit_query(
+                            if query_scheduler.due(candidate_key, now) and await submit_query(
                                     candidate_key,
                                     f"{candidate} QUERY CALL {destination}",
                                     "candidate_query_call",
@@ -249,6 +275,12 @@ async def run(args: argparse.Namespace) -> None:
                                 "submitted",
                                 destination,
                             )
+                delay_ms = min(60_000 * (2 ** min(int(message.get("retry_count", 0)), 5)), 1_800_000)
+                database.defer_message(
+                    str(message["id"]),
+                    delay_ms,
+                    f"no current route; discovery will retry in {delay_ms // 60000} minute(s)",
+                )
 
     discovery_task = asyncio.create_task(discovery_loop())
     try:
@@ -261,6 +293,61 @@ async def run(args: argparse.Namespace) -> None:
 
                 async def handle(event: NormalizedEvent) -> None:
                     database.record_observation(event)
+                    ack = parse_ack(event.value)
+                    source = event.params.get("FROM")
+                    if ack and isinstance(source, str):
+                        kind, message_id, bitmap = ack
+                        message = database.get_message(message_id)
+                        if message is not None:
+                            if kind == "delivered" and source.upper() == str(message["destination"]).upper():
+                                metadata = parse_delivery_ack(event.value)
+                                detail = "end-to-end receipt"
+                                if metadata is not None:
+                                    _, delivered_at_ms, path = metadata
+                                    detail = f"delivered_at={delivered_at_ms}; path={'→'.join(path)}"
+                                database.record_attempt(message_id, "delivery_ack", source, "received", detail)
+                                if message["state"] == MessageState.IN_PROGRESS:
+                                    database.transition_message(message_id, MessageState.DELIVERED)
+                            else:
+                                part_ack = parse_part_ack(event.value)
+                                detail = bitmap or "acknowledged"
+                                if part_ack is not None and part_ack.missing:
+                                    detail = f"missing parts: {','.join(map(str, part_ack.missing))}"
+                                    try:
+                                        parts = split_human_message(message_id, str(message["body"]))
+                                        for number in part_ack.missing:
+                                            if number <= len(parts):
+                                                await client.send_message(
+                                                    f"{source} {format_human_data_part(parts[number - 1])}"
+                                                )
+                                        database.record_attempt(
+                                            message_id, "part_resend", source, "submitted", detail
+                                        )
+                                    except (ValueError, RuntimeError, ConnectionError):
+                                        database.record_attempt(
+                                            message_id, "part_resend", source, "failed", detail
+                                        )
+                                database.record_attempt(message_id, "hop_ack", source, "received", detail)
+                    if event.value.startswith("J8M1 D ") and isinstance(source, str) and source.upper() != status["callsign"]:
+                        fields = event.value.split(" ", 4)
+                        if len(fields) == 5:
+                            try:
+                                position, total = fields[3].split("/", 1)
+                                part = MessagePart(fields[2], int(position), int(total), fields[4])
+                                accumulator = reassembly.setdefault(
+                                    part.message_id, MultipartAccumulator(part.message_id, part.total)
+                                )
+                                accumulator.add(part)
+                                if accumulator.should_ack(utc_now_ms()):
+                                    await client.send_message(f"{source} {format_part_ack(accumulator.receipt())}")
+                                    database.audit("message.part_ack_submitted", {"message_id": part.message_id, "to": source})
+                                if accumulator.receipt().complete:
+                                    await client.send_message(
+                                        f"{source} {format_delivery_ack(part.message_id, utc_now_ms(), (status['callsign'], source))}"
+                                    )
+                                    database.audit("message.delivered_ack_submitted", {"message_id": part.message_id, "to": source})
+                            except (ValueError, RuntimeError, ConnectionError):
+                                database.audit("message.ack_failed", {"source": source})
 
                 reader_task = asyncio.create_task(client.read_events(handle))
                 try:
