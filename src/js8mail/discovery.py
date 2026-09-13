@@ -36,6 +36,10 @@ class QueryScheduler:
     def state(self, key: str) -> QueryState:
         return self._states.get(key, QueryState())
 
+    def restore(self, key: str, now_ms: int, remaining_ms: int) -> None:
+        """Restore a cooldown reconstructed from durable wall-clock history."""
+        self._states[key] = QueryState(last_at_ms=now_ms, next_at_ms=now_ms + max(0, remaining_ms))
+
 
 def hearing_query(callsign: str) -> str:
     return f"{callsign.strip().upper()} HEARING?"

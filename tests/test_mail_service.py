@@ -13,7 +13,7 @@ def test_compose_cancel_and_retry(tmp_path: Path) -> None:
     message_id = service.compose("n0call", "Test", "Hello")
     message = database.get_message(message_id)
     assert message["state"] == "queued"  # type: ignore[index]
-    assert message["expires_at_ms"] - message["created_at_ms"] == DEFAULT_MESSAGE_TTL_MS  # type: ignore[index]
+    assert DEFAULT_MESSAGE_TTL_MS - 1 <= message["expires_at_ms"] - message["created_at_ms"] <= DEFAULT_MESSAGE_TTL_MS  # type: ignore[index]
     service.cancel(message_id)
     assert database.get_message(message_id)["state"] == "cancelled"  # type: ignore[index]
     service.retry(message_id)

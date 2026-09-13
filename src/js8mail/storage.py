@@ -134,6 +134,22 @@ class Database:
             raise RuntimeError("SQLite did not return an audit row id")
         return int(cursor.lastrowid)
 
+    def latest_audit_time(
+        self, event_type: str, payload_key: str | None = None, payload_value: str | None = None
+    ) -> int | None:
+        rows = self.connection.execute(
+            "SELECT payload_json, created_at_ms FROM audit_events WHERE event_type = ? "
+            "ORDER BY created_at_ms DESC LIMIT 100",
+            (event_type,),
+        ).fetchall()
+        for row in rows:
+            if payload_key is not None:
+                payload = json.loads(row["payload_json"])
+                if payload.get(payload_key) != payload_value:
+                    continue
+            return int(row["created_at_ms"])
+        return None
+
     def enqueue_message(
         self,
         message_id: str,

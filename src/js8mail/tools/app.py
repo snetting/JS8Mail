@@ -39,14 +39,15 @@ from js8mail.storage import Database
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>JS8Mail</title><style>
-body{font:15px system-ui;max-width:1100px;margin:2em auto;padding:0 1em;background:#f5f7f9;color:#18222d}
+body{font:15px system-ui;max-width:1250px;margin:2em auto;padding:0 1em;background:#f5f7f9;color:#18222d}
+ .workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:1em;align-items:start}.workspace section{margin:0}
 section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em;margin:1em 0}input,textarea,select{box-sizing:border-box;width:100%;padding:.5em;margin:.25em 0 .7em}textarea{height:110px}button{background:#1769aa;color:#fff;border:0;border-radius:5px;padding:.5em .8em;margin:.2em;cursor:pointer}.danger{background:#a33}.pill{display:inline-block;padding:.3em .6em;border-radius:1em;background:#e8edf2;margin:.2em}.ok{background:#d8f3dc}.warn{background:#fff1c2}.mono{font:12px monospace;white-space:pre-wrap}td,th{text-align:left;border-bottom:1px solid #e4e9ee;padding:.5em;vertical-align:top}
 </style><h1>JS8Mail</h1><p>Offline-first mailbox · automatic RF handoff prototype</p><section><div id=status>Loading…</div></section>
-<section><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select><button>Queue locally</button></form><span id=result></span></section>
+<div class=workspace><section><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select><button>Queue locally</button></form><span id=result></span></section>
+<section><h2>Recently heard stations</h2><div id=stations>Loading…</div></section></div>
 <section><h2>Outbox</h2><div id=messages>Loading…</div></section><section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
 <section><h2>Live route preview</h2><p>Uses only locally captured RF evidence. The graph is rebuilt as observations arrive.</p><form id=route>Origin<input name=origin maxlength=16 required placeholder=OH3SPN>Destination<input name=destination maxlength=16 required placeholder=G0XYZ><button>Preview route</button></form><div id=route-result>No route selected.</div></section>
 <section><h2>Message route graph</h2><div id=graph-result>Select Graph on a message to inspect its evidence and attempts.</div></section>
-<section><h2>Recently heard stations</h2><div id=stations>Loading…</div></section>
 <script>
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let routeQuery='';
@@ -251,6 +252,16 @@ async def run(args: argparse.Namespace) -> None:
     delay = 1.0
     query_scheduler = QueryScheduler()
     inbox_scheduler = QueryScheduler(base_delay_ms=1_800_000, max_delay_ms=21_600_000)
+    last_inbox_query = database.latest_audit_time(
+        "discovery.query_submitted", "action", "messages_query"
+    )
+    if last_inbox_query is not None:
+        elapsed = max(0, utc_now_ms() - last_inbox_query)
+        inbox_scheduler.restore(
+            "inbox:broadcast",
+            int(asyncio.get_running_loop().time() * 1000),
+            max(0, 1_800_000 - elapsed),
+        )
     reassembly: dict[str, MultipartAccumulator] = {}
     recent_call_queries: list[tuple[int, str]] = []
 
