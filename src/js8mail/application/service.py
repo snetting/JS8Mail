@@ -99,6 +99,34 @@ class MailService:
                 return True
         return False
 
+    def recently_answered(
+        self,
+        callsign: str,
+        local_callsign: str,
+        now_ms: int | None = None,
+        window_ms: int = 600_000,
+    ) -> bool:
+        """Return true only for a recent directed response to this station."""
+        now = utc_now_ms() if now_ms is None else now_ms
+        wanted = callsign.strip().upper()
+        local = local_callsign.strip().upper()
+        if not wanted or not local:
+            return False
+        for observation in self.database.recent_observations(500):
+            params = observation["params"]
+            source = params.get("FROM")
+            target = params.get("TO")
+            addressed_event = observation["event_type"] in {"RX.DIRECTED.ME", "RX.DIRECTED"}
+            if (
+                addressed_event
+                and isinstance(source, str)
+                and source.upper() == wanted
+                and (not isinstance(target, str) or target.upper() == local)
+                and now - int(observation["observed_at_ms"]) <= window_ms
+            ):
+                return True
+        return False
+
     def promising_stations(
         self, destination: str, now_ms: int | None = None, window_ms: int = 600_000
     ) -> list[str]:

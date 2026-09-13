@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from js8mail.application.service import DEFAULT_MESSAGE_TTL_MS, MailService
+from js8mail.domain import NormalizedEvent
 from js8mail.storage import Database
 
 
@@ -27,4 +28,17 @@ def test_compose_validates_bounds(tmp_path: Path) -> None:
         service.compose("", "", "hello")
     with pytest.raises(ValueError):
         service.compose("N0CALL", "", "")
+    database.close()
+
+
+def test_recently_heard_does_not_count_as_a_directed_answer(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    database.record_observation(NormalizedEvent("RX.ACTIVITY", "M8YRT CQ", {"FROM": "M8YRT"}, 1_000))
+    assert service.recently_heard("M8YRT", now_ms=1_500, window_ms=10_000)
+    assert not service.recently_answered("M8YRT", "OH3SPN", now_ms=1_500, window_ms=10_000)
+    database.record_observation(
+        NormalizedEvent("RX.DIRECTED.ME", "OH3SPN SNR -10", {"FROM": "M8YRT", "TO": "OH3SPN"}, 2_000)
+    )
+    assert service.recently_answered("M8YRT", "OH3SPN", now_ms=2_500, window_ms=10_000)
     database.close()

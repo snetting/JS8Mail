@@ -164,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
         if message is None:
             raise KeyError(message_id)
         destination = str(message["destination"])
-        if self.service.recently_heard(destination):
+        if self.service.recently_answered(destination, str(self.status.get("callsign", ""))):
             await self.transmit(message_id)
             return
         probe = snr_query(destination)
@@ -269,7 +269,7 @@ async def run(args: argparse.Namespace) -> None:
                         str(message["id"]), "expiry", destination, "expired", "retry window elapsed"
                     )
                     continue
-                if service.recently_heard(destination):
+                if service.recently_answered(destination, str(status.get("callsign", ""))):
                     if message["state"] == MessageState.WAITING_ROUTE:
                         database.record_attempt(
                             str(message["id"]), "route", destination, "available", "recent local RF evidence"
