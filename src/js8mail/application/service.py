@@ -177,6 +177,50 @@ class MailService:
             "edges": list(edges.values()),
         }
 
+    def station_views(self, limit: int = 30) -> list[dict[str, object]]:
+        """Summarise recent direct and remotely reported callsigns."""
+        now = utc_now_ms()
+        stations: dict[str, dict[str, Any]] = {}
+        for observation in self.database.recent_observations(500):
+            params = observation["params"]
+            source = params.get("FROM")
+            target = params.get("TO")
+            snr = params.get("SNR")
+            observed = int(observation["observed_at_ms"])
+            if isinstance(source, str) and source and not source.startswith("@"):
+                call = source.upper()
+                item = stations.setdefault(
+                    call,
+                    {"callsign": call, "last_seen_ms": observed, "snr": None, "evidence": set()},
+                )
+                if observed >= int(item["last_seen_ms"]):
+                    item["last_seen_ms"] = observed
+                if isinstance(snr, (int, float)):
+                    item["snr"] = snr if item["snr"] is None else max(float(item["snr"]), float(snr))
+                evidence = item["evidence"]
+                assert isinstance(evidence, set)
+                evidence.add("direct" if observation["event_type"] != "QUERY.CALL.RESPONSE" else "remote_report")
+            if isinstance(target, str) and target and not target.startswith("@"):
+                call = target.upper()
+                item = stations.setdefault(
+                    call,
+                    {"callsign": call, "last_seen_ms": observed, "snr": None, "evidence": set()},
+                )
+                if observed >= int(item["last_seen_ms"]):
+                    item["last_seen_ms"] = observed
+                if isinstance(snr, (int, float)):
+                    item["snr"] = snr if item["snr"] is None else max(float(item["snr"]), float(snr))
+                evidence = item["evidence"]
+                assert isinstance(evidence, set)
+                evidence.add("reported_target")
+        result: list[dict[str, Any]] = []
+        for item in stations.values():
+            item["age_seconds"] = max(0, (now - int(item["last_seen_ms"])) // 1000)
+            item["evidence"] = sorted(item["evidence"])
+            result.append(item)
+        result.sort(key=lambda item: (int(item["age_seconds"]), str(item["callsign"])))
+        return result[: max(1, min(limit, 100))]
+
     def recently_heard(
         self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000
     ) -> bool:
