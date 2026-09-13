@@ -78,3 +78,25 @@ def call_query(callsign: str) -> str:
 
 def messages_query() -> str:
     return "@ALLCALL QUERY MSGS"
+
+
+def custodian_messages_query(custodian: str) -> str:
+    return f"{custodian.strip().upper()} QUERY MSGS"
+
+
+def retrieve_message_query(custodian: str, message_id: int) -> str:
+    if not 0 <= message_id <= 2_147_483_647:
+        raise ValueError("invalid JS8Call message id")
+    return f"{custodian.strip().upper()} QUERY MSG {message_id}"
+
+
+def parse_messages_available(text: str) -> int | None:
+    """Parse JS8Call's ``YES MSG ID N`` custodian response."""
+    fields = text.strip().split()
+    if len(fields) != 4 or fields[:3] != ["YES", "MSG", "ID"]:
+        return None
+    try:
+        value = int(fields[3])
+    except ValueError:
+        return None
+    return value if 0 <= value <= 2_147_483_647 else None

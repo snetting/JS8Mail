@@ -18,8 +18,11 @@ from js8mail.application.service import MailService
 from js8mail.discovery import (
     QueryScheduler,
     call_query,
+    custodian_messages_query,
     messages_query,
+    parse_messages_available,
     parse_query_call_response,
+    retrieve_message_query,
     snr_query,
 )
 from js8mail.domain import NormalizedEvent, utc_now_ms
@@ -315,6 +318,7 @@ async def run(args: argparse.Namespace) -> None:
     delay = 1.0
     query_scheduler = QueryScheduler()
     inbox_scheduler = QueryScheduler(base_delay_ms=1_800_000, max_delay_ms=21_600_000)
+    custodian_scheduler = QueryScheduler(base_delay_ms=1_800_000, max_delay_ms=21_600_000)
     last_inbox_query = database.latest_audit_time(
         "discovery.query_submitted", "action", "messages_query"
     )
@@ -368,6 +372,29 @@ async def run(args: argparse.Namespace) -> None:
                     "@ALLCALL",
                     scheduler=inbox_scheduler,
                 )
+            # Ask only known custodians, and only on the same restrained
+            # cadence as the broadcast query.  A positive answer below is
+            # followed by a targeted message-ID retrieval.
+            for stored_message in database.list_messages():
+                for custody in database.list_custody(str(stored_message["id"])):
+                    if custody["status"] != "accepted":
+                        continue
+                    custodian = str(custody["custodian"])
+                    key = f"custodian:{custodian}"
+                    if custodian_scheduler.due(key, now):
+                        submitted = await submit_query(
+                            key,
+                            custodian_messages_query(custodian),
+                            "custodian_query_msgs",
+                            custodian,
+                        )
+                        database.record_attempt(
+                            str(stored_message["id"]),
+                            "custodian_query_msgs",
+                            custodian,
+                            "submitted" if submitted else "blocked",
+                            "checking for stored mail",
+                        )
             for message in database.list_messages():
                 if message["state"] not in {MessageState.IN_PROGRESS, MessageState.WAITING_ROUTE}:
                     continue
@@ -432,16 +459,16 @@ async def run(args: argparse.Namespace) -> None:
                         continue
                 promising = service.promising_stations(destination)[:3]
                 if message.get("retry_count", 0) >= 3:
-                    custodian = next((candidate for candidate in promising if candidate != destination), None)
-                    if custodian is not None and not any(
-                        item["custodian"] == custodian and item["status"] == "accepted"
+                    candidate_custodian = next((candidate for candidate in promising if candidate != destination), None)
+                    if candidate_custodian is not None and not any(
+                        item["custodian"] == candidate_custodian and item["status"] == "accepted"
                         for item in database.list_custody(str(message["id"]))
                     ):
                         try:
-                            await handler.transmit_store(cast(Handler, handler), str(message["id"]), custodian)
+                            await handler.transmit_store(cast(Handler, handler), str(message["id"]), candidate_custodian)
                         except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
                             database.record_attempt(
-                                str(message["id"]), "store", custodian, "deferred", type(exc).__name__
+                                str(message["id"]), "store", candidate_custodian, "deferred", type(exc).__name__
                             )
                             database.defer_message(str(message["id"]), 60_000, "custodian offer unavailable")
                         continue
@@ -510,6 +537,34 @@ async def run(args: argparse.Namespace) -> None:
                     database.record_observation(event)
                     ack = parse_ack(event.value)
                     source = event.params.get("FROM")
+                    available_id = parse_messages_available(event.value)
+                    if available_id is not None and isinstance(source, str):
+                        for stored_message in database.list_messages(MessageState.IN_PROGRESS):
+                            message_id = str(stored_message["id"])
+                            if any(
+                                item["custodian"].upper() == source.upper()
+                                and item["status"] == "accepted"
+                                for item in database.list_custody(message_id)
+                            ):
+                                try:
+                                    await client.send_message(retrieve_message_query(source, available_id))
+                                    database.upsert_custody(
+                                        message_id,
+                                        source,
+                                        "retrieval_pending",
+                                        f"requested JS8Call message ID {available_id}",
+                                    )
+                                    database.record_attempt(
+                                        message_id,
+                                        "custodian_retrieve",
+                                        source,
+                                        "submitted",
+                                        f"message ID {available_id}",
+                                    )
+                                except (ConnectionError, RuntimeError):
+                                    database.record_attempt(
+                                        message_id, "custodian_retrieve", source, "failed", "JS8Call unavailable"
+                                    )
                     capability = parse_capability(event.value)
                     if capability is not None and isinstance(source, str):
                         version, features = capability
