@@ -460,7 +460,7 @@ async def run(args: argparse.Namespace) -> None:
         if not client.connected or not scheduler.due(key, now):
             return False
         try:
-            await cast(Handler, handler).send_rf(text)
+            await Handler.send_rf(cast(Handler, handler), text)
             database.audit(
                 "discovery.query_submitted", {"action": action, "target": target, "text": text}
             )
@@ -773,7 +773,7 @@ async def run(args: argparse.Namespace) -> None:
                                             if len(request_path) >= 3
                                             else f"{source} {payload}"
                                         )
-                                        await cast(Handler, handler).send_rf(text, request_id)
+                                        await Handler.send_rf(cast(Handler, handler), text, request_id)
                                 database.record_attempt(
                                     request_id, "part_resend", source, "submitted",
                                     f"served {len(missing)} requested part(s) through custody path",
@@ -790,7 +790,7 @@ async def run(args: argparse.Namespace) -> None:
                                 for item in database.list_custody(message_id)
                             ):
                                 try:
-                                    await cast(Handler, handler).send_rf(retrieve_message_query(source, available_id))
+                                    await Handler.send_rf(cast(Handler, handler), retrieve_message_query(source, available_id))
                                     database.upsert_custody(
                                         message_id,
                                         source,
@@ -815,7 +815,7 @@ async def run(args: argparse.Namespace) -> None:
                             source, version, features, utc_now_ms() + CAPABILITY_TTL_MS
                         )
                         try:
-                            await cast(Handler, handler).send_rf(f"{source} {format_capability(features)}")
+                            await Handler.send_rf(cast(Handler, handler), f"{source} {format_capability(features)}")
                             database.audit(
                                 "peer.capability_ack_submitted",
                                 {"peer": source.upper(), "version": version},
@@ -1004,7 +1004,7 @@ async def run(args: argparse.Namespace) -> None:
                                                     if len(resend_path) >= 3
                                                     else f"{source} {resend_payload}"
                                                 )
-                                                await cast(Handler, handler).send_rf(resend_text, message_id)
+                                                await Handler.send_rf(cast(Handler, handler), resend_text, message_id)
                                         database.record_attempt(
                                             message_id, "part_resend", source, "submitted", detail
                                         )
@@ -1055,10 +1055,10 @@ async def run(args: argparse.Namespace) -> None:
                                     str(event.params.get("TO", "")),
                                 )
                                 if accumulator.should_ack(utc_now_ms()):
-                                    await cast(Handler, handler).send_rf(f"{source} {format_part_ack(accumulator.receipt())}")
+                                    await Handler.send_rf(cast(Handler, handler), f"{source} {format_part_ack(accumulator.receipt())}")
                                     database.audit("message.part_ack_submitted", {"message_id": part.message_id, "to": source})
                                 if accumulator.receipt().complete:
-                                    await cast(Handler, handler).send_rf(
+                                    await Handler.send_rf(cast(Handler, handler),
                                         f"{source} {format_delivery_ack(part.message_id, utc_now_ms(), (status['callsign'], source))}"
                                     )
                                     database.audit("message.delivered_ack_submitted", {"message_id": part.message_id, "to": source})
