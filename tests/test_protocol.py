@@ -4,6 +4,7 @@ from js8mail.adapters.js8call.protocol import (
     ApiProtocolError,
     decode_line,
     encode_read_only_request,
+    encode_speed_request,
 )
 from js8mail.protocol import format_capability, parse_capability
 
@@ -26,6 +27,9 @@ def test_request_encoder_is_receive_only() -> None:
     assert b"STATION.GET_STATUS" in request
     with pytest.raises(ApiProtocolError):
         encode_read_only_request("TX.SEND_MESSAGE", request_id="no-send")
+    assert b'"type":"MODE.SET_SPEED"' in encode_speed_request(2, request_id="speed-1")
+    with pytest.raises(ApiProtocolError):
+        encode_speed_request(9, request_id="speed-2")
 
 
 def test_capability_advertisement_is_versioned_and_bounded() -> None:

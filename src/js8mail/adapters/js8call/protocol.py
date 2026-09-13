@@ -39,6 +39,7 @@ READ_ONLY_REQUESTS = frozenset(
 )
 
 TRANSMIT_REQUESTS = frozenset({"TX.SET_TEXT", "TX.SEND_MESSAGE"})
+SPEED_VALUES = frozenset(range(5))
 
 
 class ApiProtocolError(ValueError):
@@ -123,4 +124,15 @@ def encode_transmit_request(request_type: str, value: str, *, request_id: str) -
     encoded = (json.dumps(packet, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
     if len(encoded) > MAX_LINE_BYTES:
         raise ApiProtocolError("Encoded API request is too large")
+    return encoded
+
+
+def encode_speed_request(speed: int, *, request_id: str) -> bytes:
+    """Encode the documented optional JS8Call mode-speed control."""
+    if speed not in SPEED_VALUES:
+        raise ApiProtocolError("Unsupported JS8Call speed")
+    packet = {"params": {"_ID": request_id, "SPEED": speed}, "type": "MODE.SET_SPEED", "value": ""}
+    encoded = (json.dumps(packet, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+    if len(encoded) > MAX_LINE_BYTES:
+        raise ApiProtocolError("Encoded speed request is too large")
     return encoded

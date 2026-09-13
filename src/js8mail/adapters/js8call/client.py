@@ -11,6 +11,7 @@ from js8mail.adapters.js8call.protocol import (
     ApiProtocolError,
     decode_line,
     encode_read_only_request,
+    encode_speed_request,
     encode_transmit_request,
 )
 from js8mail.domain import NormalizedEvent, utc_now_ms
@@ -109,3 +110,11 @@ class Js8CallClient:
             return await asyncio.wait_for(future, timeout=5)
         finally:
             self._pending.pop(request_id, None)
+
+    async def set_speed(self, speed: int) -> None:
+        """Request a JS8Call speed change; callers must apply policy first."""
+        if self._writer is None or self._writer.is_closing():
+            raise ConnectionError("JS8Call is not connected")
+        request_id = str(utc_now_ms())
+        self._writer.write(encode_speed_request(speed, request_id=request_id))
+        await self._writer.drain()
