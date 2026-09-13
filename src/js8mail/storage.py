@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class Database:
@@ -212,6 +212,15 @@ class Database:
                 CREATE INDEX IF NOT EXISTS temporal_links_recent_idx
                     ON temporal_links(last_observed_at_ms DESC);
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (10, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 11:
+            self.connection.executescript(
+                """
+                ALTER TABLE inbox_messages ADD COLUMN group_name TEXT NOT NULL DEFAULT '';
+                CREATE INDEX IF NOT EXISTS inbox_messages_group_idx
+                    ON inbox_messages(group_name, updated_at_ms DESC);
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (11, strftime('%s','now') * 1000);
                 """
             )
         self.connection.commit()
@@ -487,27 +496,33 @@ class Database:
         received_parts: tuple[int, ...],
         complete: bool,
         path: tuple[str, ...] = (),
+        group_name: str = "",
     ) -> None:
         if not sender or not message_id or not 1 <= total_parts <= 255:
             raise ValueError("invalid inbox message")
         if len(body) > 100_000 or any(not 1 <= part <= total_parts for part in received_parts):
             raise ValueError("invalid inbox message content")
         now = utc_now_ms()
+        group_name = group_name.upper()[:32] if group_name.startswith("@") else ""
         self.connection.execute(
-            "INSERT INTO inbox_messages(sender, message_id, body, total_parts, received_parts_json, complete, path, first_received_at_ms, updated_at_ms) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sender, message_id) DO UPDATE SET body=excluded.body, "
+            "INSERT INTO inbox_messages(sender, message_id, body, total_parts, received_parts_json, complete, path, first_received_at_ms, updated_at_ms, group_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sender, message_id) DO UPDATE SET body=excluded.body, "
             "total_parts=excluded.total_parts, received_parts_json=excluded.received_parts_json, complete=excluded.complete, "
-            "path=excluded.path, updated_at_ms=excluded.updated_at_ms",
+            "path=excluded.path, updated_at_ms=excluded.updated_at_ms, group_name=excluded.group_name",
             (
                 sender.upper(), message_id, body, total_parts, json.dumps(received_parts),
-                int(complete), "→".join(path), now, now,
+                int(complete), "→".join(path), now, now, group_name,
             ),
         )
         self.connection.commit()
 
-    def list_inbox(self) -> list[dict[str, Any]]:
+    def list_inbox(self, group_only: bool = False) -> list[dict[str, Any]]:
+        query = "SELECT * FROM inbox_messages"
+        if group_only:
+            query += " WHERE group_name != ''"
+        query += " ORDER BY updated_at_ms DESC"
         rows = self.connection.execute(
-            "SELECT * FROM inbox_messages ORDER BY updated_at_ms DESC"
+            query
         ).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:

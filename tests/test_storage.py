@@ -81,6 +81,15 @@ def test_partial_inbox_message_is_updated_idempotently(tmp_path: Path) -> None:
     database.close()
 
 
+def test_group_alerts_can_be_listed_separately(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.upsert_inbox_message("n0call", "m1", "ALERT", 1, (1,), True, group_name="@EMCOMM")
+    database.upsert_inbox_message("n0call", "m2", "private", 1, (1,), True)
+    assert [item["message_id"] for item in database.list_inbox(group_only=True)] == ["m1"]
+    assert len(database.list_inbox()) == 2
+    database.close()
+
+
 def test_observation_retention_does_not_remove_audit_or_mail(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     database.record_observation(NormalizedEvent("OLD", "", {}, 1_000))
