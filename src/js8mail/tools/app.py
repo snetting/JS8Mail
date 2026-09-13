@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 from js8mail.adapters.js8call.client import Js8CallClient
 from js8mail.application.lifecycle import MessageState
 from js8mail.application.service import MailService
+from js8mail.discovery import QueryScheduler, call_query, hearing_query, messages_query
 from js8mail.domain import NormalizedEvent
 from js8mail.storage import Database
 
@@ -172,6 +173,84 @@ async def run(args: argparse.Namespace) -> None:
     thread.start()
     print(f"JS8Mail UI: http://{args.ui_host}:{args.ui_port}", flush=True)
     delay = 1.0
+    query_scheduler = QueryScheduler()
+
+    async def submit_query(key: str, text: str, action: str, target: str) -> bool:
+        now = int(asyncio.get_running_loop().time() * 1000)
+        if not client.connected or not query_scheduler.due(key, now):
+            return False
+        try:
+            await client.send_message(text)
+            database.audit(
+                "discovery.query_submitted", {"action": action, "target": target, "text": text}
+            )
+            query_scheduler.record(key, now)
+            return True
+        except (ConnectionError, RuntimeError):
+            query_scheduler.record(key, now)
+            return False
+
+    async def discovery_loop() -> None:
+        inbox_key = "inbox:broadcast"
+        while True:
+            await asyncio.sleep(5)
+            if not client.connected or args.tx_mode != "automatic":
+                continue
+            now = int(asyncio.get_running_loop().time() * 1000)
+            if query_scheduler.due(inbox_key, now):
+                await submit_query(inbox_key, messages_query(), "messages_query", "@ALLCALL")
+            for message in database.list_messages():
+                if message["state"] not in {MessageState.IN_PROGRESS, MessageState.WAITING_ROUTE}:
+                    continue
+                destination = str(message["destination"])
+                if service.recently_heard(destination):
+                    continue
+                hearing_key = f"hearing:{destination}"
+                if query_scheduler.due(hearing_key, now):
+                    if await submit_query(
+                        hearing_key, hearing_query(destination), "hearing_query", destination
+                    ):
+                        database.record_attempt(
+                            str(message["id"]),
+                            "hearing_query",
+                            destination,
+                            "submitted",
+                            "recent evidence absent",
+                        )
+                call_key = f"call-query:{destination}"
+                state = query_scheduler.state(hearing_key)
+                if state.attempts >= 1 and query_scheduler.due(call_key, now):
+                    candidates = service.promising_stations(destination)[:3]
+                    if candidates:
+                        for candidate in candidates:
+                            candidate_key = f"candidate-query:{candidate}:{destination}"
+                            if query_scheduler.due(candidate_key, now):
+                                if await submit_query(
+                                    candidate_key,
+                                    f"{candidate} QUERY CALL {destination}",
+                                    "candidate_query_call",
+                                    candidate,
+                                ):
+                                    database.record_attempt(
+                                        str(message["id"]),
+                                        "candidate_query_call",
+                                        candidate,
+                                        "submitted",
+                                        destination,
+                                    )
+                    else:
+                        if await submit_query(
+                            call_key, call_query(destination), "allcall_query_call", "@ALLCALL"
+                        ):
+                            database.record_attempt(
+                                str(message["id"]),
+                                "allcall_query_call",
+                                "@ALLCALL",
+                                "submitted",
+                                destination,
+                            )
+
+    discovery_task = asyncio.create_task(discovery_loop())
     try:
         while True:
             try:
@@ -201,6 +280,8 @@ async def run(args: argparse.Namespace) -> None:
             await asyncio.sleep(delay)
             delay = min(delay * 2, 30.0)
     finally:
+        discovery_task.cancel()
+        await asyncio.gather(discovery_task, return_exceptions=True)
         server.shutdown()
         server.server_close()
         database.close()

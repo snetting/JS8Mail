@@ -76,3 +76,34 @@ class MailService:
             view["attempts"] = self.database.list_attempts(str(message["id"]))
             views.append(view)
         return views
+
+    def recently_heard(
+        self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000
+    ) -> bool:
+        now = utc_now_ms() if now_ms is None else now_ms
+        wanted = callsign.strip().upper()
+        for observation in self.database.recent_observations(500):
+            source = observation["params"].get("FROM")
+            if isinstance(source, str) and source.upper() == wanted:
+                if now - int(observation["observed_at_ms"]) <= window_ms:
+                    return True
+        return False
+
+    def promising_stations(self, destination: str) -> list[str]:
+        wanted = destination.strip().upper()
+        scores: dict[str, float] = {}
+        for observation in self.database.recent_observations(500):
+            params = observation["params"]
+            source, target = params.get("FROM"), params.get("TO")
+            if (
+                not isinstance(source, str)
+                or not isinstance(target, str)
+                or target.upper() != wanted
+            ):
+                continue
+            snr = params.get("SNR", -30)
+            value = float(snr) if isinstance(snr, (int, float)) else -30.0
+            scores[source.upper()] = max(scores.get(source.upper(), 0.0), value)
+        return [
+            station for station, _ in sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        ]
