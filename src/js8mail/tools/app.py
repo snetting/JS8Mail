@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import threading
 from dataclasses import asdict
@@ -583,6 +584,31 @@ async def run(args: argparse.Namespace) -> None:
                             )
                         except (ConnectionError, RuntimeError):
                             database.audit("peer.capability_ack_failed", {"peer": source.upper()})
+                    # Legacy JS8Call messages arrive without a JS8Mail ID.
+                    # Store them too, using a deterministic local fingerprint
+                    # so repeated custodian retrieval does not create copies.
+                    command = event.params.get("CMD")
+                    message_text = event.params.get("TEXT")
+                    if (
+                        isinstance(source, str)
+                        and isinstance(command, str)
+                        and command.strip() in {"MSG", "MSG TO:"}
+                        and isinstance(message_text, str)
+                        and message_text.strip()
+                        and not message_text.startswith("J8M1 D ")
+                    ):
+                        legacy_id = "legacy-" + hashlib.sha256(
+                            f"{source.upper()}\n{message_text}".encode()
+                        ).hexdigest()[:16]
+                        database.upsert_inbox_message(
+                            source,
+                            legacy_id,
+                            message_text.strip(),
+                            1,
+                            (1,),
+                            True,
+                            tuple(str(event.params.get("PATH", source)).split(">")),
+                        )
                     query_response = parse_query_call_response(event.value)
                     if query_response is not None and isinstance(source, str):
                         now = utc_now_ms()
