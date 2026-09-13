@@ -22,17 +22,18 @@ pytest
 The local mailbox can be run against a locally configured JS8Call API:
 
 ```sh
+./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode automatic
+```
+
+Open http://127.0.0.1:8765 in a browser. `automatic` submits queued messages
+to JS8Call for its next transmit cycle. `observe` allows queueing but no RF
+submission:
+
+```sh
 ./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode observe
 ```
 
-Open http://127.0.0.1:8765 in a browser. `observe` allows queueing but no RF
-submission. For a deliberate per-message Send button during low-power testing:
-
-```sh
-./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode approve
-```
-
-The Send action only submits text to JS8Call; it does not report delivery.
+Automatic submission only hands text to JS8Call; it does not report delivery.
 Use a dummy load and suitable low-power test setup. The original receive-only
 probe remains available as `js8mail-probe`. See
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the staged

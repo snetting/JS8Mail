@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class Database:
@@ -76,6 +76,23 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS messages_state_idx ON messages(state, updated_at_ms);
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (2, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 3:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS message_attempts (
+                    id INTEGER PRIMARY KEY,
+                    message_id TEXT NOT NULL REFERENCES messages(id),
+                    action TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
+                    created_at_ms INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS message_attempts_message_idx
+                    ON message_attempts(message_id, created_at_ms);
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (3, strftime('%s','now') * 1000);
                 """
             )
         self.connection.commit()
@@ -185,3 +202,23 @@ class Database:
             "SELECT state, COUNT(*) AS count FROM messages GROUP BY state"
         ).fetchall()
         return {str(row["state"]): int(row["count"]) for row in rows}
+
+    def record_attempt(
+        self, message_id: str, action: str, target: str, status: str, detail: str = ""
+    ) -> int:
+        cursor = self.connection.execute(
+            "INSERT INTO message_attempts(message_id, action, target, status, detail, created_at_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (message_id, action, target, status, detail[:500], utc_now_ms()),
+        )
+        self.connection.commit()
+        if cursor.lastrowid is None:
+            raise RuntimeError("SQLite did not return an attempt row id")
+        return int(cursor.lastrowid)
+
+    def list_attempts(self, message_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM message_attempts WHERE message_id = ? ORDER BY created_at_ms",
+            (message_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]

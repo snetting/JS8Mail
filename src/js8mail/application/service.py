@@ -68,3 +68,11 @@ class MailService:
                 )
             )
         return RouteEngine(graph).choose(origin, destination, now_ms=now)
+
+    def message_views(self) -> list[dict[str, object]]:
+        views: list[dict[str, object]] = []
+        for message in self.database.list_messages():
+            view = dict(message)
+            view["attempts"] = self.database.list_attempts(str(message["id"]))
+            views.append(view)
+        return views

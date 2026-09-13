@@ -35,7 +35,7 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let routeQuery='';
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
-async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td>${esc(x.state)}<br><small>${esc(x.id)}</small></td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td>${s.tx_mode==='approve'&&['queued','waiting_route'].includes(x.state)?`<button onclick="act('${x.id}','send')">Approve &amp; send</button>`:''}${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>';if(routeQuery){let r=await api('/api/route?'+routeQuery);document.getElementById('route-result').innerHTML=`<p><b>${esc(r.action)}</b>: ${esc(r.explanation)}</p><p class=mono>${esc(r.path.join(' → '))}</p>`}}
+async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;if(s.callsign&&!document.querySelector('#route input[name=origin]').value)document.querySelector('#route input[name=origin]').value=s.callsign;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>State / timeline</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><b>${esc(x.state)}</b><br><small>${esc(x.id)}</small>${(x.attempts||[]).map(a=>`<div class=mono>${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}</div>`).join('')}</td><td>${esc(x.destination)}</td><td>${esc(x.subject)}<br>${esc(x.body)}</td><td>${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>';if(routeQuery){let r=await api('/api/route?'+routeQuery);document.getElementById('route-result').innerHTML=`<p><b>${esc(r.action)}</b>: ${esc(r.explanation)}</p><p class=mono>${esc(r.path.join(' → '))}</p>`}}
 async function act(id,a){try{await api(`/api/messages/${id}/${a}`,{method:'POST'});refresh()}catch(e){alert(e)}}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
 document.getElementById('route').onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);routeQuery=new URLSearchParams({origin:f.get('origin'),destination:f.get('destination')});refresh()}
@@ -64,9 +64,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/status":
             self.reply(200, self.status)
         elif path == "/api/messages":
-            self.reply(200, self.service.database.list_messages())
+            self.reply(200, self.service.message_views())
         elif path == "/api/observations":
-            self.reply(200, self.service.database.recent_observations())
+            self.reply(200, self.service.database.recent_observations(12))
         elif path == "/api/route":
             query = parse_qs(urlparse(self.path).query)
             origin = query.get("origin", [""])[0]
@@ -92,6 +92,9 @@ class Handler(BaseHTTPRequestHandler):
                     str(payload.get("body", "")),
                     int(payload.get("priority", 0)),
                 )
+                if self.status["tx_mode"] == "automatic":
+                    future = asyncio.run_coroutine_threadsafe(self.transmit(message_id), self.loop)
+                    future.result(timeout=30)
                 self.reply(201, {"id": message_id})
                 return
             parts = path.strip("/").split("/")
@@ -103,8 +106,6 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "retry":
                 self.service.retry(message_id)
             elif action == "send":
-                if self.status["tx_mode"] != "approve":
-                    raise ValueError("transmission approval is disabled")
                 future = asyncio.run_coroutine_threadsafe(self.transmit(message_id), self.loop)
                 future.result(timeout=30)
             else:
@@ -122,9 +123,25 @@ class Handler(BaseHTTPRequestHandler):
         # Keep the first vertical slice ordinary-JS8Call compatible. Enhanced
         # envelopes will be added later, behind peer capability detection.
         text = f"{message['destination']} MSG {message['body']}"
+        self.service.database.record_attempt(
+            message_id, "direct", str(message["destination"]), "started", "initial direct attempt"
+        )
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
-        await self.client.send_message(text)
+        try:
+            await self.client.send_message(text)
+        except Exception as exc:
+            self.service.database.record_attempt(
+                message_id, "direct", str(message["destination"]), "failed", type(exc).__name__
+            )
+            raise
+        self.service.database.record_attempt(
+            message_id,
+            "direct",
+            str(message["destination"]),
+            "submitted",
+            "queued in JS8Call for next TX cycle",
+        )
         self.service.database.audit(
             "message.submitted_to_js8call", {"message_id": message_id, "text_length": len(text)}
         )
@@ -143,6 +160,7 @@ async def run(args: argparse.Namespace) -> None:
         "host": args.host,
         "port": args.port,
         "tx_mode": args.tx_mode,
+        "callsign": "",
     }
     handler = type(
         "BoundHandler",
@@ -165,7 +183,15 @@ async def run(args: argparse.Namespace) -> None:
                 async def handle(event: NormalizedEvent) -> None:
                     database.record_observation(event)
 
-                await client.read_events(handle)
+                reader_task = asyncio.create_task(client.read_events(handle))
+                try:
+                    identity = await client.request_read_only("STATION.GET_CALLSIGN")
+                    status["callsign"] = identity.value.strip().upper()
+                    await reader_task
+                finally:
+                    if not reader_task.done():
+                        reader_task.cancel()
+                        await asyncio.gather(reader_task, return_exceptions=True)
             except (ConnectionError, OSError, asyncio.IncompleteReadError) as exc:
                 status["connected"] = False
                 database.audit("js8call.connection_error", {"error": type(exc).__name__})
@@ -187,7 +213,7 @@ def main() -> None:
     parser.add_argument("--database", default="js8mail.sqlite3")
     parser.add_argument("--ui-host", default="127.0.0.1")
     parser.add_argument("--ui-port", default=8765, type=int)
-    parser.add_argument("--tx-mode", choices=("observe", "approve"), default="observe")
+    parser.add_argument("--tx-mode", choices=("observe", "automatic"), default="automatic")
     args = parser.parse_args()
     try:
         asyncio.run(run(args))
