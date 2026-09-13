@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class Database:
@@ -167,6 +167,21 @@ class Database:
                 CREATE INDEX IF NOT EXISTS inbox_messages_updated_idx
                     ON inbox_messages(updated_at_ms DESC);
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (8, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 9:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS groups (
+                    name TEXT PRIMARY KEY,
+                    description TEXT NOT NULL DEFAULT '',
+                    first_seen_at_ms INTEGER NOT NULL,
+                    last_seen_at_ms INTEGER NOT NULL,
+                    seen_count INTEGER NOT NULL DEFAULT 0,
+                    subscribed INTEGER NOT NULL DEFAULT 0 CHECK(subscribed IN (0, 1)),
+                    auto_forward INTEGER NOT NULL DEFAULT 0 CHECK(auto_forward IN (0, 1))
+                );
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (9, strftime('%s','now') * 1000);
                 """
             )
         self.connection.commit()
@@ -435,6 +450,30 @@ class Database:
             item["complete"] = bool(item["complete"])
             result.append(item)
         return result
+
+    def observe_group(self, name: str, description: str = "") -> None:
+        now = utc_now_ms()
+        self.connection.execute(
+            "INSERT INTO groups(name, description, first_seen_at_ms, last_seen_at_ms, seen_count) VALUES (?, ?, ?, ?, 1) "
+            "ON CONFLICT(name) DO UPDATE SET last_seen_at_ms=excluded.last_seen_at_ms, "
+            "seen_count=groups.seen_count + 1, description=CASE WHEN groups.description='' THEN excluded.description ELSE groups.description END",
+            (name.upper(), description, now, now),
+        )
+        self.connection.commit()
+
+    def ensure_group(self, name: str, description: str = "") -> None:
+        now = utc_now_ms()
+        self.connection.execute(
+            "INSERT OR IGNORE INTO groups(name, description, first_seen_at_ms, last_seen_at_ms) VALUES (?, ?, ?, ?)",
+            (name.upper(), description, now, now),
+        )
+        self.connection.commit()
+
+    def list_groups(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM groups ORDER BY last_seen_at_ms DESC, name"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def defer_message(self, message_id: str, delay_ms: int, detail: str) -> None:
         from js8mail.application.lifecycle import MessageState, can_transition

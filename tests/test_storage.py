@@ -91,3 +91,14 @@ def test_observation_retention_does_not_remove_audit_or_mail(tmp_path: Path) -> 
     assert database.get_message("m1") is not None
     assert database.connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 2
     database.close()
+
+
+def test_default_and_observed_groups_are_catalogued(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.ensure_group("@EMCOMM", "emergency communications")
+    database.observe_group("@EMCOMM", "emergency communications")
+    groups = database.list_groups()
+    assert groups[0]["name"] == "@EMCOMM"
+    assert groups[0]["seen_count"] == 1
+    assert groups[0]["subscribed"] == 0
+    database.close()

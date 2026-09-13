@@ -27,6 +27,7 @@ from js8mail.discovery import (
     snr_query,
 )
 from js8mail.domain import NormalizedEvent, utc_now_ms
+from js8mail.groups import DEFAULT_GROUPS, default_group_description, extract_groups
 from js8mail.protocol import (
     CAPABILITY_TTL_MS,
     MessagePart,
@@ -54,7 +55,7 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 </style><h1>JS8Mail</h1><p>Offline-first mailbox · automatic RF handoff prototype</p><section><div id=status>Loading…</div></section>
 <div class=workspace><section><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section><h2>Recently heard stations</h2><input id=station-search type=search placeholder='Filter callsigns or evidence'><div id=stations>Loading…</div></section></div>
-<section><h2>Inbox</h2><div id=inbox>Loading…</div></section><section><h2>Outbox</h2><div id=messages>Loading…</div></section>
+<section><h2>Inbox</h2><div id=inbox>Loading…</div></section><section><h2>Outbox</h2><div id=messages>Loading…</div></section><section><h2>Groups and bulletins</h2><p>Groups are observed and available here; automatic forwarding remains opt-in.</p><div id=groups>Loading…</div></section>
 <section><h2>Message route graph</h2><div id=graph-result>Select Graph on a message to inspect its evidence and attempts.</div></section>
 <section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
 <script>
@@ -67,7 +68,8 @@ function useStation(call){document.querySelector('#compose input[name=destinatio
 let stationCache=[];function renderStations(){let q=document.getElementById('station-search').value.trim().toUpperCase();let s=stationCache.filter(x=>!q||x.callsign.includes(q)||x.evidence.join(' ').toUpperCase().includes(q));document.getElementById('stations').innerHTML=s.length?'<table><tr><th>Callsign</th><th>Age</th><th>SNR</th><th>Evidence</th><th>Action</th></tr>'+s.map(x=>`<tr><td><b>${esc(x.callsign)}</b></td><td>${esc(relativeAge(x.age_seconds))}</td><td>${x.snr==null?'—':esc(x.snr)+' dB'}</td><td>${esc(x.evidence.join(', '))}</td><td><button onclick="useStation('${esc(x.callsign)}')">Compose to</button></td></tr>`).join('')+'</table>':'<p>No matching station evidence.</p>'}async function refreshStations(){stationCache=await api('/api/stations');renderStations()}
 function renderInbox(items){document.getElementById('inbox').innerHTML=items.length?'<table><tr><th>From</th><th>Status</th><th>Message</th><th>Updated</th></tr>'+items.map(x=>`<tr><td><b>${esc(x.sender)}</b></td><td><span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts+' parts'}</span></td><td class=mono>${esc(x.body)}</td><td>${esc(new Date(x.updated_at_ms).toLocaleString())}<br>${esc(x.path||'')}</td></tr>`).join('')+'</table>':'<p>No received messages.</p>'}
 async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>Message</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><details ${x.state==='in_progress'?'open':''}><summary><b>${esc(x.state)}</b> · <span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?` · retry ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (#${x.retry_count})`:''}</summary><div class=mono>${(x.attempts||[]).map(a=>`${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}`).join('<br>')||'No attempts recorded.'}</div></details></td><td>${esc(x.destination)}</td><td><b>${esc(x.subject||'(no subject)')}</b><br>${esc(x.body)}</td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
-const refreshMailbox=refresh;refresh=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);return refreshMailbox()};
+function renderGroups(items){document.getElementById('groups').innerHTML=items.length?'<table><tr><th>Group</th><th>Purpose</th><th>Seen</th><th>Status</th></tr>'+items.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.description||'observed group')}</td><td>${x.seen_count?esc(relativeAge((Date.now()-x.last_seen_at_ms)/1000)):'not yet observed'}</td><td>${x.subscribed?'subscribed':'available only'}</td></tr>`).join('')+'</table>':'<p>No groups recorded.</p>'}
+const refreshMailbox=refresh;refresh=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);let groups=await api('/api/groups');renderGroups(groups);return refreshMailbox()};
 async function act(id,a){try{await api(`/api/messages/${id}/${a}`,{method:'POST'});refresh()}catch(e){alert(e)}}
 function addMessageControls(){document.querySelectorAll('#messages tr').forEach(row=>{let id=row.querySelector('small')?.textContent.trim(),state=row.querySelector('b')?.textContent.trim(),cell=row.lastElementChild;if(!id||!cell||row.dataset.controls)return;row.dataset.controls='1';if(['queued','waiting_route'].includes(state)){let b=document.createElement('button');b.textContent='Retry now';b.onclick=()=>act(id,'retry-now');cell.appendChild(b)}if(state!=='in_progress'){let b=document.createElement('button');b.textContent='Remove';b.className='danger';b.onclick=()=>act(id,'delete');cell.appendChild(b)}})}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
@@ -99,6 +101,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, self.status)
         elif path == "/api/inbox":
             self.reply(200, self.service.database.list_inbox())
+        elif path == "/api/groups":
+            self.reply(200, self.service.database.list_groups())
         elif path == "/api/messages":
             self.reply(200, self.service.message_views())
         elif path == "/api/observations":
@@ -296,6 +300,8 @@ class Handler(BaseHTTPRequestHandler):
 async def run(args: argparse.Namespace) -> None:
     database = Database(Path(args.database).expanduser())
     service = MailService(database)
+    for group, description in DEFAULT_GROUPS:
+        database.ensure_group(group, description)
     client = Js8CallClient(args.host, args.port)
     loop = asyncio.get_running_loop()
     status: dict[str, Any] = {
@@ -545,6 +551,8 @@ async def run(args: argparse.Namespace) -> None:
 
                 async def handle(event: NormalizedEvent) -> None:
                     database.record_observation(event)
+                    for group in extract_groups(event.value, *[str(value) for value in event.params.values()]):
+                        database.observe_group(group, default_group_description(group))
                     ack = parse_ack(event.value)
                     source = event.params.get("FROM")
                     available_id = parse_messages_available(event.value)
