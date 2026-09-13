@@ -102,3 +102,15 @@ def test_default_and_observed_groups_are_catalogued(tmp_path: Path) -> None:
     assert groups[0]["seen_count"] == 1
     assert groups[0]["subscribed"] == 0
     database.close()
+
+
+def test_unsubscribed_stale_groups_expire_but_catalog_groups_remain(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.ensure_group("@EMCOMM", "emergency communications")
+    database.observe_group("@OLD", "observed group")
+    database.connection.execute("UPDATE groups SET last_seen_at_ms = 1 WHERE name = '@OLD'")
+    database.connection.commit()
+    assert database.prune_groups(now_ms=31 * 24 * 60 * 60 * 1000) == 1
+    assert "@OLD" not in {item["name"] for item in database.list_groups()}
+    assert "@EMCOMM" in {item["name"] for item in database.list_groups()}
+    database.close()

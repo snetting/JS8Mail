@@ -475,6 +475,23 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def prune_groups(self, *, now_ms: int | None = None, retention_ms: int = 30 * 24 * 60 * 60 * 1000) -> int:
+        if retention_ms < 60_000:
+            raise ValueError("group retention is too short")
+        cutoff = (utc_now_ms() if now_ms is None else now_ms) - retention_ms
+        cursor = self.connection.execute(
+            "DELETE FROM groups WHERE seen_count > 0 AND last_seen_at_ms < ? AND subscribed = 0",
+            (cutoff,),
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
+
+    def set_group_subscription(self, name: str, subscribed: bool) -> None:
+        self.connection.execute(
+            "UPDATE groups SET subscribed = ? WHERE name = ?", (int(subscribed), name.upper())
+        )
+        self.connection.commit()
+
     def defer_message(self, message_id: str, delay_ms: int, detail: str) -> None:
         from js8mail.application.lifecycle import MessageState, can_transition
 
