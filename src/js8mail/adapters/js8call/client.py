@@ -6,7 +6,11 @@ import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
 
-from js8mail.adapters.js8call.protocol import ApiProtocolError, decode_line
+from js8mail.adapters.js8call.protocol import (
+    ApiProtocolError,
+    decode_line,
+    encode_transmit_request,
+)
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
 EventHandler = Callable[[NormalizedEvent], Awaitable[None]]
@@ -67,3 +71,12 @@ class Js8CallClient:
                 )
         finally:
             self._handler = None
+
+    async def send_message(self, text: str) -> None:
+        """Queue one operator-approved human-readable message in JS8Call."""
+        if self._writer is None or self._writer.is_closing():
+            raise ConnectionError("JS8Call is not connected")
+        request_id = str(utc_now_ms())
+        self._writer.write(encode_transmit_request("TX.SET_TEXT", text, request_id=request_id))
+        self._writer.write(encode_transmit_request("TX.SEND_MESSAGE", "", request_id=request_id))
+        await self._writer.drain()

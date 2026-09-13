@@ -19,6 +19,7 @@ test = [
 
 [project.scripts]
 js8mail-probe = "js8mail.tools.probe_js8call_api:main"
+js8mail = "js8mail.tools.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
