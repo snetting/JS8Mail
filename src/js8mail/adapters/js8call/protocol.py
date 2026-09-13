@@ -117,10 +117,8 @@ def encode_read_only_request(request_type: str, *, request_id: str) -> bytes:
 def encode_transmit_request(request_type: str, value: str, *, request_id: str) -> bytes:
     if request_type not in TRANSMIT_REQUESTS:
         raise ApiProtocolError(f"Request is not a supported transmit request: {request_type}")
-    if request_type == "TX.SET_TEXT" and (not value or len(value.encode("utf-8")) > 4096):
+    if request_type in TRANSMIT_REQUESTS and (not value or len(value.encode("utf-8")) > 4096):
         raise ApiProtocolError("Transmit text must contain 1–4096 UTF-8 bytes")
-    if request_type == "TX.SEND_MESSAGE" and value:
-        raise ApiProtocolError("TX.SEND_MESSAGE value must be empty")
     packet = {"params": {"_ID": request_id}, "type": request_type, "value": value}
     encoded = (json.dumps(packet, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
     if len(encoded) > MAX_LINE_BYTES:

@@ -92,8 +92,9 @@ class Js8CallClient:
         if current.value.strip():
             raise RuntimeError("JS8Call transmit text is occupied by the operator")
         request_id = str(utc_now_ms())
-        self._writer.write(encode_transmit_request("TX.SET_TEXT", text, request_id=request_id))
-        self._writer.write(encode_transmit_request("TX.SEND_MESSAGE", "", request_id=request_id))
+        # JS8Call's automatic API path is TX.SEND_MESSAGE with the text in
+        # value. Sending an empty value only populates the UI text box.
+        self._writer.write(encode_transmit_request("TX.SEND_MESSAGE", text, request_id=request_id))
         await self._writer.drain()
 
     async def request_read_only(self, request_type: str) -> ApiMessage:

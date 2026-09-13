@@ -36,20 +36,18 @@ async def test_client_captures_events_and_ignores_malformed_frames() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_sends_explicit_two_step_message() -> None:
+async def test_client_checks_and_sends_message() -> None:
     received: list[dict[str, object]] = []
 
     async def server_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        request = json.loads(await reader.readline())
+        check = json.loads(await reader.readline())
         writer.write(
             (
-                json.dumps({"type": "TX.TEXT", "value": "", "params": request["params"]}) + "\n"
+                json.dumps({"type": "TX.TEXT", "value": "", "params": check["params"]}) + "\n"
             ).encode()
         )
         await writer.drain()
-        for _ in range(2):
-            line = await reader.readline()
-            received.append(json.loads(line))
+        received.append(json.loads(await reader.readline()))
         writer.close()
         await writer.wait_closed()
 
@@ -71,5 +69,5 @@ async def test_client_sends_explicit_two_step_message() -> None:
         server.close()
         await server.wait_closed()
 
-    assert [packet["type"] for packet in received] == ["TX.SET_TEXT", "TX.SEND_MESSAGE"]
+    assert [packet["type"] for packet in received] == ["TX.SEND_MESSAGE"]
     assert received[0]["value"] == "N0CALL test"
