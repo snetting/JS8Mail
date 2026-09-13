@@ -107,7 +107,9 @@ class Handler(BaseHTTPRequestHandler):
             raise KeyError(message_id)
         if message["state"] not in {MessageState.QUEUED, MessageState.WAITING_ROUTE}:
             raise ValueError("message is not ready to send")
-        text = f"{message['destination']} {message['body']}"
+        # Keep the first vertical slice ordinary-JS8Call compatible. Enhanced
+        # envelopes will be added later, behind peer capability detection.
+        text = f"{message['destination']} MSG {message['body']}"
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         await self.client.send_message(text)
