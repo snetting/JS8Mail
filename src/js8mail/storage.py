@@ -518,6 +518,13 @@ class Database:
         ).fetchall()
         return {tuple(str(row[0]).split("→")) for row in rows}
 
+    def message_paths(self, message_id: str) -> list[tuple[str, ...]]:
+        rows = self.connection.execute(
+            "SELECT path FROM message_paths WHERE message_id = ? ORDER BY last_attempted_at_ms DESC",
+            (message_id,),
+        ).fetchall()
+        return [tuple(str(row[0]).split("→")) for row in rows]
+
     def list_attempts(self, message_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             "SELECT * FROM message_attempts WHERE message_id = ? ORDER BY created_at_ms",
@@ -597,6 +604,18 @@ class Database:
             "SELECT * FROM custody WHERE message_id = ? ORDER BY updated_at_ms", (message_id,)
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def custodian_score(self, station: str) -> float:
+        """Return a bounded reliability score from durable custody history."""
+        rows = self.connection.execute(
+            "SELECT status, COUNT(*) AS count FROM custody WHERE custodian = ? GROUP BY status",
+            (station.upper(),),
+        ).fetchall()
+        counts = {str(row["status"]): int(row["count"]) for row in rows}
+        accepted = counts.get("accepted", 0)
+        forwarded = counts.get("forwarded", 0)
+        failed = counts.get("failed", 0)
+        return min(1.0, (accepted + 2 * forwarded) / max(1, accepted + forwarded + failed))
 
     def upsert_inbox_message(
         self,

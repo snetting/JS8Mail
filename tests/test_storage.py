@@ -70,6 +70,19 @@ def test_custody_status_is_durable_and_distinct_from_delivery(tmp_path: Path) ->
     reopened.close()
 
 
+def test_attempted_paths_and_custodian_score_are_durable(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.enqueue_message("m1", "DEST", "body")
+    database.record_message_path("m1", ("ORIGIN", "RELAY", "CUST"))
+    database.upsert_custody("m1", "CUST", "accepted")
+    database.upsert_custody("m1", "CUST", "forwarded")
+    database.close()
+    reopened = Database(tmp_path / "mail.sqlite3")
+    assert reopened.attempted_message_paths("m1") == {("ORIGIN", "RELAY", "CUST")}
+    assert reopened.custodian_score("CUST") == 1.0
+    reopened.close()
+
+
 def test_partial_inbox_message_is_updated_idempotently(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     database.upsert_inbox_message("n0call", "m1", "A[MISSING PART 2/2]", 2, (1,), False)

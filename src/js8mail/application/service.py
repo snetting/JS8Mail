@@ -316,5 +316,9 @@ class MailService:
             value = float(snr) if isinstance(snr, (int, float)) else -30.0
             scores[source.upper()] = max(scores.get(source.upper(), 0.0), value)
         return [
-            station for station, _ in sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+            station
+            for station, _ in sorted(
+                scores.items(),
+                key=lambda item: (-item[1], -self.database.custodian_score(item[0]), item[0]),
+            )
         ]

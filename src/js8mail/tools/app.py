@@ -513,6 +513,15 @@ async def run(args: argparse.Namespace) -> None:
                                 "no ACK or JS8Mail receipt within 2-minute direct deadline",
                             )
                             database.transition_message(str(message["id"]), MessageState.WAITING_ROUTE)
+                            origin = str(status.get("callsign", "")).upper()
+                            if origin:
+                                try:
+                                    speed = int(status.get("speed", 1))
+                                except (TypeError, ValueError):
+                                    speed = 1
+                                database.record_link_outcome(
+                                    origin, destination, max(0, min(4, speed)), None, False
+                                )
                 if service.recently_answered(destination, str(status.get("callsign", ""))) and not direct_expired:
                     if message["state"] == MessageState.WAITING_ROUTE:
                         database.record_attempt(
@@ -802,6 +811,20 @@ async def run(args: argparse.Namespace) -> None:
                                     "received",
                                     "standard JS8Call ACK; hop acknowledged, delivery unproven",
                                 )
+                                origin = str(status.get("callsign", "")).upper()
+                                if origin:
+                                    try:
+                                        speed = int(event.params.get("SPEED", status.get("speed", 1)))
+                                    except (TypeError, ValueError):
+                                        speed = 1
+                                    ack_snr = event.params.get("SNR")
+                                    database.record_link_outcome(
+                                        origin,
+                                        source,
+                                        max(0, min(4, speed)),
+                                        float(ack_snr) if isinstance(ack_snr, (int, float)) else None,
+                                        True,
+                                    )
                     if ack and isinstance(source, str):
                         kind, message_id, bitmap = ack
                         receipt_message = database.get_message(message_id)
@@ -856,9 +879,20 @@ async def run(args: argparse.Namespace) -> None:
                                             )
                                         for number in part_ack.missing:
                                             if number <= len(parts):
-                                                await cast(Handler, handler).send_rf(
-                                                    f"{source} {format_human_data_part(parts[number - 1])}", message_id
+                                                resend_path = next(
+                                                    (
+                                                        route for route in database.message_paths(message_id)
+                                                        if route[-1].upper() == source.upper()
+                                                    ),
+                                                    (),
                                                 )
+                                                resend_payload = format_human_data_part(parts[number - 1])
+                                                resend_text = (
+                                                    format_relay_message(resend_path, resend_payload)
+                                                    if len(resend_path) >= 3
+                                                    else f"{source} {resend_payload}"
+                                                )
+                                                await cast(Handler, handler).send_rf(resend_text, message_id)
                                         database.record_attempt(
                                             message_id, "part_resend", source, "submitted", detail
                                         )
