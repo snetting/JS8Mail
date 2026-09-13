@@ -301,47 +301,49 @@ async def run(args: argparse.Namespace) -> None:
                 ):
                     continue
                 hearing_key = f"hearing:{destination}"
-                if query_scheduler.due(hearing_key, now) and await submit_query(
+                if query_scheduler.due(hearing_key, now):
+                    hearing_submitted = await submit_query(
                         hearing_key, hearing_query(destination), "hearing_query", destination
-                    ):
-                        database.record_attempt(
-                            str(message["id"]),
-                            "hearing_query",
-                            destination,
-                            "submitted",
-                            "recent evidence absent",
-                        )
-                call_key = f"call-query:{destination}"
+                    )
+                    database.record_attempt(
+                        str(message["id"]),
+                        "hearing_query",
+                        destination,
+                        "submitted" if hearing_submitted else "blocked",
+                        "recent evidence absent" if hearing_submitted else "JS8Call TX slot unavailable or query cooldown",
+                    )
                 state = query_scheduler.state(hearing_key)
+                call_key = f"call-query:{destination}"
                 if state.attempts >= 1 and query_scheduler.due(call_key, now):
                     candidates = promising
                     if candidates:
                         for candidate in candidates:
                             candidate_key = f"candidate-query:{candidate}:{destination}"
-                            if query_scheduler.due(candidate_key, now) and await submit_query(
+                            if query_scheduler.due(candidate_key, now):
+                                candidate_submitted = await submit_query(
                                     candidate_key,
                                     f"{candidate} QUERY CALL {destination}",
                                     "candidate_query_call",
                                     candidate,
-                                ):
-                                    database.record_attempt(
-                                        str(message["id"]),
-                                        "candidate_query_call",
-                                        candidate,
-                                        "submitted",
-                                        destination,
-                                    )
+                                )
+                                database.record_attempt(
+                                    str(message["id"]),
+                                    "candidate_query_call",
+                                    candidate,
+                                    "submitted" if candidate_submitted else "blocked",
+                                    destination,
+                                )
                     else:
-                        if await submit_query(
+                        allcall_submitted = await submit_query(
                             call_key, call_query(destination), "allcall_query_call", "@ALLCALL"
-                        ):
-                            database.record_attempt(
-                                str(message["id"]),
-                                "allcall_query_call",
-                                "@ALLCALL",
-                                "submitted",
-                                destination,
-                            )
+                        )
+                        database.record_attempt(
+                            str(message["id"]),
+                            "allcall_query_call",
+                            "@ALLCALL",
+                            "submitted" if allcall_submitted else "blocked",
+                            destination,
+                        )
                 delay_ms = min(
                     60_000 * (2 ** min(int(message.get("retry_count", 0)), 8)),
                     21_600_000,
