@@ -46,8 +46,9 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 </style><h1>JS8Mail</h1><p>Offline-first mailbox · automatic RF handoff prototype</p><section><div id=status>Loading…</div></section>
 <div class=workspace><section><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section><h2>Recently heard stations</h2><input id=station-search type=search placeholder='Filter callsigns or evidence'><div id=stations>Loading…</div></section></div>
-<section><h2>Outbox</h2><div id=messages>Loading…</div></section><section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
+<section><h2>Outbox</h2><div id=messages>Loading…</div></section>
 <section><h2>Message route graph</h2><div id=graph-result>Select Graph on a message to inspect its evidence and attempts.</div></section>
+<section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
 <script>
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
