@@ -30,6 +30,7 @@ from js8mail.protocol import (
     format_human_data_part,
     format_ordinary_message,
     format_part_ack,
+    format_relay_message,
     parse_ack,
     parse_delivery_ack,
     parse_part_ack,
@@ -161,13 +162,23 @@ class Handler(BaseHTTPRequestHandler):
             raise KeyError(message_id)
         if message["state"] not in {MessageState.QUEUED, MessageState.WAITING_ROUTE}:
             raise ValueError("message is not ready to send")
-        # Keep the first vertical slice ordinary-JS8Call compatible. Enhanced
-        # envelopes will be added later, behind peer capability detection.
         destination = str(message["destination"])
         announce = destination not in self.announced_destinations
-        text = format_ordinary_message(destination, str(message["body"]), announce)
+        origin = str(self.status.get("callsign", "")).upper()
+        plan = self.service.plan_route(origin, destination) if origin else None
+        path = plan.path if plan is not None else (origin, destination)
+        if plan is not None and len(path) >= 3:
+            text = format_relay_message(path, str(message["body"]))
+            action = "relay"
+            target = path[1]
+            detail = f"discovered path: {'→'.join(path)}"
+        else:
+            text = format_ordinary_message(destination, str(message["body"]), announce)
+            action = "direct"
+            target = destination
+            detail = "initial direct attempt"
         self.service.database.record_attempt(
-            message_id, "direct", destination, "started", "initial direct attempt"
+            message_id, action, target, "started", detail
         )
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
@@ -179,11 +190,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             raise
         self.service.database.record_attempt(
-            message_id,
-            "direct",
-            destination,
-            "submitted",
-            "queued in JS8Call for next TX cycle",
+            message_id, action, target, "submitted", "queued in JS8Call for next TX cycle"
         )
         self.service.database.audit(
             "message.submitted_to_js8call", {"message_id": message_id, "text_length": len(text)}
@@ -340,6 +347,33 @@ async def run(args: argparse.Namespace) -> None:
                                 "route known but JS8Call TX slot was still occupied",
                             )
                     continue
+                # A query-call reply can complete a multi-hop path without
+                # requiring the original destination to answer us directly.
+                # Use that fresh evidence as soon as the message is due.
+                if message["state"] == MessageState.WAITING_ROUTE and database.due_for_retry(str(message["id"])):
+                    plan = service.plan_route(str(status.get("callsign", "")), destination)
+                    if len(plan.path) >= 3:
+                        database.record_attempt(
+                            str(message["id"]),
+                            "route",
+                            destination,
+                            "selected",
+                            plan.explanation,
+                        )
+                        try:
+                            await handler.transmit(cast(Handler, handler), str(message["id"]))
+                        except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
+                            database.record_attempt(
+                                str(message["id"]),
+                                "relay",
+                                plan.path[1],
+                                "deferred",
+                                f"route selected but TX was unavailable: {type(exc).__name__}",
+                            )
+                            database.defer_message(
+                                str(message["id"]), 60_000, "selected route could not be submitted"
+                            )
+                        continue
                 promising = service.promising_stations(destination)[:3]
                 if (
                     message["state"] == MessageState.WAITING_ROUTE
@@ -429,6 +463,21 @@ async def run(args: argparse.Namespace) -> None:
                                     now,
                                 )
                             )
+                            local_call = str(status.get("callsign", "")).upper()
+                            if local_call and local_call != source.upper():
+                                database.record_observation(
+                                    NormalizedEvent(
+                                        "QUERY.CALL.REACHABILITY",
+                                        event.value,
+                                        {
+                                            "FROM": local_call,
+                                            "TO": source.upper(),
+                                            "SNR": snr,
+                                            "EVIDENCE": "directed_response",
+                                        },
+                                        now,
+                                    )
+                                )
                             for message in database.list_messages(MessageState.WAITING_ROUTE):
                                 if str(message["destination"]).upper() == queried_destination.upper():
                                     database.record_attempt(

@@ -71,10 +71,10 @@ class TemporalGraph:
 
 class RouteEngine:
     def __init__(
-        self, graph: TemporalGraph, *, max_hops: int = 4, minimum_score: float = 0.25
+        self, graph: TemporalGraph, *, max_hops: int | None = None, minimum_score: float = 0.25
     ) -> None:
         self.graph = graph
-        self.max_hops = max(1, min(max_hops, 8))
+        self.max_hops = None if max_hops is None else max(1, max_hops)
         self.minimum_score = max(0.0, min(minimum_score, 1.0))
 
     def choose(
@@ -90,7 +90,7 @@ class RouteEngine:
         paths: list[RoutePlan] = []
 
         def walk(node: str, path: tuple[str, ...], scores: tuple[float, ...], airtime: int) -> None:
-            if len(path) - 1 > self.max_hops:
+            if self.max_hops is not None and len(path) - 1 > self.max_hops:
                 return
             if node == destination:
                 if path not in attempted:

@@ -53,3 +53,11 @@ def test_replans_from_last_proven_custodian_when_relay_disappears() -> None:
     plan = RouteEngine(graph).choose("CUSTODIAN", "DEST", now_ms=NOW)
     assert plan.path == ("CUSTODIAN", "DEST")
     assert plan.action == RouteAction.DIRECT
+
+
+def test_default_route_planner_allows_long_acyclic_paths() -> None:
+    graph = TemporalGraph()
+    for left, right in zip("ABCDEFGHIJ", "BCDEFGHIJK"):
+        graph.add(link(left, right, 0.9))
+    plan = RouteEngine(graph).choose("A", "K", now_ms=NOW)
+    assert plan.path == tuple("ABCDEFGHIJK")

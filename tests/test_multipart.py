@@ -7,7 +7,9 @@ from js8mail.protocol import (
     format_human_data_part,
     format_ordinary_message,
     format_part_ack,
+    format_relay_message,
     format_resend_request,
+    format_store_message,
     parse_part_ack,
     split_human_message,
 )
@@ -58,6 +60,11 @@ def test_body_part_remains_readable_while_metadata_is_tagged() -> None:
     encoded = format_human_data_part(MessagePart("m1", 1, 2, "EVACUATE NORTH NOW"))
     assert encoded.startswith("J8M1 D m1 1/2 ")
     assert "EVACUATE NORTH NOW" in encoded
+
+
+def test_standard_js8call_relay_and_store_forms() -> None:
+    assert format_relay_message(("A", "B", "C"), "MSG") == "B>C MSG MSG"
+    assert format_store_message("B", "C", "MSG") == "B MSG TO:C MSG"
 
 
 def test_first_ordinary_message_can_identify_js8mail() -> None:

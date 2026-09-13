@@ -246,3 +246,27 @@ def format_ordinary_message(destination: str, body: str, announce: bool = False)
     if len(result.encode()) > MAX_FRAME_BYTES:
         raise MultipartError("ordinary message is too large")
     return result
+
+
+def format_relay_message(path: tuple[str, ...], body: str) -> str:
+    """Build JS8Call's standard relay form for a discovered path."""
+    if len(path) < 3 or any(not call or len(call) > 16 for call in path):
+        raise MultipartError("a relay path needs at least three callsigns")
+    if any(" " in call or ">" in call for call in path):
+        raise MultipartError("invalid relay callsign")
+    result = f"{path[1]}>{'>'.join(path[2:])} MSG {body}"
+    if len(result.encode()) > MAX_FRAME_BYTES:
+        raise MultipartError("relay message is too large")
+    return result
+
+
+def format_store_message(custodian: str, destination: str, body: str) -> str:
+    """Build JS8Call's standard store-and-forward request."""
+    if not custodian or not destination or len(custodian) > 16 or len(destination) > 16:
+        raise MultipartError("invalid store-and-forward callsign")
+    if any(char in custodian + destination for char in " >"):
+        raise MultipartError("invalid store-and-forward callsign")
+    result = f"{custodian} MSG TO:{destination} {body}"
+    if len(result.encode()) > MAX_FRAME_BYTES:
+        raise MultipartError("stored message is too large")
+    return result
