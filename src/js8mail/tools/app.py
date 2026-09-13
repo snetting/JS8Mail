@@ -518,7 +518,11 @@ async def run(args: argparse.Namespace) -> None:
                             "checking for stored mail",
                         )
             for message in database.list_messages():
-                if message["state"] not in {MessageState.IN_PROGRESS, MessageState.WAITING_ROUTE}:
+                if message["state"] not in {
+                    MessageState.QUEUED,
+                    MessageState.IN_PROGRESS,
+                    MessageState.WAITING_ROUTE,
+                }:
                     continue
                 destination = str(message["destination"])
                 expires_at_ms = message.get("expires_at_ms")
@@ -527,6 +531,17 @@ async def run(args: argparse.Namespace) -> None:
                     database.record_attempt(
                         str(message["id"]), "expiry", destination, "expired", "retry window elapsed"
                     )
+                    continue
+                if message["state"] == MessageState.QUEUED:
+                    # A queued message may be restored after a daemon restart
+                    # or an operator retry without passing through the HTTP
+                    # request that normally starts preparation.
+                    try:
+                        await handler.prepare(cast(Handler, handler), str(message["id"]))
+                    except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
+                        database.record_attempt(
+                            str(message["id"]), "prepare", destination, "deferred", type(exc).__name__
+                        )
                     continue
                 direct_expired = False
                 if message["state"] == MessageState.IN_PROGRESS:
