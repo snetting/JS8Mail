@@ -102,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
                     int(payload.get("priority", 0)),
                 )
                 if self.status["tx_mode"] == "automatic":
-                    future = asyncio.run_coroutine_threadsafe(self.transmit(message_id), self.loop)
+                    future = asyncio.run_coroutine_threadsafe(self.prepare(message_id), self.loop)
                     future.result(timeout=30)
                 self.reply(201, {"id": message_id})
                 return
@@ -141,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
             await self.client.send_message(text)
-        except Exception as exc:
+        except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(
                 message_id, "direct", destination, "failed", type(exc).__name__
             )
@@ -157,6 +157,34 @@ class Handler(BaseHTTPRequestHandler):
             "message.submitted_to_js8call", {"message_id": message_id, "text_length": len(text)}
         )
         self.announced_destinations.add(destination)
+
+    async def prepare(self, message_id: str) -> None:
+        """Probe an unobserved destination before committing message airtime."""
+        message = self.service.database.get_message(message_id)
+        if message is None:
+            raise KeyError(message_id)
+        destination = str(message["destination"])
+        if self.service.recently_heard(destination):
+            await self.transmit(message_id)
+            return
+        probe = hearing_query(destination)
+        self.service.database.record_attempt(
+            message_id, "hearing_probe", destination, "started", "destination not recently heard"
+        )
+        try:
+            await self.client.send_message(probe)
+        except (ConnectionError, OSError, RuntimeError) as exc:
+            self.service.database.record_attempt(
+                message_id, "hearing_probe", destination, "failed", type(exc).__name__
+            )
+        else:
+            self.service.database.record_attempt(
+                message_id, "hearing_probe", destination, "submitted", "waiting for RF evidence"
+            )
+        self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+        self.service.database.defer_message(
+            message_id, 60_000, "probe first; retry discovery in 1 minute(s)"
+        )
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -220,8 +248,6 @@ async def run(args: argparse.Namespace) -> None:
             for message in database.list_messages():
                 if message["state"] not in {MessageState.IN_PROGRESS, MessageState.WAITING_ROUTE}:
                     continue
-                if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(str(message["id"])):
-                    continue
                 destination = str(message["destination"])
                 if service.recently_heard(destination):
                     if message["state"] == MessageState.WAITING_ROUTE:
@@ -232,6 +258,8 @@ async def run(args: argparse.Namespace) -> None:
                             handler.transmit(cast(Handler, handler), str(message["id"]))
                         )
                         await future
+                    continue
+                if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(str(message["id"])):
                     continue
                 hearing_key = f"hearing:{destination}"
                 if query_scheduler.due(hearing_key, now) and await submit_query(
