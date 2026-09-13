@@ -174,6 +174,25 @@ def format_resend_request(message_id: str, total: int, missing: tuple[int, ...])
     return result
 
 
+def parse_resend_request(text: str) -> tuple[str, int, tuple[int, ...]] | None:
+    """Parse a bounded request for only the missing multipart sections."""
+    fields = text.strip().split()
+    if len(fields) != 5 or fields[:2] != ["J8M1", "REQ"]:
+        return None
+    message_id, total_text, bitmap_text = fields[2:]
+    try:
+        total = int(total_text)
+        bitmap = int(bitmap_text, 16)
+    except ValueError:
+        return None
+    if not message_id or len(message_id) > 32 or not 1 <= total <= MAX_PARTS or bitmap < 0:
+        return None
+    if bitmap >> total:
+        return None
+    missing = tuple(number for number in range(1, total + 1) if bitmap & (1 << (number - 1)))
+    return message_id, total, missing
+
+
 def format_delivery_ack(
     message_id: str, delivered_at_ms: int, path: tuple[str, ...] = ()
 ) -> str:

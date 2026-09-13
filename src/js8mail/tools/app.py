@@ -43,6 +43,7 @@ from js8mail.protocol import (
     parse_capability,
     parse_delivery_ack,
     parse_part_ack,
+    parse_resend_request,
     split_human_message,
 )
 from js8mail.radio_policy import AirtimeBudget, estimate_airtime_ms
@@ -78,9 +79,10 @@ const EMERGENCY_GROUPS=['@EMCOMM','@ARES','@RACES','@RAYNET','@NTS','@SKYWARN','
 const refreshMailbox=refresh;refresh=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);return refreshMailbox()};const refreshWithRadioState=refresh;refresh=async()=>{await refreshWithRadioState();let s=await api('/api/status'),activity=s.connected?(s.radio_activity||'RX'):'ERR';document.querySelectorAll('#radio-leds .led').forEach(x=>x.className='led');let led=document.getElementById('led-'+activity.toLowerCase());if(led)led.className='led on-'+activity.toLowerCase()};
 async function actGroup(group,action){try{await api(`/api/groups/${encodeURIComponent(group)}/${action}`,{method:'POST'});refresh()}catch(e){alert(e)}}
 async function act(id,a){try{await api(`/api/messages/${id}/${a}`,{method:'POST'});refresh()}catch(e){alert(e)}}
-const expandedMessages=new Set;document.addEventListener('click',e=>{let summary=e.target.closest?.('#messages details summary');if(!summary)return;setTimeout(()=>{let detail=summary.parentElement,id=detail?.querySelector('small')?.textContent.trim();if(id){if(detail.open)expandedMessages.add(id);else expandedMessages.delete(id)}},0)});function restoreExpanded(){document.querySelectorAll('#messages details').forEach(d=>{let id=d.querySelector('small')?.textContent.trim();if(id&&expandedMessages.has(id))d.open=true})}const refreshKeepExpanded=refresh;refresh=async()=>{await refreshKeepExpanded();restoreExpanded()};
+const expandedMessages=new Set;document.addEventListener('click',e=>{let summary=e.target.closest?.('#messages details summary');if(!summary)return;setTimeout(()=>{let detail=summary.parentElement,id=detail?.querySelector('small')?.textContent.trim();if(id){if(detail.open)expandedMessages.add(id);else expandedMessages.delete(id)}},0)});function restoreExpanded(){document.querySelectorAll('#messages details').forEach(d=>{let id=d.querySelector('small')?.textContent.trim();if(id&&expandedMessages.has(id))d.open=true})}const refreshKeepExpanded=refresh;refresh=async()=>{if(document.querySelector('#messages details[open]'))return;await refreshKeepExpanded();restoreExpanded()};
 function addMessageControls(){document.querySelectorAll('#messages tr').forEach(row=>{let id=row.querySelector('small')?.textContent.trim(),state=row.querySelector('b')?.textContent.trim(),cell=row.lastElementChild;if(!id||!cell||row.dataset.controls)return;row.dataset.controls='1';if(['queued','waiting_route'].includes(state)){let b=document.createElement('button');b.textContent='Retry now';b.onclick=()=>act(id,'retry-now');cell.appendChild(b)}if(state!=='in_progress'){let b=document.createElement('button');b.textContent='Remove';b.className='danger';b.onclick=()=>act(id,'delete');cell.appendChild(b)}})}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
+document.addEventListener('submit',e=>{if(e.target.id==='compose')setTimeout(()=>document.getElementById('messages')?.scrollIntoView({behavior:'smooth',block:'start'}),700)},true);
 document.getElementById('station-search').oninput=renderStations;
 refresh().then(addMessageControls);refreshStations();setInterval(()=>{refresh().then(addMessageControls);refreshStations()},3000);
 </script>"""
@@ -253,6 +255,11 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
+            for part in enhanced_parts:
+                self.service.database.upsert_message_part(
+                    part.message_id, part.number, part.total, part.payload,
+                    direction="outgoing", peer=destination,
+                )
             for text in wire_texts:
                 await self.send_rf(text, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
@@ -302,6 +309,23 @@ class Handler(BaseHTTPRequestHandler):
         destination = str(message["destination"])
         if self.service.recently_answered(destination, str(self.status.get("callsign", ""))):
             await self.transmit(message_id)
+            return
+        origin = str(self.status.get("callsign", "")).upper()
+        inferred = self.service.plan_route(
+            origin,
+            destination,
+            attempted_paths=self.service.database.attempted_message_paths(message_id),
+        ) if origin else None
+        if self.service.promising_stations(destination) or (inferred is not None and len(inferred.path) >= 3):
+            self.service.database.record_attempt(
+                message_id,
+                "route_discovery",
+                destination,
+                "started",
+                "indirect RF evidence exists; skipping initial SNR probe",
+            )
+            self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+            self.service.database.defer_message(message_id, 1_000, "starting targeted route discovery")
             return
         probe = snr_query(destination)
         self.service.database.record_attempt(
@@ -669,6 +693,45 @@ async def run(args: argparse.Namespace) -> None:
                         database.observe_group(group, default_group_description(group))
                     ack = parse_ack(event.value)
                     source = event.params.get("FROM")
+                    resend = parse_resend_request(event.value)
+                    if resend is not None and isinstance(source, str):
+                        request_id, total, missing = resend
+                        requested_message = database.get_message(request_id)
+                        authorized = False
+                        if requested_message is not None:
+                            authorized = (
+                                str(requested_message["destination"]).upper() == source.upper()
+                                or any(
+                                    item["custodian"].upper() == source.upper()
+                                    and item["status"] in {"accepted", "retrieval_pending", "forwarded"}
+                                    for item in database.list_custody(request_id)
+                                )
+                                or any(source.upper() in {call.upper() for call in path} for path in database.message_paths(request_id))
+                            )
+                        if authorized:
+                            try:
+                                if requested_message is None:
+                                    raise ValueError("unknown multipart message")
+                                parts = split_human_message(request_id, str(requested_message["body"]))
+                                if total != len(parts):
+                                    raise ValueError("multipart request total does not match stored message")
+                                raw_path = str(event.params.get("PATH", ""))
+                                request_path = tuple(item.upper() for item in raw_path.split(">") if item)
+                                for number in missing:
+                                    if number <= len(parts):
+                                        payload = format_human_data_part(parts[number - 1])
+                                        text = (
+                                            format_relay_message(request_path, payload)
+                                            if len(request_path) >= 3
+                                            else f"{source} {payload}"
+                                        )
+                                        await cast(Handler, handler).send_rf(text, request_id)
+                                database.record_attempt(
+                                    request_id, "part_resend", source, "submitted",
+                                    f"served {len(missing)} requested part(s) through custody path",
+                                )
+                            except (ValueError, RuntimeError, ConnectionError):
+                                database.record_attempt(request_id, "part_resend", source, "failed", "unable to serve request")
                     available_id = parse_messages_available(event.value)
                     if available_id is not None and isinstance(source, str):
                         for stored_message in database.list_messages(MessageState.IN_PROGRESS):
@@ -906,8 +969,8 @@ async def run(args: argparse.Namespace) -> None:
                         fields = event.value.split(" ", 4)
                         if len(fields) == 5:
                             try:
-                                position, total = fields[3].split("/", 1)
-                                part = MessagePart(fields[2], int(position), int(total), fields[4])
+                                position, part_total = fields[3].split("/", 1)
+                                part = MessagePart(fields[2], int(position), int(part_total), fields[4])
                                 accumulator = reassembly.setdefault(
                                     part.message_id, MultipartAccumulator(part.message_id, part.total)
                                 )
