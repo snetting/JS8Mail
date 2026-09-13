@@ -219,21 +219,28 @@ async def run(args: argparse.Namespace) -> None:
     print(f"JS8Mail UI: http://{args.ui_host}:{args.ui_port}", flush=True)
     delay = 1.0
     query_scheduler = QueryScheduler()
+    inbox_scheduler = QueryScheduler(base_delay_ms=1_800_000, max_delay_ms=21_600_000)
     reassembly: dict[str, MultipartAccumulator] = {}
 
-    async def submit_query(key: str, text: str, action: str, target: str) -> bool:
+    async def submit_query(
+        key: str,
+        text: str,
+        action: str,
+        target: str,
+        scheduler: QueryScheduler = query_scheduler,
+    ) -> bool:
         now = int(asyncio.get_running_loop().time() * 1000)
-        if not client.connected or not query_scheduler.due(key, now):
+        if not client.connected or not scheduler.due(key, now):
             return False
         try:
             await client.send_message(text)
             database.audit(
                 "discovery.query_submitted", {"action": action, "target": target, "text": text}
             )
-            query_scheduler.record(key, now)
+            scheduler.record(key, now)
             return True
         except (ConnectionError, RuntimeError):
-            query_scheduler.record(key, now)
+            scheduler.record(key, now)
             return False
 
     async def discovery_loop() -> None:
@@ -243,8 +250,14 @@ async def run(args: argparse.Namespace) -> None:
             if not client.connected or args.tx_mode != "automatic":
                 continue
             now = int(asyncio.get_running_loop().time() * 1000)
-            if query_scheduler.due(inbox_key, now):
-                await submit_query(inbox_key, messages_query(), "messages_query", "@ALLCALL")
+            if inbox_scheduler.due(inbox_key, now):
+                await submit_query(
+                    inbox_key,
+                    messages_query(),
+                    "messages_query",
+                    "@ALLCALL",
+                    scheduler=inbox_scheduler,
+                )
             for message in database.list_messages():
                 if message["state"] not in {MessageState.IN_PROGRESS, MessageState.WAITING_ROUTE}:
                     continue
