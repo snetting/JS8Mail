@@ -973,3 +973,23 @@ This order intentionally resolves the highest-risk unknowns—the API safety env
 - prefer currently viable untried paths after a failed direct or relay attempt;
 - retain previously successful/high-scoring paths for later retries after propagation or custodian availability changes;
 - progressively back off and reconsider the full route set rather than permanently blacklisting a path.
+
+## 18. Direct-first payload safety
+
+For a newly queued destination, JS8Mail sends a short direct `SNR?` reachability
+probe before committing the message payload to RF. A fresh response permits the
+first payload attempt directly to the destination, even when indirect graph
+evidence already exists. This keeps the operator's intuitive direct-first
+behavior while avoiding a long transmission to an unreachable station.
+
+If the probe deadline expires, the probe remains useful evidence but does not
+justify sending the full message. The scheduler then selects ranked relay or
+custodian alternatives, subject to airtime and retry policy. Later retries may
+reuse an earlier successful path or choose a different path as propagation and
+availability change.
+
+Enhanced framing is capability-gated: a cached, non-expired `J8M1 CAP` received
+from the destination (or a valid enhanced exchange through a supported path) is
+required before multipart/envelope framing is used. Until then, the payload is
+ordinary human-readable JS8Call-compatible text, with the capability
+advertisement sent separately.

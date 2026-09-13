@@ -201,13 +201,23 @@ class Handler(BaseHTTPRequestHandler):
         destination = str(message["destination"])
         announce = destination not in self.announced_destinations
         origin = str(self.status.get("callsign", "")).upper()
+        # A newly queued message always gets one direct delivery attempt after
+        # the short reachability probe.  A graph route may be better for a
+        # later attempt, but using it for the first payload would make an
+        # operator-entered destination unexpectedly relay-first.
+        delivery_actions = {"direct", "multipart", "relay", "store"}
+        first_delivery_attempt = not any(
+            attempt["action"] in delivery_actions
+            and attempt["status"] in {"started", "submitted", "failed"}
+            for attempt in self.service.database.list_attempts(message_id)
+        )
         plan = (
             self.service.plan_route(
                 origin,
                 destination,
                 attempted_paths=self.service.database.attempted_message_paths(message_id),
             )
-            if origin
+            if origin and not first_delivery_attempt
             else None
         )
         path = plan.path if plan is not None else (origin, destination)
@@ -302,31 +312,17 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     async def prepare(self, message_id: str) -> None:
-        """Probe an unobserved destination before committing message airtime."""
+        """Probe before committing payload airtime, then use normal discovery."""
         message = self.service.database.get_message(message_id)
         if message is None:
             raise KeyError(message_id)
         destination = str(message["destination"])
-        if self.service.recently_answered(destination, str(self.status.get("callsign", ""))):
-            await self.transmit(message_id)
-            return
-        origin = str(self.status.get("callsign", "")).upper()
-        inferred = self.service.plan_route(
-            origin,
-            destination,
-            attempted_paths=self.service.database.attempted_message_paths(message_id),
-        ) if origin else None
-        if self.service.promising_stations(destination) or (inferred is not None and len(inferred.path) >= 3):
-            self.service.database.record_attempt(
-                message_id,
-                "route_discovery",
-                destination,
-                "started",
-                "indirect RF evidence exists; skipping initial SNR probe",
-            )
-            self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
-            self.service.database.defer_message(message_id, 1_000, "starting targeted route discovery")
-            return
+        # Even when stale direct or indirect evidence exists, the first action
+        # for a newly queued destination is the small direct SNR probe.  This
+        # prevents spending a long JS8Call frame on a station that is not
+        # currently reachable.  A response causes discovery_loop to submit
+        # the first payload directly; a timeout falls through to route and
+        # custodian discovery.
         probe = snr_query(destination)
         self.service.database.record_attempt(
             message_id, "snr_probe", destination, "started", "destination not recently heard"
