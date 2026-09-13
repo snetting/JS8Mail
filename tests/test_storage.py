@@ -58,3 +58,13 @@ def test_peer_capabilities_expire_and_are_durable(tmp_path: Path) -> None:
     reopened = Database(path)
     assert reopened.peer_capabilities("N0CALL") == (1, ("E2E", "MP"))
     reopened.close()
+
+
+def test_custody_status_is_durable_and_distinct_from_delivery(tmp_path: Path) -> None:
+    path = tmp_path / "mail.sqlite3"
+    database = Database(path)
+    database.upsert_custody("m1", "n0call", "accepted", "standard JS8Call store ACK")
+    database.close()
+    reopened = Database(path)
+    assert reopened.list_custody("m1")[0]["status"] == "accepted"
+    reopened.close()

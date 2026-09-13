@@ -33,6 +33,7 @@ from js8mail.protocol import (
     format_ordinary_message,
     format_part_ack,
     format_relay_message,
+    format_store_message,
     parse_ack,
     parse_capability,
     parse_delivery_ack,
@@ -55,7 +56,7 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 <script>
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
-const confidenceName={uncertain:'No delivery evidence',discovery_in_progress:'Discovery in progress',submitted_to_js8call:'Message submitted to JS8Call',radio_acknowledged:'Radio acknowledged (hop only)',delivered_to_js8mail:'Delivered to JS8Mail client'};
+const confidenceName={uncertain:'No delivery evidence',discovery_in_progress:'Discovery in progress',submitted_to_js8call:'Message submitted to JS8Call',stored_at_custodian:'Stored at custodian · recipient retrieval pending',radio_acknowledged:'Radio acknowledged (hop only)',delivered_to_js8mail:'Delivered to JS8Mail client'};
 function relativeAge(seconds){seconds=Math.max(0,Number(seconds)||0);if(seconds<60)return `${Math.round(seconds)}s ago`;if(seconds<3600)return `${Math.floor(seconds/60)}m ago`;if(seconds<86400)return `${Math.floor(seconds/3600)}h ago`;return `${Math.floor(seconds/86400)}d ago`}
 async function showGraph(id){try{let s=await api('/api/status'),g=await api('/api/graph?message_id='+encodeURIComponent(id)+'&origin='+encodeURIComponent(s.callsign||''));let cols=Math.min(4,Math.max(1,g.nodes.length)),rows=Math.max(1,Math.ceil(g.nodes.length/cols)),w=Math.max(720,cols*250+120),h=rows*120+100,nodes=g.nodes,pos={};nodes.forEach((n,i)=>pos[n]={x:60+(i%cols)*250,y:70+Math.floor(i/cols)*120});let edges=g.edges.map(e=>{let a=pos[e.from],b=pos[e.to];return `<line x1=${a.x} y1=${a.y} x2=${b.x} y2=${b.y} stroke='${e.kind==='confirmed'?'#17823b':e.kind==='attempted'?'#c77800':'#78909c'}' stroke-width=3 marker-end='url(#arrow)'/><text x=${(a.x+b.x)/2} y=${(a.y+b.y)/2-6} font-size=12>${esc(e.kind)}${e.snr!=null?' '+esc(e.snr)+'dB':''}</text>`}).join('');let circles=nodes.map(n=>`<circle cx=${pos[n].x} cy=${pos[n].y} r=28 fill='${n===g.origin?'#1769aa':n===g.destination?'#a33':'#e8edf2'}' stroke='#18222d'/><text x=${pos[n].x} y=${pos[n].y+4} text-anchor=middle font-size=12 fill='${n===g.origin||n===g.destination?'white':'#18222d'}'>${esc(n)}</text>`).join('');document.getElementById('graph-result').innerHTML=`<p><b>${esc(g.origin)} → ${esc(g.destination)}</b> · green confirmed, orange attempted, grey observed</p><svg viewBox='0 0 ${w} ${h}' width='100%' height='auto' preserveAspectRatio='xMidYMin meet' role='img' aria-label='Message route graph'><defs><marker id=arrow markerWidth=8 markerHeight=8 refX=6 refY=3 orient=auto><path d='M0,0 L0,6 L7,3 z' fill='#555'/></marker></defs>${edges}${circles}</svg>`}catch(e){document.getElementById('graph-result').textContent=e}}
 function useStation(call){document.querySelector('#compose input[name=destination]').value=call;document.querySelector('#compose input[name=destination]').focus()}
@@ -226,6 +227,31 @@ class Handler(BaseHTTPRequestHandler):
             {"message_id": message_id, "text_length": sum(len(text) for text in wire_texts), "frames": len(wire_texts)},
         )
         self.announced_destinations.add(destination)
+
+    async def transmit_store(self, message_id: str, custodian: str) -> None:
+        """Offer a legacy-compatible message to one remote custodian."""
+        message = self.service.database.get_message(message_id)
+        if message is None:
+            raise KeyError(message_id)
+        if message["state"] not in {MessageState.QUEUED, MessageState.WAITING_ROUTE}:
+            raise ValueError("message is not ready for storage")
+        destination = str(message["destination"])
+        text = format_store_message(custodian, destination, str(message["body"]))
+        self.service.database.record_attempt(
+            message_id, "store", custodian, "started", f"offer for later retrieval by {destination}"
+        )
+        self.service.database.upsert_custody(message_id, custodian, "offered", "store offer submitted")
+        self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+        self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
+        try:
+            await self.client.send_message(text)
+        except (ConnectionError, OSError, RuntimeError) as exc:
+            self.service.database.record_attempt(message_id, "store", custodian, "failed", type(exc).__name__)
+            self.service.database.upsert_custody(message_id, custodian, "failed", type(exc).__name__)
+            raise
+        self.service.database.record_attempt(
+            message_id, "store", custodian, "submitted", "queued in JS8Call for next TX cycle"
+        )
 
     async def prepare(self, message_id: str) -> None:
         """Probe an unobserved destination before committing message airtime."""
@@ -405,6 +431,20 @@ async def run(args: argparse.Namespace) -> None:
                             )
                         continue
                 promising = service.promising_stations(destination)[:3]
+                if message.get("retry_count", 0) >= 3:
+                    custodian = next((candidate for candidate in promising if candidate != destination), None)
+                    if custodian is not None and not any(
+                        item["custodian"] == custodian and item["status"] == "accepted"
+                        for item in database.list_custody(str(message["id"]))
+                    ):
+                        try:
+                            await handler.transmit_store(cast(Handler, handler), str(message["id"]), custodian)
+                        except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
+                            database.record_attempt(
+                                str(message["id"]), "store", custodian, "deferred", type(exc).__name__
+                            )
+                            database.defer_message(str(message["id"]), 60_000, "custodian offer unavailable")
+                        continue
                 if (
                     message["state"] == MessageState.WAITING_ROUTE
                     and not database.due_for_retry(str(message["id"]))
@@ -536,9 +576,23 @@ async def run(args: argparse.Namespace) -> None:
                         and event.event_type in {"RX.DIRECTED.ME", "RX.DIRECTED"}
                         and event.value.strip().split()[1:] == ["ACK"]
                     ):
-                        for message in database.list_messages(MessageState.IN_PROGRESS):
-                            if str(message["destination"]).upper() == source.upper():
-                                database.record_attempt(
+                            for message in database.list_messages(MessageState.IN_PROGRESS):
+                                if str(message["destination"]).upper() == source.upper():
+                                    stored = any(
+                                        item["action"] == "store"
+                                        and item["target"].upper() == source.upper()
+                                        and item["status"] == "submitted"
+                                        for item in database.list_attempts(str(message["id"]))
+                                    )
+                                    if stored:
+                                        database.upsert_custody(
+                                            str(message["id"]), source, "accepted", "standard JS8Call store ACK"
+                                        )
+                                        database.record_attempt(
+                                            str(message["id"]), "custody_ack", source, "received", "stored for later retrieval"
+                                        )
+                                        continue
+                                    database.record_attempt(
                                     str(message["id"]),
                                     "standard_ack",
                                     source,
@@ -597,15 +651,15 @@ async def run(args: argparse.Namespace) -> None:
                                     part.message_id, MultipartAccumulator(part.message_id, part.total)
                                 )
                                 if not accumulator.receipt().received:
-                                    for stored in database.list_message_parts(
+                                    for stored_part in database.list_message_parts(
                                         part.message_id, direction="incoming", peer=source
                                     ):
                                         accumulator.add(
                                             MessagePart(
                                                 part.message_id,
-                                                int(stored["part_number"]),
-                                                int(stored["total_parts"]),
-                                                str(stored["payload"]),
+                                                int(stored_part["part_number"]),
+                                                int(stored_part["total_parts"]),
+                                                str(stored_part["payload"]),
                                             )
                                         )
                                 accumulator.add(part)

@@ -100,12 +100,15 @@ class MailService:
         for message in self.database.list_messages():
             view = dict(message)
             view["attempts"] = self.database.list_attempts(str(message["id"]))
+            view["custody"] = self.database.list_custody(str(message["id"]))
             attempts = view["attempts"]
             if any(
                 attempt["action"] == "delivery_ack" and attempt["status"] == "received"
                 for attempt in attempts
             ):
                 view["confidence"] = "delivered_to_js8mail"
+            elif any(item["status"] == "accepted" for item in view["custody"]):
+                view["confidence"] = "stored_at_custodian"
             elif any(
                 attempt["action"] in {"hop_ack", "standard_ack"}
                 and attempt["status"] == "received"

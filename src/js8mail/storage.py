@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class Database:
@@ -132,6 +132,21 @@ class Database:
                     expires_at_ms INTEGER NOT NULL
                 );
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (6, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 7:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS custody (
+                    message_id TEXT NOT NULL,
+                    custodian TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('offered', 'accepted', 'retrieval_pending', 'forwarded', 'failed')),
+                    updated_at_ms INTEGER NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY(message_id, custodian)
+                );
+                CREATE INDEX IF NOT EXISTS custody_status_idx ON custody(status, updated_at_ms);
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (7, strftime('%s','now') * 1000);
                 """
             )
         self.connection.commit()
@@ -333,6 +348,23 @@ class Database:
         if row is None or int(row["expires_at_ms"]) <= utc_now_ms():
             return None
         return int(row["protocol_version"]), tuple(json.loads(row["capabilities_json"]))
+
+    def upsert_custody(self, message_id: str, custodian: str, status: str, detail: str = "") -> None:
+        if status not in {"offered", "accepted", "retrieval_pending", "forwarded", "failed"}:
+            raise ValueError("invalid custody status")
+        self.connection.execute(
+            "INSERT INTO custody(message_id, custodian, status, updated_at_ms, detail) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(message_id, custodian) DO UPDATE SET status=excluded.status, "
+            "updated_at_ms=excluded.updated_at_ms, detail=excluded.detail",
+            (message_id, custodian.upper(), status, utc_now_ms(), detail[:500]),
+        )
+        self.connection.commit()
+
+    def list_custody(self, message_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM custody WHERE message_id = ? ORDER BY updated_at_ms", (message_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def defer_message(self, message_id: str, delay_ms: int, detail: str) -> None:
         from js8mail.application.lifecycle import MessageState, can_transition
