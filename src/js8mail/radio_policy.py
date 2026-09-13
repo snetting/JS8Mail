@@ -4,6 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+SPEED_AIRTIME_MS = (30_000, 15_000, 10_000, 7_500, 5_000)
+
+
+def estimate_airtime_ms(text: str, speed: int) -> int:
+    """Conservative planning estimate for one JS8Call frame.
+
+    JS8Call's exact occupied time is mode/cycle dependent; this deliberately
+    overestimates and is used only for local duty-cycle protection.
+    """
+    if not 0 <= speed < len(SPEED_AIRTIME_MS):
+        raise ValueError("unsupported JS8Call speed")
+    return SPEED_AIRTIME_MS[speed] + max(0, len(text.encode("utf-8")) - 32) * 100
+
 
 @dataclass(frozen=True, slots=True)
 class SpeedEvidence:
@@ -60,6 +73,23 @@ class AirtimeBudget:
     message_limit_ms: int = 5 * 60 * 1000
     window_used_ms: int = 0
     message_used_ms: int = 0
+    window_started_at_ms: int | None = None
+
+    def rollover(self, now_ms: int) -> None:
+        if self.window_started_at_ms is None:
+            self.window_started_at_ms = now_ms
+        elif now_ms - self.window_started_at_ms >= 15 * 60 * 1000:
+            self.window_started_at_ms = now_ms
+            self.window_used_ms = 0
+
+    def can_spend_at(self, airtime_ms: int, now_ms: int) -> bool:
+        self.rollover(now_ms)
+        return self.can_spend(airtime_ms)
+
+    def spend_at(self, airtime_ms: int, now_ms: int) -> bool:
+        if not self.can_spend_at(airtime_ms, now_ms):
+            return False
+        return self.spend(airtime_ms)
 
     def can_spend(self, airtime_ms: int) -> bool:
         if airtime_ms < 0:

@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 
 DEFAULT_GROUPS: tuple[tuple[str, str], ...] = (
-    ("@EMCOMM", "emergency communications"),
-    ("@ARES", "emergency communications"),
-    ("@RACES", "emergency communications"),
-    ("@RAYNET", "emergency communications"),
+    ("@EMCOMM", "emergency comms"),
+    ("@ARES", "emergency comms"),
+    ("@RACES", "emergency comms"),
+    ("@RAYNET", "emergency comms"),
     ("@NTS", "traffic handling"),
     ("@JS8NET", "JS8 network services"),
     ("@SKYWARN", "weather spotting"),

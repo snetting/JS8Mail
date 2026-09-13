@@ -45,6 +45,7 @@ from js8mail.protocol import (
     parse_part_ack,
     split_human_message,
 )
+from js8mail.radio_policy import AirtimeBudget, estimate_airtime_ms
 from js8mail.storage import Database
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
@@ -87,6 +88,8 @@ class Handler(BaseHTTPRequestHandler):
     loop: asyncio.AbstractEventLoop
     status: dict[str, Any]
     announced_destinations: set[str]
+    airtime_budget: AirtimeBudget
+    message_budgets: dict[str, AirtimeBudget]
 
     def reply(self, code: int, value: Any, content_type: str = "application/json") -> None:
         data = value.encode() if isinstance(value, str) else json.dumps(value).encode()
@@ -222,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             detail = "initial direct attempt"
         if destination not in self.announced_destinations and self.service.database.peer_capabilities(destination) is None:
             try:
-                await self.client.send_message(f"{destination} {format_capability()}")
+                await self.send_rf(f"{destination} {format_capability()}", message_id)
                 self.service.database.record_attempt(
                     message_id, "capability", destination, "submitted", "JS8Mail capability advertisement"
                 )
@@ -237,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
             for text in wire_texts:
-                await self.client.send_message(text)
+                await self.send_rf(text, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(
                 message_id, "direct", destination, "failed", type(exc).__name__
@@ -268,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
-            await self.client.send_message(text)
+            await self.send_rf(text, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(message_id, "store", custodian, "failed", type(exc).__name__)
             self.service.database.upsert_custody(message_id, custodian, "failed", type(exc).__name__)
@@ -291,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
             message_id, "snr_probe", destination, "started", "destination not recently heard"
         )
         try:
-            await self.client.send_message(probe)
+            await self.send_rf(probe, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(
                 message_id, "snr_probe", destination, "failed", type(exc).__name__
@@ -307,6 +310,42 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+    async def send_rf(self, text: str, message_id: str | None = None) -> None:
+        """Reserve conservative airtime before handing a frame to JS8Call."""
+        try:
+            speed = int(self.status.get("speed", 1))
+        except (TypeError, ValueError):
+            speed = 1
+        speed = max(0, min(4, speed))
+        airtime_ms = estimate_airtime_ms(text, speed)
+        now = utc_now_ms()
+        if not self.airtime_budget.can_spend_at(airtime_ms, now):
+            if message_id is not None:
+                self.service.database.record_attempt(
+                    message_id, "airtime_budget", "radio", "blocked",
+                    f"rolling airtime budget exhausted at speed {speed}",
+                )
+            self.service.database.audit(
+                "radio.airtime_blocked", {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed}
+            )
+            raise RuntimeError("local airtime budget exhausted")
+        message_budget = None
+        if message_id is not None:
+            message_budget = self.message_budgets.setdefault(message_id, AirtimeBudget())
+            if not message_budget.can_spend_at(airtime_ms, now):
+                self.service.database.record_attempt(
+                    message_id, "airtime_budget", "message", "blocked",
+                    f"per-message airtime budget exhausted at speed {speed}",
+                )
+                raise RuntimeError("message airtime budget exhausted")
+        await self.client.send_message(text)
+        self.airtime_budget.spend_at(airtime_ms, now)
+        if message_budget is not None:
+            message_budget.spend_at(airtime_ms, now)
+        self.service.database.audit(
+            "radio.airtime_reserved", {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed}
+        )
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -333,6 +372,8 @@ async def run(args: argparse.Namespace) -> None:
             "loop": loop,
             "status": status,
             "announced_destinations": set(),
+            "airtime_budget": AirtimeBudget(),
+            "message_budgets": {},
         },
     )
     server = ThreadingHTTPServer((args.ui_host, args.ui_port), handler)
@@ -368,7 +409,7 @@ async def run(args: argparse.Namespace) -> None:
         if not client.connected or not scheduler.due(key, now):
             return False
         try:
-            await client.send_message(text)
+            await cast(Handler, handler).send_rf(text)
             database.audit(
                 "discovery.query_submitted", {"action": action, "target": target, "text": text}
             )
@@ -580,7 +621,7 @@ async def run(args: argparse.Namespace) -> None:
                                 for item in database.list_custody(message_id)
                             ):
                                 try:
-                                    await client.send_message(retrieve_message_query(source, available_id))
+                                    await cast(Handler, handler).send_rf(retrieve_message_query(source, available_id))
                                     database.upsert_custody(
                                         message_id,
                                         source,
@@ -605,7 +646,7 @@ async def run(args: argparse.Namespace) -> None:
                             source, version, features, utc_now_ms() + CAPABILITY_TTL_MS
                         )
                         try:
-                            await client.send_message(f"{source} {format_capability(features)}")
+                            await cast(Handler, handler).send_rf(f"{source} {format_capability(features)}")
                             database.audit(
                                 "peer.capability_ack_submitted",
                                 {"peer": source.upper(), "version": version},
@@ -717,15 +758,38 @@ async def run(args: argparse.Namespace) -> None:
                         kind, message_id, bitmap = ack
                         receipt_message = database.get_message(message_id)
                         if receipt_message is not None:
-                            if kind == "delivered" and source.upper() == str(receipt_message["destination"]).upper():
+                            if kind == "delivered":
                                 metadata = parse_delivery_ack(event.value)
-                                detail = "end-to-end receipt"
-                                if metadata is not None:
-                                    _, delivered_at_ms, path = metadata
-                                    detail = f"delivered_at={delivered_at_ms}; path={'→'.join(path)}"
-                                database.record_attempt(message_id, "delivery_ack", source, "received", detail)
-                                if receipt_message["state"] == MessageState.IN_PROGRESS:
-                                    database.transition_message(message_id, MessageState.DELIVERED)
+                                receipt_path = metadata[2] if metadata is not None else ()
+                                destination_matches = source.upper() == str(receipt_message["destination"]).upper()
+                                custody_row = next(
+                                    (
+                                        item for item in database.list_custody(message_id)
+                                        if item["custodian"].upper() == source.upper()
+                                        and item["status"] in {"accepted", "retrieval_pending", "forwarded"}
+                                    ),
+                                    None,
+                                )
+                                forwarded_matches = (
+                                    custody_row is not None
+                                    and str(receipt_message["destination"]).upper() in {item.upper() for item in receipt_path}
+                                )
+                                if destination_matches or forwarded_matches:
+                                    detail = "end-to-end receipt"
+                                    if metadata is not None:
+                                        _, delivered_at_ms, path = metadata
+                                        detail = f"delivered_at={delivered_at_ms}; path={'→'.join(path)}"
+                                    database.record_attempt(message_id, "delivery_ack", source, "received", detail)
+                                    if forwarded_matches:
+                                        database.upsert_custody(
+                                            message_id, source, "forwarded",
+                                            f"custodian receipt correlated with destination {receipt_message['destination']}",
+                                        )
+                                        database.record_attempt(
+                                            message_id, "custodian_forwarded", source, "confirmed", detail
+                                        )
+                                    if receipt_message["state"] == MessageState.IN_PROGRESS:
+                                        database.transition_message(message_id, MessageState.DELIVERED)
                             else:
                                 part_ack = parse_part_ack(event.value)
                                 detail = bitmap or "acknowledged"
@@ -744,8 +808,8 @@ async def run(args: argparse.Namespace) -> None:
                                             )
                                         for number in part_ack.missing:
                                             if number <= len(parts):
-                                                await client.send_message(
-                                                    f"{source} {format_human_data_part(parts[number - 1])}"
+                                                await cast(Handler, handler).send_rf(
+                                                    f"{source} {format_human_data_part(parts[number - 1])}", message_id
                                                 )
                                         database.record_attempt(
                                             message_id, "part_resend", source, "submitted", detail
@@ -797,10 +861,10 @@ async def run(args: argparse.Namespace) -> None:
                                     str(event.params.get("TO", "")),
                                 )
                                 if accumulator.should_ack(utc_now_ms()):
-                                    await client.send_message(f"{source} {format_part_ack(accumulator.receipt())}")
+                                    await cast(Handler, handler).send_rf(f"{source} {format_part_ack(accumulator.receipt())}")
                                     database.audit("message.part_ack_submitted", {"message_id": part.message_id, "to": source})
                                 if accumulator.receipt().complete:
-                                    await client.send_message(
+                                    await cast(Handler, handler).send_rf(
                                         f"{source} {format_delivery_ack(part.message_id, utc_now_ms(), (status['callsign'], source))}"
                                     )
                                     database.audit("message.delivered_ack_submitted", {"message_id": part.message_id, "to": source})
