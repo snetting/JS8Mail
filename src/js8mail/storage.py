@@ -9,7 +9,7 @@ from typing import Any
 
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 13
 
 
 class Database:
@@ -223,6 +223,40 @@ class Database:
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (11, strftime('%s','now') * 1000);
                 """
             )
+        if current < 12:
+            self.connection.executescript(
+                """
+                ALTER TABLE temporal_links ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0;
+                CREATE TABLE IF NOT EXISTS airtime_usage (
+                    scope TEXT PRIMARY KEY,
+                    window_started_at_ms INTEGER,
+                    window_used_ms INTEGER NOT NULL DEFAULT 0,
+                    message_used_ms INTEGER NOT NULL DEFAULT 0,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS message_airtime (
+                    message_id TEXT PRIMARY KEY REFERENCES messages(id),
+                    used_ms INTEGER NOT NULL DEFAULT 0,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (12, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 13:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS message_paths (
+                    message_id TEXT NOT NULL REFERENCES messages(id),
+                    path TEXT NOT NULL,
+                    first_attempted_at_ms INTEGER NOT NULL,
+                    last_attempted_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(message_id, path)
+                );
+                CREATE INDEX IF NOT EXISTS message_paths_message_idx
+                    ON message_paths(message_id, last_attempted_at_ms DESC);
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (13, strftime('%s','now') * 1000);
+                """
+            )
         self.connection.commit()
 
     def record_observation(self, event: NormalizedEvent) -> int:
@@ -268,6 +302,65 @@ class Database:
             "last_observed_at_ms=excluded.last_observed_at_ms, observation_count=temporal_links.observation_count+1, "
             "max_snr=CASE WHEN excluded.max_snr IS NULL THEN temporal_links.max_snr WHEN temporal_links.max_snr IS NULL THEN excluded.max_snr ELSE MAX(temporal_links.max_snr, excluded.max_snr) END",
             (source.upper(), destination.upper(), band, speed, observed, observed, snr_value),
+        )
+        self.connection.commit()
+
+    def record_link_outcome(self, source: str, destination: str, speed: int, snr: float | None, success: bool) -> None:
+        """Persist per-peer speed outcomes used by adaptive policy."""
+        row = self.connection.execute(
+            "SELECT band, observation_count, max_snr, success_count, failure_count FROM temporal_links "
+            "WHERE source = ? AND destination = ? AND speed = ? ORDER BY last_observed_at_ms DESC LIMIT 1",
+            (source.upper(), destination.upper(), str(speed)),
+        ).fetchone()
+        now = utc_now_ms()
+        band = str(row["band"]) if row else ""
+        self.connection.execute(
+            "INSERT INTO temporal_links(source, destination, band, speed, first_observed_at_ms, last_observed_at_ms, observation_count, max_snr, success_count, failure_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?) ON CONFLICT(source, destination, band, speed) DO UPDATE SET "
+            "last_observed_at_ms=excluded.last_observed_at_ms, observation_count=temporal_links.observation_count+1, "
+            "max_snr=CASE WHEN excluded.max_snr IS NULL THEN temporal_links.max_snr WHEN temporal_links.max_snr IS NULL THEN excluded.max_snr ELSE MAX(temporal_links.max_snr, excluded.max_snr) END, "
+            "success_count=temporal_links.success_count+excluded.success_count, failure_count=temporal_links.failure_count+excluded.failure_count",
+            (source.upper(), destination.upper(), band, str(speed), now, now, snr, int(success), int(not success)),
+        )
+        self.connection.commit()
+
+    def speed_evidence(self, source: str, destination: str) -> dict[int, dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT speed, success_count, failure_count, max_snr FROM temporal_links WHERE source = ? AND destination = ?",
+            (source.upper(), destination.upper()),
+        ).fetchall()
+        return {
+            int(row["speed"]): {
+                "successes": int(row["success_count"]),
+                "failures": int(row["failure_count"]),
+                "average_snr": row["max_snr"],
+            }
+            for row in rows
+            if str(row["speed"]).isdigit() and 0 <= int(row["speed"]) <= 4
+        }
+
+    def airtime_state(self, scope: str = "radio") -> dict[str, int | None]:
+        row = self.connection.execute("SELECT * FROM airtime_usage WHERE scope = ?", (scope,)).fetchone()
+        if row is None:
+            return {"window_started_at_ms": None, "window_used_ms": 0, "message_used_ms": 0}
+        return {key: row[key] for key in ("window_started_at_ms", "window_used_ms", "message_used_ms")}
+
+    def save_airtime_state(self, window_started_at_ms: int | None, window_used_ms: int, message_used_ms: int, scope: str = "radio") -> None:
+        self.connection.execute(
+            "INSERT INTO airtime_usage(scope, window_started_at_ms, window_used_ms, message_used_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(scope) DO UPDATE SET window_started_at_ms=excluded.window_started_at_ms, window_used_ms=excluded.window_used_ms, message_used_ms=excluded.message_used_ms, updated_at_ms=excluded.updated_at_ms",
+            (scope, window_started_at_ms, window_used_ms, message_used_ms, utc_now_ms()),
+        )
+        self.connection.commit()
+
+    def message_airtime_used(self, message_id: str) -> int:
+        row = self.connection.execute("SELECT used_ms FROM message_airtime WHERE message_id = ?", (message_id,)).fetchone()
+        return int(row[0]) if row else 0
+
+    def save_message_airtime(self, message_id: str, used_ms: int) -> None:
+        self.connection.execute(
+            "INSERT INTO message_airtime(message_id, used_ms, updated_at_ms) VALUES (?, ?, ?) ON CONFLICT(message_id) DO UPDATE SET used_ms=excluded.used_ms, updated_at_ms=excluded.updated_at_ms",
+            (message_id, used_ms, utc_now_ms()),
         )
         self.connection.commit()
 
@@ -406,6 +499,24 @@ class Database:
         if cursor.lastrowid is None:
             raise RuntimeError("SQLite did not return an attempt row id")
         return int(cursor.lastrowid)
+
+    def record_message_path(self, message_id: str, path: tuple[str, ...]) -> None:
+        if not message_id or len(path) < 2 or any(not call or len(call) > 16 for call in path):
+            raise ValueError("invalid attempted message path")
+        now = utc_now_ms()
+        path_text = "→".join(call.upper() for call in path)
+        self.connection.execute(
+            "INSERT INTO message_paths(message_id, path, first_attempted_at_ms, last_attempted_at_ms) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(message_id, path) DO UPDATE SET last_attempted_at_ms=excluded.last_attempted_at_ms",
+            (message_id, path_text, now, now),
+        )
+        self.connection.commit()
+
+    def attempted_message_paths(self, message_id: str) -> set[tuple[str, ...]]:
+        rows = self.connection.execute(
+            "SELECT path FROM message_paths WHERE message_id = ?", (message_id,)
+        ).fetchall()
+        return {tuple(str(row[0]).split("→")) for row in rows}
 
     def list_attempts(self, message_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(

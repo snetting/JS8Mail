@@ -93,15 +93,15 @@ class RouteEngine:
             if self.max_hops is not None and len(path) - 1 > self.max_hops:
                 return
             if node == destination:
-                if path not in attempted:
-                    weakest = min(scores, default=0.0)
-                    # Weakest-link score dominates; extra hops and airtime are
-                    # tie-break penalties rather than hidden probability math.
-                    total = weakest - 0.03 * (len(path) - 2) - min(airtime / 600_000, 0.2)
-                    if total < self.minimum_score:
-                        return
-                    action = RouteAction.DIRECT if len(path) == 2 else RouteAction.RELAY_NOW
-                    paths.append(RoutePlan(action, path, max(0.0, total), weakest, airtime, ""))
+                weakest = min(scores, default=0.0)
+                # Prefer fresh alternatives, but do not permanently blacklist a
+                # route: propagation and custodian availability can change.
+                total = weakest - 0.03 * (len(path) - 2) - min(airtime / 600_000, 0.2)
+                if total < self.minimum_score:
+                    return
+                action = RouteAction.DIRECT if len(path) == 2 else RouteAction.RELAY_NOW
+                explanation = ""
+                paths.append(RoutePlan(action, path, max(0.0, total), weakest, airtime, explanation))
                 return
             for next_node, link, score in self.graph.candidates(node, now_ms):
                 if next_node in path:
@@ -123,13 +123,16 @@ class RouteEngine:
                 0,
                 f"No unattempted path from {origin} to {destination} within {self.max_hops} hops; defer and gather evidence.",
             )
+        untried = [plan for plan in paths if plan.path not in attempted]
+        candidates = untried or paths
         selected = max(
-            paths, key=lambda plan: (plan.score, -len(plan.path), -plan.expected_airtime_ms)
+            candidates, key=lambda plan: (plan.score, -len(plan.path), -plan.expected_airtime_ms)
         )
+        retry_note = " A previously attempted route was selected again because no untried viable route remains." if selected.path in attempted else ""
         explanation = (
             f"Selected {'direct' if selected.action is RouteAction.DIRECT else 'relay'} path "
             f"{' → '.join(selected.path)}; weakest link {selected.weakest_link_score:.2f}, "
-            f"estimated airtime {selected.expected_airtime_ms} ms."
+            f"estimated airtime {selected.expected_airtime_ms} ms.{retry_note}"
         )
         return RoutePlan(
             selected.action,

@@ -48,6 +48,8 @@ from js8mail.protocol import (
 from js8mail.radio_policy import AirtimeBudget, estimate_airtime_ms
 from js8mail.storage import Database
 
+DIRECT_RESPONSE_DEADLINE_MS = 2 * 60 * 1000
+
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>JS8Mail</title><style>
 body{font:15px system-ui;max-width:1250px;margin:2em auto;padding:0 1em;background:#f5f7f9;color:#18222d}
@@ -196,7 +198,15 @@ class Handler(BaseHTTPRequestHandler):
         destination = str(message["destination"])
         announce = destination not in self.announced_destinations
         origin = str(self.status.get("callsign", "")).upper()
-        plan = self.service.plan_route(origin, destination) if origin else None
+        plan = (
+            self.service.plan_route(
+                origin,
+                destination,
+                attempted_paths=self.service.database.attempted_message_paths(message_id),
+            )
+            if origin
+            else None
+        )
         path = plan.path if plan is not None else (origin, destination)
         peer = self.service.database.peer_capabilities(destination)
         enhanced_parts = (
@@ -224,6 +234,8 @@ class Handler(BaseHTTPRequestHandler):
             action = "direct"
             target = destination
             detail = "initial direct attempt"
+        if origin and len(path) >= 2:
+            self.service.database.record_message_path(message_id, path)
         if destination not in self.announced_destinations and self.service.database.peer_capabilities(destination) is None:
             try:
                 await self.send_rf(f"{destination} {format_capability()}", message_id)
@@ -478,7 +490,28 @@ async def run(args: argparse.Namespace) -> None:
                         str(message["id"]), "expiry", destination, "expired", "retry window elapsed"
                     )
                     continue
-                if service.recently_answered(destination, str(status.get("callsign", ""))):
+                direct_expired = False
+                if message["state"] == MessageState.IN_PROGRESS:
+                    attempts = database.list_attempts(str(message["id"]))
+                    direct_submissions = [
+                        attempt for attempt in attempts
+                        if attempt["action"] == "direct" and attempt["status"] == "submitted"
+                    ]
+                    has_followup = any(
+                        attempt["action"] in {"hop_ack", "standard_ack", "delivery_ack"}
+                        and attempt["status"] in {"received", "confirmed"}
+                        for attempt in attempts
+                    )
+                    if direct_submissions and not has_followup:
+                        last_direct = int(direct_submissions[-1]["created_at_ms"])
+                        direct_expired = now_wall_ms - last_direct >= DIRECT_RESPONSE_DEADLINE_MS
+                        if direct_expired:
+                            database.record_attempt(
+                                str(message["id"]), "direct_timeout", destination, "failed",
+                                "no ACK or JS8Mail receipt within 2-minute direct deadline",
+                            )
+                            database.transition_message(str(message["id"]), MessageState.WAITING_ROUTE)
+                if service.recently_answered(destination, str(status.get("callsign", ""))) and not direct_expired:
                     if message["state"] == MessageState.WAITING_ROUTE:
                         database.record_attempt(
                             str(message["id"]), "route", destination, "available", "recent local RF evidence"
@@ -506,7 +539,11 @@ async def run(args: argparse.Namespace) -> None:
                 # requiring the original destination to answer us directly.
                 # Use that fresh evidence as soon as the message is due.
                 if message["state"] == MessageState.WAITING_ROUTE and database.due_for_retry(str(message["id"])):
-                    plan = service.plan_route(str(status.get("callsign", "")), destination)
+                    plan = service.plan_route(
+                        str(status.get("callsign", "")),
+                        destination,
+                        attempted_paths=database.attempted_message_paths(str(message["id"])),
+                    )
                     if len(plan.path) >= 3:
                         database.record_attempt(
                             str(message["id"]),

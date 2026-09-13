@@ -31,14 +31,20 @@ def test_rejects_cycle_and_deferred_when_no_valid_path() -> None:
     assert plan.path == ("A",)
 
 
-def test_attempted_path_is_not_reused_and_stale_evidence_decays() -> None:
+def test_attempted_path_is_penalized_but_can_be_reused_and_stale_evidence_decays() -> None:
     graph = TemporalGraph()
     graph.add(link("A", "B", 0.95))
     graph.add(link("B", "C", 0.95))
+    graph.add(link("A", "D", 0.65))
+    graph.add(link("D", "C", 0.65))
     fresh = RouteEngine(graph).choose("A", "C", now_ms=NOW)
     assert fresh.action == RouteAction.RELAY_NOW
     repeated = RouteEngine(graph).choose("A", "C", now_ms=NOW, attempted_paths={fresh.path})
-    assert repeated.action == RouteAction.DEFER
+    assert repeated.action == RouteAction.RELAY_NOW
+    assert repeated.path == ("A", "D", "C")
+    exhausted = RouteEngine(graph).choose("A", "C", now_ms=NOW, attempted_paths={fresh.path, repeated.path})
+    assert exhausted.path == fresh.path
+    assert "no untried" in exhausted.explanation
 
     stale_graph = TemporalGraph()
     stale_graph.add(link("A", "C", 0.9, age_ms=10 * 86_400_000))

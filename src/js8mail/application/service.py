@@ -68,7 +68,13 @@ class MailService:
     def delete(self, message_id: str) -> None:
         self.database.delete_message(message_id)
 
-    def plan_route(self, origin: str, destination: str, now_ms: int | None = None) -> RoutePlan:
+    def plan_route(
+        self,
+        origin: str,
+        destination: str,
+        now_ms: int | None = None,
+        attempted_paths: set[tuple[str, ...]] | None = None,
+    ) -> RoutePlan:
         now = utc_now_ms() if now_ms is None else now_ms
         graph = TemporalGraph()
         for link in self.database.temporal_link_views(5000):
@@ -106,7 +112,9 @@ class MailService:
                     expected_airtime_ms=1000,
                 )
             )
-        return RouteEngine(graph).choose(origin, destination, now_ms=now)
+        return RouteEngine(graph).choose(
+            origin, destination, now_ms=now, attempted_paths=attempted_paths
+        )
 
     def message_views(self) -> list[dict[str, object]]:
         views: list[dict[str, object]] = []
