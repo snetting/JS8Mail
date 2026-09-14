@@ -57,6 +57,7 @@ from js8mail.radio_policy import (
     SPEED_AIRTIME_MS,
     AdaptiveSpeedPolicy,
     AirtimeBudget,
+    AirtimeBudgetExceeded,
     SpeedEvidence,
     estimate_airtime_ms,
 )
@@ -574,6 +575,18 @@ class Handler(BaseHTTPRequestHandler):
                     f"({capability_window_ms // 1000}s estimated)",
                 )
                 return
+            except AirtimeBudgetExceeded as exc:
+                wait_ms = 6 * 60 * 60 * 1000 if exc.scope == "per-message" else 15 * 60 * 1000
+                detail = (
+                    f"{exc.scope} airtime budget exhausted; radio is idle and policy blocked TX"
+                )
+                self.service.database.record_attempt(
+                    message_id, "capability", destination, "deferred", detail
+                )
+                self.service.database.defer_message(
+                    message_id, wait_ms, detail, increment_retry=False
+                )
+                return
             except (ConnectionError, OSError, RuntimeError) as exc:
                 self.service.database.record_attempt(
                     message_id,
@@ -781,7 +794,7 @@ class Handler(BaseHTTPRequestHandler):
             self.service.database.audit(
                 "radio.airtime_blocked", {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed}
             )
-            raise RuntimeError("local airtime budget exhausted")
+            raise AirtimeBudgetExceeded("rolling")
         message_budget = None
         if message_id is not None:
             message_budget = self.message_budgets.setdefault(message_id, AirtimeBudget())
@@ -793,7 +806,7 @@ class Handler(BaseHTTPRequestHandler):
                     message_id, "airtime_budget", "message", "blocked",
                     f"per-message airtime budget exhausted at speed {speed}",
                 )
-                raise RuntimeError("message airtime budget exhausted")
+                raise AirtimeBudgetExceeded("per-message")
         # A short, independent protocol LED makes API/RF handoff visible even
         # when the radio remains in its normal RX state.
         # Reserve before handing text to JS8Call. If the daemon dies after
@@ -802,9 +815,9 @@ class Handler(BaseHTTPRequestHandler):
         # API submission may over-count slightly, which is safer than a retry
         # storm or duty-cycle breach.
         if not self.airtime_budget.spend_at(airtime_ms, now):
-            raise RuntimeError("local airtime budget exhausted")
+            raise AirtimeBudgetExceeded("rolling")
         if message_budget is not None and not message_budget.spend_at(airtime_ms, now):
-            raise RuntimeError("message airtime budget exhausted")
+            raise AirtimeBudgetExceeded("per-message")
         if message_budget is not None and message_id is not None:
             self.service.database.save_message_airtime(message_id, message_budget.message_used_ms)
         self.service.database.save_airtime_state(

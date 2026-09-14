@@ -16,6 +16,14 @@ SPEED_AIRTIME_MS = {
 SPEED_ORDER = (4, 0, 1, 2, 8)
 
 
+class AirtimeBudgetExceeded(RuntimeError):
+    """A local safety budget, rather than the radio, prevented transmission."""
+
+    def __init__(self, scope: str) -> None:
+        self.scope = scope
+        super().__init__(f"{scope} airtime budget exhausted")
+
+
 def estimate_airtime_ms(text: str, speed: int) -> int:
     """Conservative planning estimate for one JS8Call frame.
 
