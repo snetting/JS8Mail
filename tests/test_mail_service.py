@@ -48,11 +48,23 @@ def test_recently_heard_does_not_count_as_a_directed_answer(tmp_path: Path) -> N
     service = MailService(database)
     database.record_observation(NormalizedEvent("RX.ACTIVITY", "M8YRT CQ", {"FROM": "M8YRT"}, 1_000))
     assert service.recently_heard("M8YRT", now_ms=1_500, window_ms=10_000)
+    assert service.recent_heard_age_ms("M8YRT", now_ms=1_500, window_ms=10_000) == 500
     assert not service.recently_answered("M8YRT", "OH3SPN", now_ms=1_500, window_ms=10_000)
+    database.record_observation(
+        NormalizedEvent(
+            "QUERY.CALL.RESPONSE",
+            "M8YRT YES",
+            {"FROM": "M8YRT", "TO": "N0CALL", "EVIDENCE": "remote_query_call_yes"},
+            1_200,
+        )
+    )
+    assert service.recent_heard_age_ms("M8YRT", now_ms=1_500, window_ms=10_000) == 500
+    assert service.recent_heard_age_ms("REMOTE", now_ms=1_500, window_ms=10_000) is None
     database.record_observation(
         NormalizedEvent("RX.DIRECTED.ME", "OH3SPN SNR -10", {"FROM": "M8YRT", "TO": "OH3SPN"}, 2_000)
     )
     assert service.recently_answered("M8YRT", "OH3SPN", now_ms=2_500, window_ms=10_000)
+    assert service.recent_answered_age_ms("M8YRT", "OH3SPN", now_ms=2_500, window_ms=10_000) == 500
     database.close()
 
 

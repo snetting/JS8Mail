@@ -340,17 +340,34 @@ class MailService:
         self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000,
         band: str | None = None,
     ) -> bool:
+        return self.recent_heard_age_ms(callsign, now_ms, window_ms, band) is not None
+
+    def recent_heard_age_ms(
+        self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000,
+        band: str | None = None,
+    ) -> int | None:
+        """Return the age of the freshest recent direct observation, if any.
+
+        Hearing a station is probabilistic evidence that it may hear us too.
+        It can justify a cautious direct attempt, but never proves delivery.
+        """
         now = utc_now_ms() if now_ms is None else now_ms
         wanted = callsign.strip().upper()
+        freshest: int | None = None
         for observation in self.database.recent_observations(500, band=band):
             source = observation["params"].get("FROM")
+            # A remote QUERY CALL report says that somebody heard the target;
+            # it is valuable route evidence, but it is not local hearing
+            # evidence for a direct payload attempt.
             if (
-                isinstance(source, str)
+                observation["event_type"] != "QUERY.CALL.RESPONSE"
+                and isinstance(source, str)
                 and source.upper() == wanted
-                and now - int(observation["observed_at_ms"]) <= window_ms
             ):
-                return True
-        return False
+                age = now - int(observation["observed_at_ms"])
+                if 0 <= age <= window_ms and (freshest is None or age < freshest):
+                    freshest = age
+        return freshest
 
     def recently_answered(
         self,
@@ -360,26 +377,39 @@ class MailService:
         window_ms: int = 600_000,
         band: str | None = None,
     ) -> bool:
-        """Return true only for a recent directed response to this station."""
+        return self.recent_answered_age_ms(callsign, local_callsign, now_ms, window_ms, band) is not None
+
+    def recent_answered_age_ms(
+        self,
+        callsign: str,
+        local_callsign: str,
+        now_ms: int | None = None,
+        window_ms: int = 600_000,
+        band: str | None = None,
+    ) -> int | None:
+        """Return the age of the freshest recent directed response."""
         now = utc_now_ms() if now_ms is None else now_ms
         wanted = callsign.strip().upper()
         local = local_callsign.strip().upper()
         if not wanted or not local:
-            return False
+            return None
+        freshest: int | None = None
         for observation in self.database.recent_observations(500, band=band):
             params = observation["params"]
             source = params.get("FROM")
             target = params.get("TO")
             addressed_event = observation["event_type"] in {"RX.DIRECTED.ME", "RX.DIRECTED"}
+            age = now - int(observation["observed_at_ms"])
             if (
                 addressed_event
                 and isinstance(source, str)
                 and source.upper() == wanted
                 and (not isinstance(target, str) or target.upper() == local)
-                and now - int(observation["observed_at_ms"]) <= window_ms
+                and 0 <= age <= window_ms
+                and (freshest is None or age < freshest)
             ):
-                return True
-        return False
+                freshest = age
+        return freshest
 
     def promising_stations(
         self, destination: str, now_ms: int | None = None, window_ms: int = 600_000,
