@@ -67,10 +67,11 @@ CAPABILITY_RESPONSE_DEADLINE_MS = 45 * 1000
 AUTOMATED_TX_GAP_MS = 30 * 1000
 QUERY_RESPONSE_MAX_MS = 3 * 60 * 1000
 LATE_QUERY_CONTEXT_MS = 15 * 60 * 1000
+CAPABILITY_MAX_RESPONSE_MS = 5 * 60 * 1000
 
 
 def capability_response_window_ms(path: tuple[str, ...], speed: object) -> int:
-    """Allow a CAP response to traverse the selected path and return."""
+    """Estimate the return-path response window after CAP arrives."""
     try:
         speed_id = int(str(speed))
     except (TypeError, ValueError):
@@ -79,10 +80,19 @@ def capability_response_window_ms(path: tuple[str, ...], speed: object) -> int:
     hops = max(1, len(path) - 1)
     if hops == 1:
         return CAPABILITY_RESPONSE_DEADLINE_MS
-    # One outbound and one return slot per hop, plus a response slot and a
-    # modest guard. This is capped so a broken path cannot hold a message
-    # forever.
-    return min(QUERY_RESPONSE_MAX_MS, (2 * hops + 1) * cycle_ms + 15_000)
+    # One return slot per hop plus a modest guard. The outbound allowance is
+    # added separately when the CAP is submitted, because the response timer
+    # must not consume time while the CAP is still travelling outward.
+    return min(CAPABILITY_MAX_RESPONSE_MS, hops * cycle_ms + 15_000)
+
+
+def capability_outbound_ms(path: tuple[str, ...], text: str, speed: object) -> int:
+    """Estimate the time for a CAP frame to reach the final hop."""
+    try:
+        speed_id = int(str(speed))
+    except (TypeError, ValueError):
+        speed_id = 0
+    return max(1, len(path) - 1) * estimate_airtime_ms(text, speed_id)
 
 
 def query_response_window_ms(action: str, speed: object) -> int:
@@ -435,6 +445,11 @@ class Handler(BaseHTTPRequestHandler):
             and capability_attempts
         ):
             capability_sent_at = int(capability_attempts[-1]["created_at_ms"])
+            recorded_window = re.search(
+                r"response window (\d+)s", str(capability_attempts[-1].get("detail", ""))
+            )
+            if recorded_window is not None:
+                capability_window_ms = int(recorded_window.group(1)) * 1000
             elapsed = utc_now_ms() - capability_sent_at
             if elapsed < capability_window_ms:
                 self.service.database.record_attempt(
@@ -497,9 +512,19 @@ class Handler(BaseHTTPRequestHandler):
                     if len(path) < 3
                     else format_relay_text(path, format_capability())
                 )
+                capability_window_ms = min(
+                    CAPABILITY_MAX_RESPONSE_MS,
+                    capability_outbound_ms(path, capability_text, self.status.get("speed", 0))
+                    + capability_window_ms,
+                )
                 await Handler.send_rf(self, capability_text, message_id)
                 self.service.database.record_attempt(
-                    message_id, "capability", destination, "submitted", "JS8Mail capability advertisement"
+                    message_id,
+                    "capability",
+                    destination,
+                    "submitted",
+                    f"JS8Mail capability advertisement; response window "
+                    f"{capability_window_ms // 1000}s",
                 )
                 self.announced_destinations.add(destination)
                 self.service.database.record_attempt(
