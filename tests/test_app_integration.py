@@ -58,3 +58,44 @@ async def test_selected_multi_hop_plan_reaches_fake_radio(tmp_path, monkeypatch)
         ("OH3SPN", "MM0ZFG", "SP2ST")
     }
     database.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("N0CALL", "first contact", "hello ordinary station")
+    radio = FakeRadio()
+    handler = object.__new__(Handler)
+    handler.service = service
+    handler.client = radio
+    handler.status = {
+        "callsign": "OH3SPN",
+        "tx_mode": "automatic",
+        "paused": False,
+        "speed": 0,
+        "band": "20m",
+        "js8_activity_until_ms": 0,
+    }
+    handler.announced_destinations = set()
+    handler.airtime_budget = AirtimeBudget()
+    handler.message_budgets = {}
+    handler.tx_lock = asyncio.Lock()
+    handler.last_tx_at_ms = None
+    handler.auto_speed = False
+
+    await handler.transmit(message_id)
+    assert radio.sent == ["N0CALL J8M1 CAP 1 E2E,MP,PA"]
+
+    database.connection.execute(
+        "UPDATE message_attempts SET created_at_ms = created_at_ms - 120000 "
+        "WHERE message_id = ? AND action = 'capability'",
+        (message_id,),
+    )
+    database.connection.commit()
+    await handler.transmit(message_id)
+
+    assert radio.sent[-1] == "N0CALL MSG hello ordinary station"
+    assert database.list_attempts(message_id)[-1]["status"] == "submitted"
+    database.close()

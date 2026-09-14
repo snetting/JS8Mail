@@ -62,6 +62,7 @@ from js8mail.radio_policy import (
 from js8mail.storage import Database
 
 DIRECT_RESPONSE_DEADLINE_MS = 2 * 60 * 1000
+CAPABILITY_RESPONSE_DEADLINE_MS = 90 * 1000
 AUTOMATED_TX_GAP_MS = 30 * 1000
 
 
@@ -389,6 +390,33 @@ class Handler(BaseHTTPRequestHandler):
             raise RuntimeError("no usable route selected")
         path = plan.path if plan is not None else (origin, destination)
         peer = self.service.database.peer_capabilities(destination)
+        capability_attempts = [
+            attempt for attempt in self.service.database.list_attempts(message_id)
+            if attempt["action"] == "capability" and attempt["status"] == "submitted"
+        ]
+        if (
+            not destination.startswith("@")
+            and peer is None
+            and capability_attempts
+        ):
+            capability_sent_at = int(capability_attempts[-1]["created_at_ms"])
+            elapsed = utc_now_ms() - capability_sent_at
+            if elapsed < CAPABILITY_RESPONSE_DEADLINE_MS:
+                self.service.database.record_attempt(
+                    message_id, "capability_wait", destination, "waiting",
+                    "waiting for JS8Mail capability response",
+                )
+                self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+                self.service.database.defer_message(
+                    message_id,
+                    max(5_000, CAPABILITY_RESPONSE_DEADLINE_MS - elapsed),
+                    "waiting for capability response before ordinary fallback",
+                )
+                return
+            self.service.database.record_attempt(
+                message_id, "capability_timeout", destination, "fallback",
+                "no capability response; using ordinary JS8Call delivery",
+            )
         enhanced_parts = (
             split_human_message(message_id, str(message["body"]))
             if peer is not None and "MP" in peer[1]
@@ -438,6 +466,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.service.database.record_attempt(
                     message_id, "capability", destination, "submitted", "JS8Mail capability advertisement"
                 )
+                self.announced_destinations.add(destination)
+                self.service.database.record_attempt(
+                    message_id, "capability_wait", destination, "waiting",
+                    "waiting for JS8Mail capability response",
+                )
+                self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+                self.service.database.defer_message(
+                    message_id,
+                    CAPABILITY_RESPONSE_DEADLINE_MS,
+                    "waiting for capability response before ordinary fallback",
+                )
+                return
             except (ConnectionError, OSError, RuntimeError) as exc:
                 self.service.database.record_attempt(
                     message_id, "capability", destination, "failed", type(exc).__name__
@@ -1216,6 +1256,9 @@ async def run(args: argparse.Namespace) -> None:
                         database.upsert_peer_capabilities(
                             source, version, features, capability_now + CAPABILITY_TTL_MS
                         )
+                        for pending_message in database.list_messages(MessageState.WAITING_ROUTE):
+                            if str(pending_message["destination"]).upper() == source.upper():
+                                database.wake_message_for_route(str(pending_message["id"]))
                         # CAP is a request/response hint, not an endlessly
                         # echoed heartbeat. One reply per peer per hour is
                         # enough to establish capability and prevents loops.
