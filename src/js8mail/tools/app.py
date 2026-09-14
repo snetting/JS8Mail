@@ -538,6 +538,28 @@ class Handler(BaseHTTPRequestHandler):
         if message["state"] not in {MessageState.QUEUED, MessageState.WAITING_ROUTE}:
             raise ValueError("message is not ready for storage")
         destination = str(message["destination"])
+        # CAP is sent before the first enhanced/ordinary payload. Do not let
+        # the custodian fallback bypass that negotiation on the next scheduler
+        # pass while the CAP frame is still in flight or awaiting a response.
+        if not destination.startswith("@") and self.service.database.peer_capabilities(destination) is None:
+            capability_attempts = [
+                attempt for attempt in self.service.database.list_attempts(message_id)
+                if attempt["action"] == "capability" and attempt["status"] == "submitted"
+            ]
+            if capability_attempts:
+                elapsed = utc_now_ms() - int(capability_attempts[-1]["created_at_ms"])
+                if elapsed < CAPABILITY_RESPONSE_DEADLINE_MS:
+                    remaining = max(5_000, CAPABILITY_RESPONSE_DEADLINE_MS - elapsed)
+                    self.service.database.record_attempt(
+                        message_id, "capability_wait", destination, "waiting",
+                        "waiting for JS8Mail capability response before store fallback",
+                    )
+                    self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+                    self.service.database.defer_message(
+                        message_id, remaining,
+                        "waiting for capability response before store fallback",
+                    )
+                    return
         text = format_store_message(custodian, destination, str(message["body"]))
         origin = str(self.status.get("callsign", "")).upper()
         if origin:
