@@ -62,7 +62,7 @@ from js8mail.radio_policy import (
 from js8mail.storage import Database
 
 DIRECT_RESPONSE_DEADLINE_MS = 2 * 60 * 1000
-CAPABILITY_RESPONSE_DEADLINE_MS = 90 * 1000
+CAPABILITY_RESPONSE_DEADLINE_MS = 45 * 1000
 AUTOMATED_TX_GAP_MS = 30 * 1000
 
 
