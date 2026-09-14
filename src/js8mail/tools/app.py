@@ -69,6 +69,11 @@ AUTOMATED_TX_GAP_MS = 30 * 1000
 QUERY_RESPONSE_MAX_MS = 3 * 60 * 1000
 LATE_QUERY_CONTEXT_MS = 15 * 60 * 1000
 CAPABILITY_MAX_RESPONSE_MS = 5 * 60 * 1000
+# A message may use a bounded burst, then continue in later rolling windows.
+# The total is intentionally larger than the three-day default message TTL;
+# the station-wide budget remains the ultimate safety ceiling.
+MESSAGE_BURST_LIMIT_MS = 5 * 60 * 1000
+MESSAGE_TOTAL_LIMIT_MS = 24 * 60 * 60 * 1000
 
 
 def capability_response_window_ms(path: tuple[str, ...], speed: object) -> int:
@@ -576,7 +581,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             except AirtimeBudgetExceeded as exc:
-                wait_ms = 6 * 60 * 60 * 1000 if exc.scope == "per-message" else 15 * 60 * 1000
+                wait_ms = (
+                    6 * 60 * 60 * 1000
+                    if exc.scope == "per-message-total"
+                    else 15 * 60 * 1000
+                )
                 detail = (
                     f"{exc.scope} airtime budget exhausted; radio is idle and policy blocked TX"
                 )
@@ -797,7 +806,13 @@ class Handler(BaseHTTPRequestHandler):
             raise AirtimeBudgetExceeded("rolling")
         message_budget = None
         if message_id is not None:
-            message_budget = self.message_budgets.setdefault(message_id, AirtimeBudget())
+            message_budget = self.message_budgets.setdefault(
+                message_id,
+                AirtimeBudget(
+                    window_limit_ms=MESSAGE_BURST_LIMIT_MS,
+                    message_limit_ms=MESSAGE_TOTAL_LIMIT_MS,
+                ),
+            )
             saved_message_airtime = self.service.database.message_airtime_used(message_id)
             if saved_message_airtime and message_budget.message_used_ms == 0:
                 message_budget.message_used_ms = saved_message_airtime
@@ -806,7 +821,12 @@ class Handler(BaseHTTPRequestHandler):
                     message_id, "airtime_budget", "message", "blocked",
                     f"per-message airtime budget exhausted at speed {speed}",
                 )
-                raise AirtimeBudgetExceeded("per-message")
+                scope = (
+                    "per-message-total"
+                    if message_budget.message_used_ms + airtime_ms > message_budget.message_limit_ms
+                    else "per-message-window"
+                )
+                raise AirtimeBudgetExceeded(scope)
         # A short, independent protocol LED makes API/RF handoff visible even
         # when the radio remains in its normal RX state.
         # Reserve before handing text to JS8Call. If the daemon dies after
