@@ -67,7 +67,7 @@ def test_body_part_remains_readable_while_metadata_is_tagged() -> None:
 
 
 def test_standard_js8call_relay_and_store_forms() -> None:
-    assert format_relay_message(("A", "B", "C"), "MSG") == "B>C MSG MSG"
+    assert format_relay_message(("A", "B", "C"), "MSG") == "B>C>MSG MSG"
     assert format_store_message("B", "C", "MSG") == "B MSG TO:C MSG"
 
 

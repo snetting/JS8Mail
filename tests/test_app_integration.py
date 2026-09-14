@@ -61,7 +61,7 @@ async def test_selected_multi_hop_plan_reaches_fake_radio(tmp_path, monkeypatch)
     await handler.transmit(message_id, plan)
 
     assert radio.sent == [
-        "MM0ZFG>SP2ST MSG J8M1 D OH3SPN SP2ST " + message_id + " 1/1 test path"
+        "MM0ZFG>SP2ST>MSG J8M1 D OH3SPN SP2ST " + message_id + " 1/1 test path"
     ]
     assert database.attempted_message_paths(message_id) == {
         ("OH3SPN", "MM0ZFG", "SP2ST")

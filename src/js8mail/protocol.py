@@ -346,7 +346,10 @@ def format_relay_message(path: tuple[str, ...], body: str) -> str:
         raise MultipartError("a relay path needs at least three callsigns")
     if any(" " in call or ">" in call for call in path):
         raise MultipartError("invalid relay callsign")
-    result = f"{path[1]}>{'>'.join(path[2:])} MSG {body}"
+    # JS8Call's relay grammar separates the final directed command from the
+    # relay path with another '>'.  Omitting it makes the command ambiguous
+    # to the receiving JS8Call instance and prevents the normal ACK path.
+    result = f"{path[1]}>{'>'.join(path[2:])}>MSG {body}"
     if len(result.encode()) > MAX_FRAME_BYTES:
         raise MultipartError("relay message is too large")
     return result

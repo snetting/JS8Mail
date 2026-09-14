@@ -111,6 +111,16 @@ enhanced messages. They must deduplicate repeated data and receipts, respect
 bounded hop/TTL policy, and never claim authentication beyond JS8Call's normal
 radio evidence.
 
+The JS8Call transport form for an enhanced directed message is:
+
+```text
+RELAY1>DEST>MSG J8M1 D ...
+```
+
+The `>` before `MSG` is significant. Capability advertisements and other
+free-text control hints use the corresponding free-text relay form when they
+are forwarded (`RELAY1>DEST>J8M1 CAP ...`).
+
 An ordinary JS8Call `DEST MSG TO:CUSTODIAN body` store transaction is not an
 enhanced custody transfer: its ACK proves only that JS8Call accepted the store
 operation. The current implementation deliberately relies on JS8Call's

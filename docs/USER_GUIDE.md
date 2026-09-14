@@ -299,6 +299,18 @@ The current implementation does not pretend that a single SNR number is a
 probability of delivery. It is a comparable ranking signal used alongside
 freshness, hop count, airtime, availability, and prior attempts.
 
+For a multi-hop directed message, JS8Mail uses JS8Call's forwarded-command
+syntax, with a separator before the final `MSG` command:
+
+```text
+IZ1KJG>MM0ZFG>MSG readable message
+```
+
+This is different from a direct message (`MM0ZFG MSG ...`) and from a free
+text relay (`IZ1KJG>MM0ZFG>readable message`). The extra separator is required
+for JS8Call to recognize the final directed command and provide its normal
+relay/ACK behavior.
+
 ### 7. Search complete paths
 
 The engine walks the directed graph from the origin to the destination. It
