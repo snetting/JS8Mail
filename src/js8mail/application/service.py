@@ -11,13 +11,17 @@ from js8mail.routing import LinkEvidence, RouteEngine, RoutePlan, TemporalGraph
 from js8mail.storage import Database
 
 DEFAULT_MESSAGE_TTL_MS = 3 * 24 * 60 * 60 * 1000
+ENHANCED_MODES = frozenset({"standard", "opportunistic", "required"})
 
 
 class MailService:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def compose(self, destination: str, subject: str, body: str, priority: int = 0) -> str:
+    def compose(
+        self, destination: str, subject: str, body: str, priority: int = 0,
+        enhanced_mode: str | None = None,
+    ) -> str:
         destination = destination.strip().upper()
         if not destination or len(destination) > 16:
             raise ValueError("destination must be 1–16 characters")
@@ -28,6 +32,14 @@ class MailService:
             raise ValueError("body must contain 1–4000 UTF-8 bytes")
         if not 0 <= priority <= 3:
             raise ValueError("priority must be between 0 and 3")
+        if enhanced_mode is not None and enhanced_mode not in ENHANCED_MODES:
+            raise ValueError("invalid JS8M mode")
+        # JS8Call groups are broadcast destinations, not a single enhanced
+        # endpoint.  Keep their wire format ordinary and human-readable;
+        # capability negotiation and JS8Mail multipart framing are only for
+        # directed station delivery.
+        if destination.startswith("@"):
+            enhanced_mode = "standard"
         message_id = secrets.token_hex(8)
         self.database.enqueue_message(
             message_id,
@@ -36,6 +48,7 @@ class MailService:
             subject=subject.strip()[:120],
             priority=priority,
             expires_at_ms=utc_now_ms() + DEFAULT_MESSAGE_TTL_MS,
+            enhanced_mode=enhanced_mode,
         )
         return message_id
 

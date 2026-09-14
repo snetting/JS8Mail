@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from js8mail.adapters.js8call.client import Js8CallClient
 from js8mail.adapters.js8call.protocol import normalize_directed_event
 from js8mail.application.lifecycle import MessageState
-from js8mail.application.service import MailService
+from js8mail.application.service import ENHANCED_MODES, MailService
 from js8mail.bands import band_from_frequency_hz, context_from_params
 from js8mail.discovery import (
     PendingCallQuery,
@@ -145,7 +145,7 @@ body{font:15px system-ui;max-width:1250px;margin:2em auto;padding:0 1em;backgrou
  .workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:1em;align-items:stretch}.workspace section{margin:0;min-width:0}.workspace>section{min-height:260px}.inbox-panel{max-height:360px;overflow:auto}.live-panel{min-height:300px}.live-panel svg{width:100%;min-height:280px;background:#fbfcfd;border-radius:6px}.stations-panel{grid-column:2;grid-row:2 / span 2}.groups-panel{grid-column:1}#messages th:nth-child(2),#messages td:nth-child(2){width:8em}#messages th:nth-child(4),#messages td:nth-child(4){width:17em;white-space:nowrap}@media(max-width:800px){.workspace{display:block}.workspace>section{margin:1em 0}.stations-panel{grid-column:auto;grid-row:auto}#messages th:nth-child(4),#messages td:nth-child(4){width:auto;white-space:normal}}
 section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em;margin:1em 0}input,textarea,select{box-sizing:border-box;width:100%;padding:.5em;margin:.25em 0 .7em}textarea{height:110px}button{background:#1769aa;color:#fff;border:0;border-radius:5px;padding:.5em .8em;margin:.2em;cursor:pointer}.danger{background:#a33}.pill{display:inline-block;padding:.3em .6em;border-radius:1em;background:#e8edf2;margin:.2em}.ok{background:#d8f3dc}.warn{background:#fff1c2}.state-pill{display:inline-block;padding:.3em .6em;border-radius:1em;margin:.2em;font-weight:600;white-space:nowrap}.state-in-progress{background:#dbeafe;color:#174ea6}.state-complete{background:#d8f3dc;color:#176b35}.state-complete-plus{background:#b7f0d0;color:#075c38}.state-failed{background:#ffd9d9;color:#8b1e1e}.state-cancelled,.state-expired{background:#e8edf2;color:#53606d}#status .pill:nth-child(3){display:none}.mono{font:12px monospace;white-space:pre-wrap;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}svg{display:block;max-width:100%;height:auto}td,th{text-align:left;border-bottom:1px solid #e4e9ee;padding:.5em;vertical-align:top;overflow-wrap:anywhere}#messages th:nth-child(4),#messages td:nth-child(4){width:18em;white-space:normal}.outbox-actions{display:flex;flex-wrap:wrap;gap:.3em;align-items:flex-start}.outbox-actions button{margin:0;padding:.4em .55em;white-space:nowrap}details summary{cursor:pointer;padding:.25em 0}details summary::marker{color:#1769aa}
 </style><div class=topbar><h1>JS8Mail</h1><p>Resilient radio mail for reliable offline comms · by <a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN</a> <button onclick="useStation('OH3SPN')">Compose to OH3SPN</button></p><section><div id=status>Loading…</div><div id=radio-leds class=leds><span id=led-rx class='led on-rx'>RX</span><span id=led-dcd class='led'>DCD</span><span id=led-tx class='led'>TX</span><span id=led-err class='led'>ERR</span><span id=led-js8 class='led'>JS8</span></div></section></div><style>.leds{display:inline-flex;gap:.3em;margin-left:.5em;vertical-align:middle}.led{padding:.25em .5em;border-radius:1em;background:#e8edf2;color:#53606d;font-size:12px;font-weight:600}.led.on-rx{background:#d8f3dc;color:#176b35}.led.on-tx{background:#ffd9d9;color:#8b1e1e}.led.on-dcd{background:#fff1c2;color:#785500}.led.on-err{background:#8b1e1e;color:white}#status .pill:nth-child(3){display:none}</style>
-<div class=workspace><section class=compose-panel><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select><button>Queue locally</button></form><span id=result></span></section>
+<div class=workspace><section class=compose-panel><h2>Compose</h2><p>JS8M sending mode <select name=enhanced_mode id=default-enhanced-mode title='Default for new messages'><option value=opportunistic>Opportunistic (recommended)</option><option value=standard>Standard JS8Call</option><option value=required>Required JS8M</option></select><br><small>Standard sends immediately using JS8Call. Opportunistic uses JS8M for known capable stations and otherwise sends ordinary mail. Required waits for a JS8M capability response. Group broadcasts always use Standard.</small></p><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select>Message mode<select name=enhanced_mode title='Override the default for this message'><option value=''>Use default</option><option value=standard>Standard JS8Call</option><option value=opportunistic>Opportunistic</option><option value=required>Required JS8M</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section class=live-panel><h2>Live RF Activity <small id=live-graph-meta></small></h2><div id=live-graph><p>Waiting for active-band observations.</p></div></section>
 <section class=inbox-panel><h2>Inbox</h2><div id=inbox>Loading…</div></section>
 <section class=stations-panel><h2>Recently heard stations</h2><input id=station-search type=search placeholder='Filter callsigns or evidence'><div id=stations>Loading…</div></section>
@@ -169,7 +169,7 @@ function markLiveGraphNodes(){let svg=document.querySelector('#live-graph svg');
 function useStation(call){document.querySelector('#compose input[name=destination]').value=call;document.querySelector('#compose input[name=destination]').focus();document.querySelector('.compose-panel')?.scrollIntoView({behavior:'smooth',block:'start'})}
 let stationCache=[];function renderStations(){let q=document.getElementById('station-search').value.trim().toUpperCase();let s=stationCache.filter(x=>!q||x.callsign.includes(q)||x.evidence.join(' ').toUpperCase().includes(q));document.getElementById('stations').innerHTML=s.length?'<table><tr><th>Callsign</th><th>Age</th><th>SNR</th><th>Evidence</th><th>Action</th></tr>'+s.map(x=>`<tr><td><b>${esc(x.callsign)}</b></td><td>${esc(relativeAge(x.age_seconds))}</td><td>${x.snr==null?'—':esc(x.snr)+' dB'}</td><td>${esc(x.evidence.map(evidenceLabel).join(', '))}</td><td><button onclick="useStation('${esc(x.callsign)}')">Compose</button></td></tr>`).join('')+'</table>':'<p>No matching station evidence.</p>'}async function refreshStations(){stationCache=await api('/api/stations');renderStations()}
 function renderInbox(items){document.getElementById('inbox').innerHTML=items.length?'<table><tr><th>From</th><th>Status</th><th>Message</th><th>Updated</th></tr>'+items.map(x=>`<tr><td><b>${esc(x.sender)}</b></td><td><span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts+' parts'}</span></td><td class=mono>${esc(x.body)}</td><td>${esc(new Date(x.updated_at_ms).toLocaleString())}<br>${esc(x.path||'')}</td></tr>`).join('')+'</table>':'<p>No received messages.</p>'}
-async function refresh(){let s=await api('/api/status'),statusHtml=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class='pill ${s.paused?'warn':'ok'}'>RF: ${s.paused?'paused':'active'}</span><span class=pill>Port: ${s.port}</span><button onclick="togglePause()">${s.paused?'Resume RF':'Pause RF'}</button>`;let statusEl=document.getElementById('status');if(statusEl.dataset.rendered!==statusHtml){statusEl.innerHTML=statusHtml;statusEl.dataset.rendered=statusHtml}let m=await api('/api/messages');let openIds=[...document.querySelectorAll('#messages details[open]')].map(d=>d.dataset.id);document.getElementById('messages').innerHTML=m.length?'<table><tr><th>Message</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><details data-id='${esc(x.id)}' ${openIds.includes(x.id)?'open':''}><summary>${statePill(x)} · <span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?` · retry ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (#${x.retry_count})`:''}</summary><div class=mono>${(x.attempts||[]).map(a=>`<span class=timeline-time>${new Date(a.created_at_ms).toLocaleTimeString()}</span> ${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}`).join('<br>')||'No attempts recorded.'}</div></details></td><td>${esc(x.destination)}</td><td><b>${esc(x.subject||'(no subject)')}</b><br>${esc(x.body)}</td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route','in_progress'].includes(x.state)?`<button onclick="act('${x.id}','retry-now')">Retry now</button>`:''}${['queued','waiting_route','in_progress'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled','expired','delivered'].includes(x.state)?`<button class=danger onclick="act('${x.id}','delete')">Remove</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
+async function refresh(){let s=await api('/api/status'),statusHtml=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class='pill ${s.paused?'warn':'ok'}'>RF: ${s.paused?'paused':'active'}</span><span class=pill>Port: ${s.port}</span><button onclick="togglePause()">${s.paused?'Resume RF':'Pause RF'}</button>`;let defaultMode=document.getElementById('default-enhanced-mode');if(defaultMode&&defaultMode.value!==s.enhanced_mode)defaultMode.value=s.enhanced_mode||'opportunistic';let statusEl=document.getElementById('status');if(statusEl.dataset.rendered!==statusHtml){statusEl.innerHTML=statusHtml;statusEl.dataset.rendered=statusHtml}let m=await api('/api/messages');let openIds=[...document.querySelectorAll('#messages details[open]')].map(d=>d.dataset.id);document.getElementById('messages').innerHTML=m.length?'<table><tr><th>Message</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><details data-id='${esc(x.id)}' ${openIds.includes(x.id)?'open':''}><summary>${statePill(x)} · <span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?` · retry ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (#${x.retry_count})`:''}</summary><div class=mono>${(x.attempts||[]).map(a=>`<span class=timeline-time>${new Date(a.created_at_ms).toLocaleTimeString()}</span> ${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}`).join('<br>')||'No attempts recorded.'}</div></details></td><td>${esc(x.destination)}</td><td><b>${esc(x.subject||'(no subject)')}</b><br>${esc(x.body)}</td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route','in_progress'].includes(x.state)?`<button onclick="act('${x.id}','retry-now')">Retry now</button>`:''}${['queued','waiting_route','in_progress'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled','expired','delivered'].includes(x.state)?`<button class=danger onclick="act('${x.id}','delete')">Remove</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
 const EMERGENCY_GROUPS=['@EMCOMM','@ARES','@RACES','@RAYNET','@NTS','@SKYWARN','@WX','@AMRRON'];function useGroup(group){document.querySelector('#compose input[name=destination]').value=group;document.querySelector('#compose input[name=destination]').focus()}function renderGroups(items){let groups=items.filter(x=>EMERGENCY_GROUPS.includes(x.name));document.getElementById('groups').innerHTML=groups.length?'<table><tr><th>Group</th><th>Purpose</th><th>Seen</th><th>Action</th></tr>'+groups.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.description||'emergency group')}</td><td>${x.seen_count?esc(relativeAge((Date.now()-x.last_seen_at_ms)/1000)):'not yet observed'}</td><td><button onclick="useGroup('${esc(x.name)}')">Compose</button><button onclick="actGroup('${esc(x.name)}','${x.subscribed?'unsubscribe':'subscribe'}')">${x.subscribed?'Unsubscribe':'Subscribe'}</button></td></tr>`).join('')+'</table>':'<p>No emergency groups recorded.</p>'}function renderAlerts(items){let alerts=items.filter(x=>x.group_name);document.getElementById('alerts').innerHTML=alerts.length?alerts.map(x=>`<article><b>${esc(x.group_name)} · ${esc(x.sender)}</b> <span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts}</span><div class=mono>${esc(x.body)}</div><small>${esc(new Date(x.updated_at_ms).toLocaleString())} · ${esc(x.path||'')}</small></article>`).join(''):'<p>No group alerts received.</p>'}
 const refreshMailbox=refresh;refresh=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);return refreshMailbox()};const updateRadioLeds=async()=>{let s=await api('/api/status'),activity=s.connected?(s.radio_activity||'RX'):'ERR';document.querySelectorAll('#radio-leds .led').forEach(x=>x.className='led');let led=document.getElementById('led-'+activity.toLowerCase());if(led)led.className='led on-'+activity.toLowerCase()};const refreshWithRadioState=refresh;refresh=async()=>{await refreshWithRadioState();await updateRadioLeds()};
 async function actGroup(group,action){try{await api(`/api/groups/${encodeURIComponent(group)}/${action}`,{method:'POST'});refresh()}catch(e){alert(e)}}
@@ -178,6 +178,7 @@ async function togglePause(){try{let s=await api('/api/status');await api(`/api/
 const expandedMessages=new Set;document.addEventListener('click',e=>{let summary=e.target.closest?.('#messages details summary');if(!summary)return;setTimeout(()=>{let detail=summary.parentElement,id=detail?.querySelector('small')?.textContent.trim();if(id){if(detail.open)expandedMessages.add(id);else expandedMessages.delete(id)}},0)});function restoreExpanded(){document.querySelectorAll('#messages details').forEach(d=>{let id=d.querySelector('small')?.textContent.trim();if(id&&expandedMessages.has(id))d.open=true})}const refreshKeepExpanded=refresh;refresh=async()=>{if(document.querySelector('#messages details[open]')){await updateRadioLeds();return}await refreshKeepExpanded();restoreExpanded()};
 const refreshStable=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);await refreshMailbox()};refresh=async()=>{await refreshStable();await updateRadioLeds();restoreExpanded()};async function addMessageControls(){if(!document.getElementById('outbox-layout-style')){let style=document.createElement('style');style.id='outbox-layout-style';style.textContent='#messages th:nth-child(3),#messages td:nth-child(3){width:15em}#messages th:nth-child(4),#messages td:nth-child(4){width:21em;white-space:normal}#messages td:nth-child(4) button{margin:0;padding:.4em .55em;white-space:nowrap}@media(max-width:800px){#messages th:nth-child(3),#messages td:nth-child(3),#messages th:nth-child(4),#messages td:nth-child(4){width:auto}}';document.head.appendChild(style)}document.querySelectorAll('#messages tr').forEach(row=>{let content=row.cells?.[2],details=row.querySelector('details');if(!content||content.dataset.preview)return;let full=content.innerHTML;content.dataset.preview='true';content.innerHTML=`<div class=message-preview>${full}</div>`;if(details){let expanded=document.createElement('div');expanded.className='message-full outbox-full-content';expanded.innerHTML=`<b>Full content</b><br>${full}`;details.appendChild(expanded)}})}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
+document.getElementById('default-enhanced-mode').onchange=async e=>{try{await api('/api/settings/enhanced-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:e.target.value})});document.getElementById('result').textContent='Default JS8M mode saved'}catch(err){document.getElementById('result').textContent=err}}
 document.addEventListener('submit',e=>{if(e.target.id==='compose')setTimeout(()=>document.getElementById('messages')?.closest('section')?.scrollIntoView({behavior:'smooth',block:'start'}),700)},true);
 document.getElementById('station-search').oninput=renderStations;
 function showInboxMessage(item){let modal=document.getElementById('message-modal');if(!modal){modal=document.createElement('div');modal.id='message-modal';modal.innerHTML='<div class="modal-card" role="dialog" aria-modal="true"><button class="danger modal-close" onclick="closeInboxMessage()">Close</button><div id="message-modal-content"></div></div>';document.body.appendChild(modal)}document.getElementById('message-modal-content').innerHTML=`<h2>${esc(item.subject||'(no subject)')}</h2><p><b>From:</b> ${esc(item.sender)} · <b>Status:</b> ${item.complete?'Complete':'Partial · '+item.received_parts.length+'/'+item.total_parts+' parts'}</p><div class=message-full>${esc(item.body)}</div><p><small>${esc(new Date(item.updated_at_ms).toLocaleString())} · ${esc(item.path||'')}</small></p>`;modal.style.display='flex'}function closeInboxMessage(){let modal=document.getElementById('message-modal');if(modal)modal.style.display='none'}
@@ -356,12 +357,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.service.database.audit("radio.automation_resumed", {"source": "ui"})
                 self.reply(200, {"ok": True, "paused": False})
                 return
+            if path == "/api/settings/enhanced-mode":
+                mode = str(payload.get("mode", "")).strip().lower()
+                if mode not in ENHANCED_MODES:
+                    raise ValueError("mode must be standard, opportunistic, or required")
+                self.status["enhanced_mode"] = mode
+                self.service.database.set_configuration("enhanced_mode", mode)
+                self.service.database.audit("settings.enhanced_mode_changed", {"mode": mode})
+                self.reply(200, {"ok": True, "enhanced_mode": mode})
+                return
             if path == "/api/messages":
+                requested_mode = str(payload.get("enhanced_mode", "")).strip().lower()
+                if not requested_mode:
+                    requested_mode = str(self.status.get("enhanced_mode", "opportunistic"))
                 message_id = self.service.compose(
                     str(payload.get("destination", "")),
                     str(payload.get("subject", "")),
                     str(payload.get("body", "")),
                     int(payload.get("priority", 0)),
+                    requested_mode,
                 )
                 # Let the scheduler place the first probe behind any active
                 # delivery, capability negotiation, or discovery exchange.
@@ -431,7 +445,14 @@ class Handler(BaseHTTPRequestHandler):
         if plan is not None and getattr(plan, "action", None) == "defer":
             raise RuntimeError("no usable route selected")
         path = plan.path if plan is not None else (origin, destination)
-        peer = self.service.database.peer_capabilities(destination)
+        enhanced_mode = str(
+            message.get("enhanced_mode") or self.status.get("enhanced_mode", "opportunistic")
+        ).lower()
+        peer = (
+            self.service.database.peer_capabilities(destination)
+            if enhanced_mode != "standard"
+            else None
+        )
         capability_attempts = [
             attempt for attempt in self.service.database.list_attempts(message_id)
             if attempt["action"] == "capability" and attempt["status"] == "submitted"
@@ -440,7 +461,8 @@ class Handler(BaseHTTPRequestHandler):
             path, self.status.get("speed", 0)
         )
         if (
-            not destination.startswith("@")
+            enhanced_mode == "required"
+            and not destination.startswith("@")
             and peer is None
             and capability_attempts
         ):
@@ -502,6 +524,8 @@ class Handler(BaseHTTPRequestHandler):
         # and prepare for enhanced framing. This is opportunistic: no response
         # is awaited, and ordinary stations remain valid recipients.
         if (
+            enhanced_mode != "standard"
+            and
             not destination.startswith("@")
             and destination not in self.announced_destinations
             and self.service.database.peer_capabilities(destination) is None
@@ -609,10 +633,17 @@ class Handler(BaseHTTPRequestHandler):
         if message["state"] not in {MessageState.QUEUED, MessageState.WAITING_ROUTE}:
             raise ValueError("message is not ready for storage")
         destination = str(message["destination"])
+        enhanced_mode = str(
+            message.get("enhanced_mode") or self.status.get("enhanced_mode", "opportunistic")
+        ).lower()
         # CAP is sent before the first enhanced/ordinary payload. Do not let
         # the custodian fallback bypass that negotiation on the next scheduler
         # pass while the CAP frame is still in flight or awaiting a response.
-        if not destination.startswith("@") and self.service.database.peer_capabilities(destination) is None:
+        if (
+            enhanced_mode == "required"
+            and not destination.startswith("@")
+            and self.service.database.peer_capabilities(destination) is None
+        ):
             capability_attempts = [
                 attempt for attempt in self.service.database.list_attempts(message_id)
                 if attempt["action"] == "capability" and attempt["status"] == "submitted"
@@ -786,6 +817,9 @@ async def run(args: argparse.Namespace) -> None:
     service = MailService(database)
     for group, description in DEFAULT_GROUPS:
         database.ensure_group(group, description)
+    configured_mode = database.get_configuration("enhanced_mode", "opportunistic")
+    if configured_mode not in ENHANCED_MODES:
+        configured_mode = "opportunistic"
     client = Js8CallClient(args.host, args.port)
     loop = asyncio.get_running_loop()
     saved_airtime = database.airtime_state()
@@ -809,6 +843,7 @@ async def run(args: argparse.Namespace) -> None:
         "band": "",
         "dial_frequency": None,
         "speed": "unknown",
+        "enhanced_mode": configured_mode,
         "radio_activity": "RX",
         "dcd_until_ms": 0,
         "js8_activity_until_ms": 0,

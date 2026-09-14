@@ -11,7 +11,7 @@ from typing import Any
 from js8mail.bands import context_from_params
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 19
 
 
 class Database:
@@ -364,6 +364,23 @@ class Database:
                     VALUES (17, strftime('%s','now') * 1000);
                 """
             )
+        if current < 18:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS configuration (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                INSERT INTO schema_migrations(version, applied_at_ms)
+                    VALUES (18, strftime('%s','now') * 1000);
+                """
+            )
+        if current < 19:
+            self.connection.execute("ALTER TABLE messages ADD COLUMN enhanced_mode TEXT")
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at_ms) "
+                "VALUES (19, strftime('%s','now') * 1000)"
+            )
         self.connection.commit()
 
     def record_observation(
@@ -567,12 +584,13 @@ class Database:
         subject: str = "",
         priority: int = 0,
         expires_at_ms: int | None = None,
+        enhanced_mode: str | None = None,
     ) -> None:
         now = utc_now_ms()
         self.connection.execute(
-            "INSERT INTO messages(id, destination, subject, body, priority, state, expires_at_ms, created_at_ms, updated_at_ms) "
-            "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-            (message_id, destination, subject, body, priority, expires_at_ms, now, now),
+            "INSERT INTO messages(id, destination, subject, body, priority, state, expires_at_ms, "
+            "created_at_ms, updated_at_ms, enhanced_mode) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+            (message_id, destination, subject, body, priority, expires_at_ms, now, now, enhanced_mode),
         )
         self.connection.commit()
         self.audit("message.queued", {"message_id": message_id, "destination": destination})
@@ -928,3 +946,17 @@ class Database:
                 self.connection.execute(f"DELETE FROM {table} WHERE message_id = ?", (message_id,))
             self.connection.execute("DELETE FROM messages WHERE id = ?", (message_id,))
         self.audit("message.removed", {"message_id": message_id})
+
+    def get_configuration(self, key: str, default: str = "") -> str:
+        row = self.connection.execute(
+            "SELECT value FROM configuration WHERE key = ?", (key,)
+        ).fetchone()
+        return str(row["value"]) if row is not None else default
+
+    def set_configuration(self, key: str, value: str) -> None:
+        self.connection.execute(
+            "INSERT INTO configuration(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self.connection.commit()

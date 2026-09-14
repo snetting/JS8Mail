@@ -74,7 +74,9 @@ async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tm
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
-    message_id = service.compose("N0CALL", "first contact", "hello ordinary station")
+    message_id = service.compose(
+        "N0CALL", "first contact", "hello ordinary station", enhanced_mode="required"
+    )
     radio = FakeRadio()
     handler = object.__new__(Handler)
     handler.service = service
@@ -107,4 +109,36 @@ async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tm
 
     assert radio.sent[-1] == "N0CALL MSG hello ordinary station"
     assert database.list_attempts(message_id)[-1]["status"] == "submitted"
+    database.close()
+
+
+@pytest.mark.asyncio
+async def test_standard_mode_sends_plain_message_without_capability_probe(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("N0CALL", "standard", "hello", enhanced_mode="standard")
+    radio = FakeRadio()
+    handler = object.__new__(Handler)
+    handler.service = service
+    handler.client = radio
+    handler.status = {
+        "callsign": "OH3SPN", "tx_mode": "automatic", "paused": False,
+        "speed": 0, "band": "20m", "js8_activity_until_ms": 0,
+        "enhanced_mode": "standard",
+    }
+    handler.announced_destinations = set()
+    handler.airtime_budget = AirtimeBudget()
+    handler.message_budgets = {}
+    handler.tx_lock = asyncio.Lock()
+    handler.last_tx_at_ms = None
+    handler.auto_speed = False
+
+    await handler.transmit(message_id)
+
+    assert len(radio.sent) == 1
+    assert radio.sent[0].startswith("N0CALL MSG ")
+    assert "CAP" not in radio.sent[0]
+    assert radio.sent[0].endswith(" hello")
+    assert all(attempt["action"] != "capability" for attempt in database.list_attempts(message_id))
     database.close()

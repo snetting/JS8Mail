@@ -43,6 +43,18 @@ def test_compose_validates_bounds(tmp_path: Path) -> None:
     database.close()
 
 
+def test_group_messages_are_forced_to_standard_mode(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose(
+        "@EMCOMM", "alert", "plain group bulletin", enhanced_mode="required"
+    )
+    message = database.get_message(message_id)
+    assert message is not None
+    assert message["enhanced_mode"] == "standard"
+    database.close()
+
+
 def test_recently_heard_does_not_count_as_a_directed_answer(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
