@@ -71,6 +71,14 @@ default):
 ./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765
 ```
 
+For a controlled speed experiment, add `--auto-speed`. Without that flag the
+daemon records speed evidence and displays recommendations but leaves the
+JS8Call mode unchanged:
+
+```sh
+./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --auto-speed
+```
+
 The current command-line modes are:
 
 | Mode | Behaviour |
@@ -79,11 +87,26 @@ The current command-line modes are:
 | `approve` | Reserved safety mode for an approval-gated workflow. |
 | `automatic` | Submit eligible JS8Mail frames to JS8Call after the safety checks. |
 
+The web UI is local-only by default. It is the operator control surface for
+queueing, inspecting, retrying, cancelling, removing completed/failed local
+mail, selecting the system JS8M mode, pausing RF handoff, and opening the
+message/path graph. The UI does not bypass the daemon's validation, one-at-a-
+time transmit arbiter, route evidence, or airtime budgets.
+
 The current UI is intentionally functional rather than visually elaborate. It
 contains an inbox, compose form, recently heard stations, emergency/group
 catalogue, outbox timeline, graph view, and recent observations. Queueing a
 message scrolls the page to the outbox. Expanding an outbox item pauses full
 mailbox redraws so the detail view does not collapse while reading it.
+
+The header also shows the current JS8Call connection, station callsign, active
+band and dial frequency, RF pause state, and compact RX/DCD/TX/ERR/JS8
+indicators. RX is the normal receive state; DCD is lit when JS8Call reports a
+decode event; TX is lit during an observed transmit; ERR indicates a control
+or connection problem; JS8 briefly indicates JS8Mail-to-JS8Call activity.
+The band is read from JS8Call and is part of the active routing context. A
+frequency value is retained for audit/provenance, but small VFO offsets do not
+create a separate route graph.
 
 ## JS8Call configuration
 
@@ -323,6 +346,35 @@ The current operational policy is conservative:
 - retries use exponential/time-aware backoff and stop at message expiry;
 - all transmissions pass through one serialized transmit path.
 
+An unsuccessful direct attempt does not permanently disqualify the direct
+route. The attempted path and its result are persisted, the path is cooled
+down, and the next-ranked viable path may be tried. On a later retry the
+planner scores all currently viable paths again, including previously failed
+ones, so a route can recover when propagation changes. A newly observed direct
+reply or a remote `YES` report wakes matching queued messages immediately; it
+does not wait for the old retry timer.
+
+### JS8M sending mode
+
+The **System sending mode** selector sets the default for new directed
+messages, with an optional per-message override. It is deliberately separate
+from the daemon's RF handoff mode:
+
+- **Standard** sends ordinary JS8Call-readable text and does not wait for a
+  JS8Mail capability exchange;
+- **Opportunistic** (the default) uses enhanced framing for peers whose valid
+  `CAP` advertisement is already known, while an unknown peer proceeds with
+  ordinary delivery;
+- **Required** sends `J8M1 CAP` first and waits for a capability response
+  before using enhanced framing; if no response arrives within the calculated
+  path-aware window, it falls back to ordinary delivery according to policy.
+
+Group and bulletin messages are always Standard. Every receiver still parses
+valid JS8Mail frames and can answer capability, part, resend, and delivery
+receipts regardless of its outbound default. A `CAP` advertisement is not an
+ACK: only a valid response establishes the peer capability, and a normal
+JS8Call `ACK` remains hop evidence.
+
 ### 9. Submit safely to JS8Call
 
 Before submission JS8Mail validates callsigns, sizes, framing, and airtime.
@@ -367,8 +419,17 @@ destination reports a missing-part bitmap, JS8Mail retransmits only those
 parts, using the recorded reverse path when available. If a final receipt
 contains a known accepted custodian, the outbox also records that custodian as
 forwarded. Standard JS8Call relay/store remains the compatibility transport;
-an intermediate station is not assumed to run JS8Mail merely because it carries
-an opaque `J8M1` frame.
+an intermediate station is not assumed to run JS8Mail merely because it
+carries an opaque `J8M1` frame.
+
+For a standard stored message, a response such as `YES MSG 426` is correlated
+with the exact JS8Call message identifier when available. If the returned
+content is truncated or has missing sections, JS8Mail creates or updates a
+visible amber Partial inbox item and issues a bounded `QUERY MSG 426` retry.
+When the complete response arrives it reconciles the same item to Complete;
+it does not create a duplicate. This recovery is necessarily less expressive
+than JS8M part acknowledgements because a legacy station does not know the
+JS8Mail part bitmap.
 
 ## JS8Mail enhanced peers
 
@@ -464,6 +525,16 @@ QUERY MSGS` is broad and slow; targeted custodians and recent successful
 stations are preferred. The purpose is to leave listening opportunities and
 avoid retry storms, relay loops, group ACK storms, and sustained channel use.
 
+The current default safety budgets are explicit. A single message may use at
+most 10 minutes in its rolling per-message burst window (the accounting
+cadence is 15 minutes) and at most 60 minutes cumulatively over its lifetime.
+The station-wide rolling budget is independent and is persisted in SQLite
+across daemon restarts. A rolling-window block defers transmission until the
+window rolls over; reaching the message lifetime ceiling marks that message
+Failed rather than retrying forever. These are local policy blocks, not
+evidence that the radio is busy, and they do not prevent other messages from
+being considered when their own budgets permit.
+
 ## Groups and emergency bulletins
 
 JS8Mail uses existing JS8Call group addressing. The UI keeps a conservative
@@ -504,8 +575,9 @@ return-path handling, and protection against missing a receipt window. Those
 controls are not mature enough to enable by default.
 
 An allowed-band profile and optional band hopping remain suitable future work.
-Until then, change bands manually in JS8Call and treat evidence from another
-band as historical advice, not as an immediately usable route.
+Until then, change bands manually in JS8Call and allow the active-band view to
+settle before testing a new route. Evidence from another band remains useful
+historical data, but cannot trigger an automatic route on the current band.
 
 ## Testing without a second station
 
@@ -577,10 +649,12 @@ Back up `js8mail.sqlite3` only when the daemon is stopped or SQLite's backup
 facilities are used; the database may have WAL sidecar files while running.
 
 The optional online topology service is not required by any local decision.
+The client-side upload/download integration is not enabled in this release.
 If enabled in a future build, it should receive only disclosed observation
 metadata, never message content, audio, credentials, or private notes. A key
 embedded in source would be a public application token, not meaningful
-authentication.
+authentication; it is only a low-friction abuse filter and must not be treated
+as a secret.
 
 ## Development and verification
 
@@ -605,12 +679,15 @@ unverified JS8Call API details:
 - [`API_CAPABILITY_MATRIX.md`](API_CAPABILITY_MATRIX.md)
 - [`PROTOCOL_V1.md`](PROTOCOL_V1.md)
 
-## Roadmap boundaries
+## Current limitations and roadmap boundaries
 
-The local-only foundation is the priority. Future work includes a clearer
-route-graph projection that separates global evidence from message-specific
-paths, more complete live capability probing, stronger custody forwarding
-correlation across real intermediate JS8Mail nodes, optional per-peer speed
-control, configured multi-band operation, and the privacy-disclosed shared
-topology service. None of these should make the emergency RF path depend on
-the Internet.
+The local-only foundation is the priority, but a few boundaries remain
+important. The current daemon does not autonomously change bands, and it does
+not yet import/reconcile every message already sitting only in JS8Call's local
+inbox if the corresponding live API event was missed. Standard JS8Call
+custodians provide compatibility store-and-forward; only a JS8Mail-aware
+custodian can preserve part IDs and provide enhanced selective recovery.
+The shared topology service remains an optional future component, as do richer
+prediction, configured multi-band dwell scheduling, and broader cross-station
+custody reconciliation. None of these should make the emergency RF path
+depend on the Internet.
