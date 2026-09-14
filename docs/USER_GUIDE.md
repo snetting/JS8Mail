@@ -8,7 +8,7 @@ JS8Mail adds a durable mailbox, evidence collection, route selection, custody
 tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
-This document describes the current `0.0.2` implementation. It is useful and
+This document describes the current `0.0.3` implementation. It is useful and
 radio-capable, but still early and experimental. In particular, a route score
 is evidence-based advice, not a guarantee that a station is listening now.
 Always operate within your licence, local band plan, power limits, and the
@@ -359,6 +359,16 @@ The graph view uses these colours:
 The graph is an evidence view, not a promise that every grey edge is an
 available relay. A future UI improvement should separate “global observations”
 from “paths actually attempted for this message” even more explicitly.
+
+For enhanced multipart traffic, a plain ACK is intentionally weaker even when
+it comes from the final callsign: it confirms a JS8Call hop, not complete
+reassembly by the JS8Mail client. The sender waits for `J8M1 DELIVERED`. If the
+destination reports a missing-part bitmap, JS8Mail retransmits only those
+parts, using the recorded reverse path when available. If a final receipt
+contains a known accepted custodian, the outbox also records that custodian as
+forwarded. Standard JS8Call relay/store remains the compatibility transport;
+an intermediate station is not assumed to run JS8Mail merely because it carries
+an opaque `J8M1` frame.
 
 ## JS8Mail enhanced peers
 

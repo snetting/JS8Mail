@@ -457,6 +457,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("message is not ready for storage")
         destination = str(message["destination"])
         text = format_store_message(custodian, destination, str(message["body"]))
+        origin = str(self.status.get("callsign", "")).upper()
+        if origin:
+            self.service.database.record_message_path(message_id, (origin, custodian.upper()))
         self.service.database.record_attempt(
             message_id, "store", custodian, "started", f"offer for later retrieval by {destination}"
         )
@@ -566,19 +569,25 @@ class Handler(BaseHTTPRequestHandler):
                 raise RuntimeError("message airtime budget exhausted")
         # A short, independent protocol LED makes API/RF handoff visible even
         # when the radio remains in its normal RX state.
-        self.status["js8_activity_until_ms"] = utc_now_ms() + 1_000
-        await self.client.send_message(text)
-        self.last_tx_at_ms = utc_now_ms()
-        self.airtime_budget.spend_at(airtime_ms, now)
-        if message_budget is not None:
-            message_budget.spend_at(airtime_ms, now)
-            if message_id is not None:
-                self.service.database.save_message_airtime(message_id, message_budget.message_used_ms)
+        # Reserve before handing text to JS8Call. If the daemon dies after
+        # submission but before the next line, the durable counters are still
+        # conservative rather than silently under-counting airtime. A rejected
+        # API submission may over-count slightly, which is safer than a retry
+        # storm or duty-cycle breach.
+        if not self.airtime_budget.spend_at(airtime_ms, now):
+            raise RuntimeError("local airtime budget exhausted")
+        if message_budget is not None and not message_budget.spend_at(airtime_ms, now):
+            raise RuntimeError("message airtime budget exhausted")
+        if message_budget is not None and message_id is not None:
+            self.service.database.save_message_airtime(message_id, message_budget.message_used_ms)
         self.service.database.save_airtime_state(
             self.airtime_budget.window_started_at_ms,
             self.airtime_budget.window_used_ms,
             self.airtime_budget.message_used_ms,
         )
+        self.status["js8_activity_until_ms"] = utc_now_ms() + 1_000
+        await self.client.send_message(text)
+        self.last_tx_at_ms = utc_now_ms()
         self.service.database.audit(
             "radio.airtime_reserved", {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed}
         )
@@ -826,10 +835,24 @@ async def run(args: argparse.Namespace) -> None:
                     attempts = database.list_attempts(str(message["id"]))
                     direct_submissions = [
                         attempt for attempt in attempts
-                        if attempt["action"] == "direct" and attempt["status"] == "submitted"
+                        if attempt["action"] in {"direct", "multipart"}
+                        and attempt["status"] == "submitted"
                     ]
+                    enhanced_message = bool(
+                        database.list_message_parts(
+                            str(message["id"]),
+                            direction="outgoing",
+                            peer=destination,
+                        )
+                    )
                     has_followup = any(
-                        attempt["action"] in {"hop_ack", "standard_ack", "delivery_ack"}
+                        (
+                            attempt["action"] in {"hop_ack", "delivery_ack"}
+                            or (
+                                attempt["action"] == "standard_ack"
+                                and not enhanced_message
+                            )
+                        )
                         and attempt["status"] in {"received", "confirmed"}
                         for attempt in attempts
                     )
@@ -856,6 +879,36 @@ async def run(args: argparse.Namespace) -> None:
                                     False,
                                     str(status.get("band", "")),
                                 )
+                    # A relay-hop ACK proves custody of that hop, not final
+                    # delivery. Do not retry during the short forwarding
+                    # deadline, but do not leave the message permanently
+                    # stuck in IN_PROGRESS if the relay never produces a
+                    # final ACK/receipt either.
+                    relay_hop_acks = [
+                        attempt for attempt in attempts
+                        if attempt["action"] == "standard_ack"
+                        and attempt["status"] == "received"
+                        and str(attempt["target"]).upper() != destination.upper()
+                    ]
+                    if relay_hop_acks and not any(
+                        attempt["action"] == "delivery_ack"
+                        and attempt["status"] in {"received", "confirmed"}
+                        for attempt in attempts
+                    ):
+                        last_hop_ack = int(relay_hop_acks[-1]["created_at_ms"])
+                        if now_wall_ms - last_hop_ack >= DIRECT_RESPONSE_DEADLINE_MS:
+                            database.record_attempt(
+                                str(message["id"]),
+                                "relay_forward_timeout",
+                                destination,
+                                "failed",
+                                "hop acknowledged but no final delivery evidence arrived",
+                            )
+                            database.transition_message(
+                                str(message["id"]), MessageState.WAITING_ROUTE
+                            )
+                            database.wake_message_for_route(str(message["id"]))
+                            continue
                 if (
                     message["state"] == MessageState.WAITING_ROUTE
                     and
@@ -1368,6 +1421,13 @@ async def run(args: argparse.Namespace) -> None:
                         if matched is not None:
                             message, attempt = matched
                             message_id = str(message["id"])
+                            enhanced_message = bool(
+                                database.list_message_parts(
+                                    message_id,
+                                    direction="outgoing",
+                                    peer=str(message["destination"]),
+                                )
+                            )
                             if attempt["action"] == "store":
                                 database.upsert_custody(
                                     message_id, source, "accepted", "standard JS8Call store ACK"
@@ -1386,8 +1446,12 @@ async def run(args: argparse.Namespace) -> None:
                                 database.record_attempt(
                                     message_id, "standard_ack", source, "received", detail
                                 )
-                                if source.upper() == destination and message["state"] == MessageState.IN_PROGRESS:
-                                    database.transition_message(message_id, MessageState.DELIVERED)
+                            if (
+                                source.upper() == destination
+                                and message["state"] == MessageState.IN_PROGRESS
+                                and not enhanced_message
+                            ):
+                                database.transition_message(message_id, MessageState.DELIVERED)
                                 origin = str(status.get("callsign", "")).upper()
                                 if origin:
                                     try:
@@ -1411,17 +1475,24 @@ async def run(args: argparse.Namespace) -> None:
                                 metadata = parse_delivery_ack(frame.payload if frame is not None else "")
                                 receipt_path = metadata[2] if metadata is not None else ()
                                 destination_matches = source.upper() == str(receipt_message["destination"]).upper()
-                                custody_row = next(
-                                    (
-                                        item for item in database.list_custody(message_id)
-                                        if item["custodian"].upper() == source.upper()
-                                        and item["status"] in {"accepted", "retrieval_pending", "forwarded"}
-                                    ),
-                                    None,
-                                )
-                                forwarded_matches = (
-                                    custody_row is not None
-                                    and str(receipt_message["destination"]).upper() in {item.upper() for item in receipt_path}
+                                destination_name = str(receipt_message["destination"]).upper()
+                                custody_rows = [
+                                    item for item in database.list_custody(message_id)
+                                    if item["status"] in {"accepted", "retrieval_pending", "forwarded"}
+                                ]
+                                receipt_nodes = {item.upper() for item in receipt_path}
+                                forwarding_custodians = [
+                                    item for item in custody_rows
+                                    if item["custodian"].upper() in receipt_nodes
+                                    and item["custodian"].upper() != destination_name
+                                ]
+                                # A final destination receipt may arrive from
+                                # the destination itself, rather than from the
+                                # custodian that forwarded it.  Correlate every
+                                # proven custodian named in the receipt path.
+                                forwarded_matches = bool(
+                                    forwarding_custodians
+                                    and destination_name in receipt_nodes
                                 )
                                 if destination_matches or forwarded_matches:
                                     detail = "end-to-end receipt"
@@ -1430,13 +1501,16 @@ async def run(args: argparse.Namespace) -> None:
                                         detail = f"delivered_at={delivered_at_ms}; path={'→'.join(path)}"
                                     database.record_attempt(message_id, "delivery_ack", source, "received", detail)
                                     if forwarded_matches:
-                                        database.upsert_custody(
-                                            message_id, source, "forwarded",
-                                            f"custodian receipt correlated with destination {receipt_message['destination']}",
-                                        )
-                                        database.record_attempt(
-                                            message_id, "custodian_forwarded", source, "confirmed", detail
-                                        )
+                                        for custody_row in forwarding_custodians:
+                                            custodian = str(custody_row["custodian"])
+                                            database.upsert_custody(
+                                                message_id, custodian, "forwarded",
+                                                f"final receipt path includes {destination_name}",
+                                            )
+                                            database.record_attempt(
+                                                message_id, "custodian_forwarded", custodian,
+                                                "confirmed", detail,
+                                            )
                                     if receipt_message["state"] == MessageState.IN_PROGRESS:
                                         database.transition_message(message_id, MessageState.DELIVERED)
                             else:
@@ -1486,10 +1560,7 @@ async def run(args: argparse.Namespace) -> None:
                     parsed_part = parse_human_data_part(frame.payload) if frame is not None else None
                     if parsed_part is not None and isinstance(source, str) and source.upper() != status["callsign"]:
                         part, envelope_origin, envelope_destination = parsed_part
-                        if envelope_destination and envelope_destination.upper() not in {
-                            local_call,
-                            str(event.params.get("TO", "")).upper(),
-                        }:
+                        if envelope_destination and envelope_destination.upper() != local_call:
                             # The surrounding JS8Call address and the
                             # explicit final destination disagree; do not
                             # turn a misaddressed frame into an inbox item.

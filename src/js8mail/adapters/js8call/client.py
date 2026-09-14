@@ -34,7 +34,7 @@ class Js8CallClient:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._handler: EventHandler | None = None
-        self._pending: dict[str, asyncio.Future[ApiMessage]] = {}
+        self._pending: dict[str, tuple[asyncio.Future[ApiMessage], str]] = {}
         self._event_tasks: set[asyncio.Task[None]] = set()
         self._request_counter = 0
 
@@ -52,7 +52,7 @@ class Js8CallClient:
     async def close(self) -> None:
         writer, self._writer = self._writer, None
         self._reader = None
-        for future in self._pending.values():
+        for future, _ in self._pending.values():
             if not future.done():
                 future.set_exception(ConnectionError("JS8Call connection closed"))
         self._pending.clear()
@@ -82,9 +82,26 @@ class Js8CallClient:
                     # caller can count/report it without taking down the daemon.
                     continue
                 request_id = message.request_id
-                pending = self._pending.get(str(request_id)) if request_id is not None else None
-                if pending is not None and not pending.done():
-                    pending.set_result(message)
+                pending_key = str(request_id) if request_id is not None else ""
+                pending = self._pending.get(pending_key)
+                if pending is None:
+                    # Several JS8Call builds replace the client-supplied
+                    # request ID with an internal numeric ID. Requests are
+                    # issued serially by this adapter, so a response-type
+                    # match is safe while still refusing to consume an
+                    # unrelated asynchronous RX/TX event.
+                    matches = [
+                        (key, item)
+                        for key, item in self._pending.items()
+                        if item[1] == message.type or message.type == "API.ERROR"
+                    ]
+                    if len(matches) == 1:
+                        pending_key, pending = matches[0]
+                if pending is not None and not pending[0].done():
+                    if message.type == "API.ERROR":
+                        pending[0].set_exception(RuntimeError(message.value or "JS8Call API error"))
+                    else:
+                        pending[0].set_result(message)
                     continue
                 event = NormalizedEvent(
                     event_type=message.type,
@@ -141,7 +158,15 @@ class Js8CallClient:
             raise ConnectionError("JS8Call is not connected")
         request_id = self._request_id()
         future: asyncio.Future[ApiMessage] = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = future
+        expected_type = {
+            "STATION.GET_CALLSIGN": "STATION.CALLSIGN",
+            "RIG.GET_FREQ": "RIG.FREQ",
+            "RIG.GET_PTT": "RIG.PTT_STATUS",
+            "TX.GET_TEXT": "TX.TEXT",
+            "TX.GET_QUEUE_DEPTH": "TX.QUEUE_DEPTH",
+            "MODE.GET_SPEED": "MODE.SPEED",
+        }.get(request_type, request_type)
+        self._pending[request_id] = (future, expected_type)
         try:
             self._writer.write(encode_read_only_request(request_type, request_id=request_id))
             await self._writer.drain()

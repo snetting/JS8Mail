@@ -21,8 +21,11 @@ class MailService:
         destination = destination.strip().upper()
         if not destination or len(destination) > 16:
             raise ValueError("destination must be 1–16 characters")
-        if not body.strip() or len(body) > 4096:
-            raise ValueError("body must contain 1–4096 characters")
+        # Leave room for the JS8Call directed-message envelope (destination,
+        # command, and the optional first-contact version marker). Enhanced
+        # peers may still use multipart delivery for long bodies.
+        if not body.strip() or len(body.encode("utf-8")) > 4000:
+            raise ValueError("body must contain 1–4000 UTF-8 bytes")
         if not 0 <= priority <= 3:
             raise ValueError("priority must be between 0 and 3")
         message_id = secrets.token_hex(8)

@@ -84,6 +84,43 @@ async def test_client_checks_and_sends_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_client_correlates_server_generated_response_id() -> None:
+    async def server_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        request = json.loads(await reader.readline())
+        writer.write(
+            (
+                json.dumps(
+                    {
+                        "type": "STATION.CALLSIGN",
+                        "value": "OH3SPN",
+                        "params": {"_ID": 123456},
+                    }
+                )
+                + "\n"
+            ).encode()
+        )
+        await writer.drain()
+        assert request["type"] == "STATION.GET_CALLSIGN"
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(server_handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = Js8CallClient(port=port)
+    try:
+        await client.connect()
+        reader_task = asyncio.create_task(client.read_events(lambda _: asyncio.sleep(0)))
+        response = await client.request_read_only("STATION.GET_CALLSIGN")
+        await reader_task
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+    assert response.value == "OH3SPN"
+
+
+@pytest.mark.asyncio
 async def test_event_handler_can_make_read_only_request_without_blocking_reader() -> None:
     request_seen = asyncio.Event()
 

@@ -1,6 +1,6 @@
 # JS8Mail enhanced envelope protocol v1
 
-Status: version 1 specification for the early `JS8Mail/0.0.2` implementation.
+Status: version 1 specification for the early `JS8Mail/0.0.3` implementation.
 
 This is the normative v1 wire specification, not an assertion that every
 JS8Call build exposes every transport feature. The adapter must capability
@@ -54,8 +54,9 @@ token replacement and RF encoding after receiving this readable text.
 
 The `J8M1` marker is intentionally visible. `D`, `CAP`, `PA`, `REQ`, and
 `DELIVERED` are the v1 record types. Fields are separated by whitespace,
-identifiers are bounded, and implementations reject oversized or unknown
-records. The final destination is supplied by the surrounding JS8Call
+identifiers are bounded to safe token characters, callsign/path fields are
+validated, and implementations reject oversized or unknown records. The final
+destination is supplied by the surrounding JS8Call
 directed or relay address; the stable `MID` is the correlation key. This keeps
 an enhanced record passable through an ordinary JS8Call relay while leaving
 the message body readable to an operator who sees it.
@@ -112,10 +113,18 @@ radio evidence.
 
 An ordinary JS8Call `DEST MSG TO:CUSTODIAN body` store transaction is not an
 enhanced custody transfer: its ACK proves only that JS8Call accepted the store
-operation. A JS8Mail custodian may retain and forward `J8M1` records, but the
-origin can claim `Complete+` only after a receipt that identifies the original
-`MID` and the final destination. A forwarded receipt is evidence of delivery,
-not cryptographic authentication.
+operation. The current implementation deliberately relies on JS8Call's
+standard relay/store machinery to carry opaque `J8M1` text; it does not pretend
+that every intermediate station is a JS8Mail application relay. An enhanced
+custodian can retain origin-aware parts and return selective acknowledgements
+when its API/path context permits. The origin can claim `Complete+` only after
+a receipt that identifies the original `MID` and final destination. A forwarded
+receipt is evidence of delivery, not cryptographic authentication.
+
+When a final receipt names a known accepted custodian in its path, the sender
+reconciles that custodian as `forwarded` even though the receipt was transmitted
+by the final destination. A plain ACK for an enhanced part remains hop evidence;
+it cannot promote the message to ordinary `Complete` or enhanced `Complete+`.
 
 ## Compatibility and safety
 

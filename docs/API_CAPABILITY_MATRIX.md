@@ -1,6 +1,6 @@
 # JS8Call API capability matrix
 
-This matrix describes the adapter boundary used by the current `0.0.2`
+This matrix describes the adapter boundary used by the current `0.0.3`
 daemon. `Runtime` is intentionally `unknown` where behaviour depends on the
 installed JS8Call build; a capability must not be inferred solely from an
 application version string. The live installation used during development has
@@ -44,3 +44,8 @@ checks, and a manual-text guard. It does not use `TX.SET_TEXT` as its normal
 send path and does not assume that `RIG.TX_HALT`, queue-depth queries, or
 programmatic frequency changes exist. The standalone `js8mail-probe` remains
 receive-only and is useful for API diagnostics.
+
+Some JS8Call 3.0.3 responses use a server-generated numeric `_ID` rather than
+echoing the request identifier supplied by the client. The adapter therefore
+uses the exact expected response type as a fallback only when there is one
+outstanding read-only request, and turns `API.ERROR` into a failed request.

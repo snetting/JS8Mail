@@ -341,6 +341,7 @@ class Database:
             # decisions never inherit the wrong observation context.
             self.connection.executescript(
                 """
+                DROP TABLE IF EXISTS station_sessions_v17;
                 CREATE TABLE station_sessions_v17 (
                     station TEXT NOT NULL,
                     session_bucket TEXT NOT NULL,

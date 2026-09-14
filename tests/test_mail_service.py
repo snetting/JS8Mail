@@ -38,6 +38,8 @@ def test_compose_validates_bounds(tmp_path: Path) -> None:
         service.compose("", "", "hello")
     with pytest.raises(ValueError):
         service.compose("N0CALL", "", "")
+    with pytest.raises(ValueError):
+        service.compose("N0CALL", "", "x" * 4001)
     database.close()
 
 

@@ -7,13 +7,17 @@ honest delivery evidence.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 MAX_PARTS = 255
 MAX_PART_BYTES = 4096
 MAX_FRAME_BYTES = 4096
-DISPLAY_VERSION = "JS8Mail/0.0.2"
+DISPLAY_VERSION = "JS8Mail/0.0.3"
 CAPABILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
+_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_STATION_RE = re.compile(r"^[A-Z0-9/]{1,16}$")
+_ADDRESS_RE = re.compile(r"^@?[A-Z0-9/]{1,16}$")
 
 
 class MultipartError(ValueError):
@@ -42,7 +46,7 @@ def parse_capability(text: str) -> tuple[int, tuple[str, ...]] | None:
         return None
     capabilities = tuple(fields[3].split(","))
     allowed = {"E2E", "MP", "PA", "RR"}
-    if version < 1 or len(capabilities) > 8 or any(cap not in allowed for cap in capabilities):
+    if version != 1 or len(capabilities) > 8 or any(cap not in allowed for cap in capabilities):
         return None
     return version, capabilities
 
@@ -57,12 +61,15 @@ class MessagePart:
     destination: str = ""
 
     def __post_init__(self) -> None:
-        if not self.message_id or len(self.message_id) > 32:
+        if _MESSAGE_ID_RE.fullmatch(self.message_id) is None:
             raise MultipartError("invalid message id")
         if not 1 <= self.total <= MAX_PARTS or not 1 <= self.number <= self.total:
             raise MultipartError("invalid multipart position")
         if len(self.payload.encode()) > MAX_PART_BYTES:
             raise MultipartError("multipart payload is too large")
+        for value in (self.origin, self.destination):
+            if value and _ADDRESS_RE.fullmatch(value.upper()) is None:
+                raise MultipartError("invalid multipart route context")
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +161,7 @@ def parse_part_ack(text: str) -> PartReceipt | None:
         bitmap = int(bitmap_text, 16)
     except ValueError:
         return None
-    if not message_id or len(message_id) > 32 or not 1 <= total <= MAX_PARTS or bitmap < 0:
+    if _MESSAGE_ID_RE.fullmatch(message_id) is None or not 1 <= total <= MAX_PARTS or bitmap < 0:
         return None
     if bitmap >> total:
         return None
@@ -165,7 +172,7 @@ def parse_part_ack(text: str) -> PartReceipt | None:
 
 def format_resend_request(message_id: str, total: int, missing: tuple[int, ...]) -> str:
     """Request only missing parts, preserving emergency partial delivery."""
-    if not message_id or len(message_id) > 32 or not 1 <= total <= MAX_PARTS:
+    if _MESSAGE_ID_RE.fullmatch(message_id) is None or not 1 <= total <= MAX_PARTS:
         raise MultipartError("invalid resend request")
     if any(not 1 <= number <= total for number in missing):
         raise MultipartError("invalid missing part")
@@ -187,7 +194,7 @@ def parse_resend_request(text: str) -> tuple[str, int, tuple[int, ...]] | None:
         bitmap = int(bitmap_text, 16)
     except ValueError:
         return None
-    if not message_id or len(message_id) > 32 or not 1 <= total <= MAX_PARTS or bitmap < 0:
+    if _MESSAGE_ID_RE.fullmatch(message_id) is None or not 1 <= total <= MAX_PARTS or bitmap < 0:
         return None
     if bitmap >> total:
         return None
@@ -199,9 +206,9 @@ def format_delivery_ack(
     message_id: str, delivered_at_ms: int, path: tuple[str, ...] = ()
 ) -> str:
     """Format an end-to-end delivery receipt for the original sender."""
-    if not message_id or len(message_id) > 32:
+    if _MESSAGE_ID_RE.fullmatch(message_id) is None:
         raise MultipartError("invalid message id")
-    if delivered_at_ms < 0 or any(not station or len(station) > 16 for station in path):
+    if delivered_at_ms < 0 or any(_STATION_RE.fullmatch(station.upper()) is None for station in path):
         raise MultipartError("invalid delivery metadata")
     path_text = ",".join(path[:8]) or "?"
     result = f"J8M1 DELIVERED {message_id} {delivered_at_ms} {path_text}"
@@ -216,14 +223,16 @@ def parse_delivery_ack(text: str) -> tuple[str, int, tuple[str, ...]] | None:
     if len(fields) != 5 or fields[:2] != ["J8M1", "DELIVERED"]:
         return None
     message_id, timestamp, path_text = fields[2:]
-    if not message_id or len(message_id) > 32 or not path_text:
+    if _MESSAGE_ID_RE.fullmatch(message_id) is None or not path_text:
         return None
     try:
         delivered_at_ms = int(timestamp)
     except ValueError:
         return None
     path = tuple(path_text.split(","))
-    if delivered_at_ms < 0 or len(path) > 8 or any(not station or len(station) > 16 for station in path):
+    if delivered_at_ms < 0 or len(path) > 8 or (
+        path != ("?",) and any(_STATION_RE.fullmatch(station.upper()) is None for station in path)
+    ):
         return None
     return message_id, delivered_at_ms, path
 
@@ -236,21 +245,12 @@ def parse_ack(text: str) -> tuple[str, str, str | None] | None:
     """
     if len(text.encode()) > MAX_FRAME_BYTES:
         return None
-    fields = text.strip().split()
-    if len(fields) == 5 and fields[0] == "J8M1" and fields[1] == "PA":
-        message_id, total, bitmap = fields[2:]
-        if not message_id or len(message_id) > 32:
-            return None
-        try:
-            if not 1 <= int(total) <= MAX_PARTS or not bitmap or int(bitmap, 16) < 0:
-                return None
-        except ValueError:
-            return None
-        return ("part", message_id, bitmap.upper())
-    if len(fields) >= 3 and fields[0] == "J8M1" and fields[1] == "DELIVERED":
-        message_id = fields[2]
-        if message_id and len(message_id) <= 32:
-            return ("delivered", message_id, None)
+    part = parse_part_ack(text)
+    if part is not None:
+        return ("part", part.message_id, part.as_bitmap())
+    delivery = parse_delivery_ack(text)
+    if delivery is not None:
+        return ("delivered", delivery[0], None)
     return None
 
 
@@ -267,7 +267,7 @@ def format_human_data_part(
     destination = destination or part.destination
     if origin or destination:
         if not origin or not destination or any(
-            not value or len(value) > 16 or any(char in value for char in " >")
+            _ADDRESS_RE.fullmatch(value.upper()) is None
             for value in (origin, destination)
         ):
             raise MultipartError("invalid multipart route context")
@@ -283,7 +283,7 @@ def parse_human_data_part(
     text: str,
 ) -> tuple[MessagePart, str | None, str | None] | None:
     """Parse old compact or origin-aware v1 multipart data."""
-    fields = text.strip().split(" ", 6)
+    fields = text.strip().split(None, 6)
     if len(fields) < 5 or fields[:2] != ["J8M1", "D"]:
         return None
     origin: str | None = None
@@ -342,7 +342,7 @@ def format_ordinary_message(destination: str, body: str, announce: bool = False)
 
 def format_relay_message(path: tuple[str, ...], body: str) -> str:
     """Build JS8Call's standard relay form for a discovered path."""
-    if len(path) < 3 or any(not call or len(call) > 16 for call in path):
+    if len(path) < 3 or any(_STATION_RE.fullmatch(call.upper()) is None for call in path):
         raise MultipartError("a relay path needs at least three callsigns")
     if any(" " in call or ">" in call for call in path):
         raise MultipartError("invalid relay callsign")
@@ -354,7 +354,7 @@ def format_relay_message(path: tuple[str, ...], body: str) -> str:
 
 def format_relay_text(path: tuple[str, ...], body: str) -> str:
     """Build a JS8Call free-text relay, without the MSG command."""
-    if len(path) < 3 or any(not call or len(call) > 16 for call in path):
+    if len(path) < 3 or any(_STATION_RE.fullmatch(call.upper()) is None for call in path):
         raise MultipartError("a relay path needs at least three callsigns")
     if any(" " in call or ">" in call for call in path):
         raise MultipartError("invalid relay callsign")

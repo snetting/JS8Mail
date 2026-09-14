@@ -9,7 +9,14 @@ from js8mail.adapters.js8call.protocol import (
     normalize_directed_event,
 )
 from js8mail.domain import NormalizedEvent
-from js8mail.protocol import format_capability, parse_capability
+from js8mail.protocol import (
+    MultipartError,
+    format_capability,
+    format_delivery_ack,
+    parse_ack,
+    parse_capability,
+    parse_delivery_ack,
+)
 
 
 def test_decode_valid_event() -> None:
@@ -41,6 +48,20 @@ def test_capability_advertisement_is_versioned_and_bounded() -> None:
     assert encoded == "J8M1 CAP 1 E2E,MP,PA"
     assert parse_capability(encoded) == (1, ("E2E", "MP", "PA"))
     assert parse_capability("J8M1 CAP 1 E2E,UNKNOWN") is None
+    assert parse_capability("J8M1 CAP 2 E2E,MP,PA") is None
+
+
+def test_only_complete_receipts_are_acknowledgements() -> None:
+    assert parse_ack("J8M1 DELIVERED abc 123 ?") == ("delivered", "abc", None)
+    assert parse_ack("J8M1 DELIVERED abc not-a-time ?") is None
+    assert parse_ack("J8M1 DELIVERED abc 123") is None
+
+
+def test_enhanced_metadata_rejects_injected_ids_and_paths() -> None:
+    assert parse_delivery_ack("J8M1 DELIVERED bad/id 123 ?") is None
+    assert parse_delivery_ack("J8M1 DELIVERED abc 123 OH3SPN,not a call") is None
+    with pytest.raises(MultipartError):
+        format_delivery_ack("abc", 123, ("OH3SPN", "bad call"))
 
 
 def test_normalize_real_js8call_directed_text() -> None:
