@@ -820,6 +820,21 @@ async def run(args: argparse.Namespace) -> None:
             "auto_speed": args.auto_speed,
         },
     )
+    # The HTTP server creates request-handler instances, but the background
+    # scheduler also needs a bound Handler object. Calling methods through the
+    # dynamic class itself loses ``self`` when one handler method calls another
+    # (notably _maybe_adapt_speed), producing misleading TypeErrors.
+    controller = object.__new__(handler)
+    controller.service = service
+    controller.client = client
+    controller.loop = loop
+    controller.status = status
+    controller.announced_destinations = set()
+    controller.airtime_budget = airtime_budget
+    controller.message_budgets = {}
+    controller.tx_lock = asyncio.Lock()
+    controller.last_tx_at_ms = None
+    controller.auto_speed = args.auto_speed
     server = ThreadingHTTPServer((args.ui_host, args.ui_port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1011,7 +1026,7 @@ async def run(args: argparse.Namespace) -> None:
                     # or an operator retry without passing through the HTTP
                     # request that normally starts preparation.
                     try:
-                        await handler.prepare(cast(Handler, handler), str(message["id"]))
+                        await controller.prepare(str(message["id"]))
                     except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
                         database.record_attempt(
                             str(message["id"]), "prepare", destination, "deferred", type(exc).__name__
@@ -1125,7 +1140,7 @@ async def run(args: argparse.Namespace) -> None:
                         )
                         try:
                             future = asyncio.create_task(
-                                handler.transmit(cast(Handler, handler), str(message["id"]))
+                                controller.transmit(str(message["id"]))
                             )
                             await future
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -1161,7 +1176,7 @@ async def run(args: argparse.Namespace) -> None:
                             plan.explanation,
                         )
                         try:
-                            await handler.transmit(cast(Handler, handler), str(message["id"]), plan)
+                            await controller.transmit(str(message["id"]), plan)
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                             database.record_attempt(
                                 str(message["id"]),
@@ -1186,7 +1201,7 @@ async def run(args: argparse.Namespace) -> None:
                     }
                     if candidate_custodian is not None and candidate_custodian.upper() not in active_custody:
                         try:
-                            await handler.transmit_store(cast(Handler, handler), str(message["id"]), candidate_custodian)
+                            await controller.transmit_store(str(message["id"]), candidate_custodian)
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                             database.record_attempt(
                                 str(message["id"]), "store", candidate_custodian, "deferred", type(exc).__name__
