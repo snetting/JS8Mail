@@ -869,6 +869,16 @@ class Database:
                 return str(item["message_id"])
         return None
 
+    def delete_inbox_message(self, sender: str, message_id: str) -> None:
+        cursor = self.connection.execute(
+            "DELETE FROM inbox_messages WHERE sender = ? AND message_id = ?",
+            (sender.upper(), message_id),
+        )
+        if cursor.rowcount != 1:
+            raise KeyError(message_id)
+        self.connection.commit()
+        self.audit("inbox.message_removed", {"sender": sender.upper(), "message_id": message_id})
+
     def observe_group(self, name: str, description: str = "") -> None:
         now = utc_now_ms()
         self.connection.execute(
