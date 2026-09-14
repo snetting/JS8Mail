@@ -66,6 +66,12 @@ Python applications can be distributed as compiled/frozen executables (for
 example with PyInstaller), so users should not ultimately need to install or
 manage a Python environment manually.
 
-See the versioned [JS8Mail protocol specification](docs/PROTOCOL_V1.md) and
-[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the staged
-implementation and safety boundaries.
+For the complete operator guide—including JS8Call setup, TCP/API configuration,
+the end-to-end message lifecycle, path discovery, route scoring, custody,
+multipart recovery, groups, airtime protection, and troubleshooting—see the
+[JS8Mail user and operator guide](docs/USER_GUIDE.md).
+
+Also see the versioned [JS8Mail protocol specification](docs/PROTOCOL_V1.md),
+the [API capability matrix](docs/API_CAPABILITY_MATRIX.md), and
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for protocol,
+compatibility, and staged implementation boundaries.

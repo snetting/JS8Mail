@@ -1,8 +1,12 @@
 # JS8Call API capability matrix
 
-This is the initial source-based matrix. `Runtime` remains `unknown` until a
-live, non-transmitting probe is run against each installed build. A capability
-must not be inferred solely from an application version string.
+This matrix describes the adapter boundary used by the current `0.0.1`
+daemon. `Runtime` is intentionally `unknown` where behaviour depends on the
+installed JS8Call build; a capability must not be inferred solely from an
+application version string. The live installation used during development has
+successfully connected on TCP/2442, captured directed/RX/PTT/TX events, and
+accepted automated text submissions, but that result is not a compatibility
+claim for every JS8Call release.
 
 | Requirement | API event/action | Stock 2.3.1 | Improved 2.4.0 source | Runtime | Adapter policy |
 |---|---|---:|---:|---:|---|
@@ -22,9 +26,9 @@ must not be inferred solely from an application version string.
 | Free offsets | `RX.GET_FREE_OFFSETS` | unknown | absent in inspected source | unknown | optional optimization only |
 | Current RX text | `RX.GET_TEXT` | documented | present | unknown | diagnostics only |
 | Current TX text | `TX.GET_TEXT` / `TX.TEXT` | documented | present | unknown | mandatory manual-activity guard |
-| Automated send | `TX.SEND_MESSAGE` | documented | present | unknown | not exposed by receive-only client |
+| Automated send | `TX.SEND_MESSAGE` | documented | present | observed in live testing | serialized, airtime-limited automatic submission; manual TX text is never overwritten |
 | TX queue depth | `TX.GET_QUEUE_DEPTH` | unknown | absent in inspected source | unknown | optional guard; unknown means defer |
-| Speed | `MODE.GET_SPEED` / `MODE.SET_SPEED` | documented | present | unknown | read first; setting gated |
+| Speed | `MODE.GET_SPEED` / `MODE.SET_SPEED` | documented | present | GET observed; SET build-dependent | read first; recommendations are safe fallback when SET is unavailable |
 | Local inbox | `INBOX.GET_MESSAGES`, `INBOX.STORE_MESSAGE` | documented | present | unknown | local store integration later |
 | API failures | `API.ERROR` | documented | present | unknown | bounded diagnostic event |
 
@@ -34,6 +38,9 @@ Sources:
 - [JS8Call upstream](https://github.com/js8call/js8call)
 - [JS8Call-improved 2.4.0](https://github.com/JS8Call-improved/JS8Call-improved/tree/release/2.4.0)
 
-The receive-only client currently allows only read-only request construction.
-Adding any transmit-capable request requires a separate adapter capability,
-contract tests, and safety review.
+The current daemon has a deliberately narrow transmit surface: it uses
+`TX.SEND_MESSAGE` only after validation, pacing, airtime checks, connection
+checks, and a manual-text guard. It does not use `TX.SET_TEXT` as its normal
+send path and does not assume that `RIG.TX_HALT`, queue-depth queries, or
+programmatic frequency changes exist. The standalone `js8mail-probe` remains
+receive-only and is useful for API diagnostics.
