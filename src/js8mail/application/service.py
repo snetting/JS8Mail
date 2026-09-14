@@ -220,32 +220,58 @@ class MailService:
     def live_activity_graph(
         self, band: str, *, max_age_ms: int = 2 * 60 * 60 * 1000
     ) -> dict[str, object]:
-        """Return a compact, quickly aging graph for the live UI panel."""
+        """Return a compact graph classified by recent reciprocal evidence."""
         now = utc_now_ms()
         nodes: set[str] = set()
-        edges: list[dict[str, object]] = []
-        for link in self.database.temporal_link_views(500):
-            if band == "" or str(link.get("band", "")) != band:
-                continue
-            age_ms = max(0, now - int(link["last_observed_at_ms"]))
+        directions: dict[tuple[str, str], dict[str, Any]] = {}
+        for observation in self.database.recent_observations(2000, band=band):
+            age_ms = max(0, now - int(observation["observed_at_ms"]))
             if age_ms > max_age_ms:
                 continue
-            source = str(link["source"])
-            destination = str(link["destination"])
+            params = observation["params"]
+            source = params.get("FROM")
+            destination = params.get("TO")
+            if not isinstance(source, str) or not isinstance(destination, str):
+                continue
+            source = source.strip().upper()
+            destination = destination.strip().upper()
+            if not source or not destination or source.startswith("@") or destination.startswith("@"):
+                continue
             nodes.update((source, destination))
+            key = (source, destination)
+            item = directions.setdefault(key, {"latest": 0, "active": 0, "js8m": False, "snr": None})
+            item["latest"] = max(int(item["latest"]), int(observation["observed_at_ms"]))
+            if age_ms <= 10 * 60 * 1000:
+                item["active"] = int(item["active"]) + 1
+            text = f"{observation['value']} {params.get('TEXT', '')}".upper()
+            item["js8m"] = bool(item["js8m"] or "J8M" in text or "JS8MAIL" in text)
+            snr = params.get("SNR")
+            if isinstance(snr, (int, float)):
+                item["snr"] = snr if item["snr"] is None else max(float(item["snr"]), float(snr))
+        edges: list[dict[str, object]] = []
+        pairs: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for source, destination in directions:
+            pair = (source, destination) if source < destination else (destination, source)
+            pairs.setdefault(pair, []).append((source, destination))
+        for (left, right), directed_keys in pairs.items():
+            forward = directions.get((left, right), {})
+            reverse = directions.get((right, left), {})
+            latest = max(int(forward.get("latest", 0)), int(reverse.get("latest", 0)))
+            age_ms = max(0, now - latest)
             freshness = max(0.05, 1.0 - age_ms / max_age_ms)
-            successes = int(link.get("success_count", 0))
-            failures = int(link.get("failure_count", 0))
-            kind = "confirmed" if successes else ("attempted" if failures else "observed")
+            reciprocal = bool(forward and reverse and min(int(forward["latest"]), int(reverse["latest"])) >= now - 10 * 60 * 1000)
+            active_count = max(int(forward.get("active", 0)), int(reverse.get("active", 0)))
+            kind = "reciprocal" if reciprocal else ("active_one_way" if active_count >= 2 else "isolated_one_way")
+            js8m = bool(forward.get("js8m", False) or reverse.get("js8m", False))
             edges.append({
-                "from": source,
-                "to": destination,
+                "from": left,
+                "to": right,
                 "kind": kind,
                 "age_seconds": age_ms // 1000,
                 "freshness": round(freshness, 3),
-                "snr": link.get("max_snr"),
-                "observations": int(link.get("observation_count", 0)),
-                "js8m": int(link.get("js8m_observation_count", 0)) > 0,
+                "snr": forward.get("snr") if forward.get("snr") is not None else reverse.get("snr"),
+                "observations": sum(int(directions[key]["active"]) for key in directed_keys),
+                "js8m": js8m,
             })
         return {"band": band, "generated_at_ms": now, "nodes": sorted(nodes), "edges": edges}
 
