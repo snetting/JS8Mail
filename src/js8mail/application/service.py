@@ -245,6 +245,7 @@ class MailService:
                 "freshness": round(freshness, 3),
                 "snr": link.get("max_snr"),
                 "observations": int(link.get("observation_count", 0)),
+                "js8m": int(link.get("js8m_observation_count", 0)) > 0,
             })
         return {"band": band, "generated_at_ms": now, "nodes": sorted(nodes), "edges": edges}
 

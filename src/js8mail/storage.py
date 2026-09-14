@@ -10,7 +10,7 @@ from typing import Any
 from js8mail.bands import context_from_params
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 class Database:
@@ -306,6 +306,15 @@ class Database:
                 "INSERT INTO schema_migrations(version, applied_at_ms) "
                 "VALUES (15, strftime('%s','now') * 1000)"
             )
+        if current < 16:
+            self.connection.execute(
+                "ALTER TABLE temporal_links ADD COLUMN js8m_observation_count "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at_ms) "
+                "VALUES (16, strftime('%s','now') * 1000)"
+            )
         self.connection.commit()
 
     def record_observation(
@@ -348,6 +357,8 @@ class Database:
         speed = str(event.params.get("SPEED", ""))[:32]
         snr = event.params.get("SNR")
         snr_value = float(snr) if isinstance(snr, (int, float)) else None
+        text = f"{event.value} {event.params.get('TEXT', '')}".upper()
+        js8m_observation = int("J8M" in text or "JS8MAIL" in text)
         bucket = str(observed // (30 * 60 * 1000))
         for station in (source.upper(), destination.upper()):
             self.connection.execute(
@@ -357,11 +368,12 @@ class Database:
                 (station, bucket, observed, observed, band, speed),
             )
         self.connection.execute(
-            "INSERT INTO temporal_links(source, destination, band, speed, first_observed_at_ms, last_observed_at_ms, observation_count, max_snr) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1, ?) ON CONFLICT(source, destination, band, speed) DO UPDATE SET "
+            "INSERT INTO temporal_links(source, destination, band, speed, first_observed_at_ms, last_observed_at_ms, observation_count, max_snr, js8m_observation_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(source, destination, band, speed) DO UPDATE SET "
             "last_observed_at_ms=excluded.last_observed_at_ms, observation_count=temporal_links.observation_count+1, "
-            "max_snr=CASE WHEN excluded.max_snr IS NULL THEN temporal_links.max_snr WHEN temporal_links.max_snr IS NULL THEN excluded.max_snr ELSE MAX(temporal_links.max_snr, excluded.max_snr) END",
-            (source.upper(), destination.upper(), band, speed, observed, observed, snr_value),
+            "max_snr=CASE WHEN excluded.max_snr IS NULL THEN temporal_links.max_snr WHEN temporal_links.max_snr IS NULL THEN excluded.max_snr ELSE MAX(temporal_links.max_snr, excluded.max_snr) END, "
+            "js8m_observation_count=temporal_links.js8m_observation_count+excluded.js8m_observation_count",
+            (source.upper(), destination.upper(), band, speed, observed, observed, snr_value, js8m_observation),
         )
         self.connection.commit()
 
