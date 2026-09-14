@@ -563,23 +563,28 @@ class Handler(BaseHTTPRequestHandler):
                     "capability",
                     destination,
                     "submitted",
-                    f"JS8Mail capability advertisement; response window "
-                    f"{capability_window_ms // 1000}s",
+                    (
+                        f"JS8Mail capability advertisement; awaiting response for "
+                        f"{capability_window_ms // 1000}s"
+                        if enhanced_mode == "required"
+                        else "JS8Mail capability advertisement; continuing with ordinary delivery"
+                    ),
                 )
                 self.announced_destinations.add(destination)
-                self.service.database.record_attempt(
-                    message_id, "capability_wait", destination, "waiting",
-                    f"waiting for JS8Mail capability response; estimated window "
-                    f"{capability_window_ms // 1000}s for {max(1, len(path) - 1)} hop(s)",
-                )
-                self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
-                self.service.database.defer_message(
-                    message_id,
-                    capability_window_ms,
-                    f"waiting for capability response before ordinary fallback "
-                    f"({capability_window_ms // 1000}s estimated)",
-                )
-                return
+                if enhanced_mode == "required":
+                    self.service.database.record_attempt(
+                        message_id, "capability_wait", destination, "waiting",
+                        f"waiting for JS8Mail capability response; estimated window "
+                        f"{capability_window_ms // 1000}s for {max(1, len(path) - 1)} hop(s)",
+                    )
+                    self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+                    self.service.database.defer_message(
+                        message_id,
+                        capability_window_ms,
+                        f"waiting for capability response before ordinary fallback "
+                        f"({capability_window_ms // 1000}s estimated)",
+                    )
+                    return
             except AirtimeBudgetExceeded as exc:
                 detail = (
                     f"{exc.scope} airtime budget exhausted; radio is idle and policy blocked TX"
