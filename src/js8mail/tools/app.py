@@ -94,6 +94,8 @@ updateBandStatus();setInterval(updateBandStatus,3000);
 // refresh() redraws #status, so keep the band pill attached to the current
 // status contents instead of allowing that redraw to remove it.
 new MutationObserver(()=>updateBandStatus()).observe(document.getElementById('status'),{childList:true});
+async function updateProtocolLeds(){try{let s=await api('/api/status'),now=Date.now(),dcd=document.getElementById('led-dcd'),bar=document.getElementById('radio-leds'),js8=document.getElementById('led-js8');if(dcd)dcd.className='led'+(Number(s.dcd_until_ms||0)>now?' on-dcd':'');if(!js8&&bar){js8=document.createElement('span');js8.id='led-js8';js8.className='led';js8.textContent='JS8';bar.appendChild(js8)}if(js8)js8.className='led'+(Number(s.js8_activity_until_ms||0)>now?' on-js8':'')}catch(e){}}
+let protocolLedStyle=document.createElement('style');protocolLedStyle.textContent='.led.on-js8{background:#d9d2ff;color:#4b2c82}';document.head.appendChild(protocolLedStyle);updateProtocolLeds();setInterval(updateProtocolLeds,250);
 refresh().then(addMessageControls);refreshStations();setInterval(()=>{refresh().then(addMessageControls);refreshStations()},3000);
 </script>"""
 
@@ -407,6 +409,9 @@ class Handler(BaseHTTPRequestHandler):
                     f"per-message airtime budget exhausted at speed {speed}",
                 )
                 raise RuntimeError("message airtime budget exhausted")
+        # A short, independent protocol LED makes API/RF handoff visible even
+        # when the radio remains in its normal RX state.
+        self.status["js8_activity_until_ms"] = utc_now_ms() + 1_000
         await self.client.send_message(text)
         self.last_tx_at_ms = utc_now_ms()
         self.airtime_budget.spend_at(airtime_ms, now)
@@ -452,6 +457,8 @@ async def run(args: argparse.Namespace) -> None:
         "dial_frequency": None,
         "speed": "unknown",
         "radio_activity": "RX",
+        "dcd_until_ms": 0,
+        "js8_activity_until_ms": 0,
     }
     handler: type[Handler] = type(
         "BoundHandler",
@@ -803,17 +810,19 @@ async def run(args: argparse.Namespace) -> None:
                         status["radio_activity"] = "TX" if ptt is True or str(event.value).lower() == "on" else "RX"
                     elif event.event_type.startswith("TX"):
                         status["radio_activity"] = "TX"
-                    elif event.event_type.startswith("RX"):
-                        status["radio_activity"] = "DCD"
-                    if status["radio_activity"] == "DCD":
-                        def clear_dcd() -> None:
-                            if status["radio_activity"] == "DCD":
-                                status["radio_activity"] = "RX"
-                        # The browser polls status every three seconds. Hold
-                        # DCD longer than one polling interval so a decode is
-                        # visible without pretending the radio is not
-                        # continuously receiving between decoder passes.
-                        loop.call_later(4.5, clear_dcd)
+                    # The documented TCP API does not currently expose a
+                    # generic "decode cycle finished" event. RX result events
+                    # are therefore the strongest portable DCD evidence. The
+                    # aliases below also support builds which forward the
+                    # internal decode-complete notification.
+                    decode_events = {
+                        "RX.ACTIVITY", "RX.DIRECTED", "RX.SPOT", "RX.DECODE",
+                        "RX.DECODE_FINISHED", "RX.DCD", "DECODE.FINISHED",
+                    }
+                    if event.event_type in decode_events:
+                        status["dcd_until_ms"] = utc_now_ms() + 1_000
+                    if "J8M" in event.value.upper() or "JS8MAIL" in event.value.upper():
+                        status["js8_activity_until_ms"] = utc_now_ms() + 1_000
                     database.record_observation(
                         event,
                         band=str(status.get("band", "")),
