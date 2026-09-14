@@ -335,9 +335,11 @@ class Handler(BaseHTTPRequestHandler):
                     str(payload.get("body", "")),
                     int(payload.get("priority", 0)),
                 )
-                if self.status["tx_mode"] == "automatic":
-                    future = asyncio.run_coroutine_threadsafe(self.prepare(message_id), self.loop)
-                    future.result(timeout=30)
+                # Let the scheduler place the first probe behind any active
+                # delivery, capability negotiation, or discovery exchange.
+                # This preserves a listening opportunity for the existing
+                # transaction instead of allowing a newly composed message to
+                # fill the next TX slot immediately.
                 self.reply(201, {"id": message_id})
                 return
             parts = path.strip("/").split("/")
@@ -602,11 +604,17 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.record_attempt(
             message_id, "snr_probe", destination, "started", "destination not recently heard"
         )
+        probe_busy = False
         try:
             await Handler.send_rf(self, probe, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
+            probe_busy = True
             self.service.database.record_attempt(
-                message_id, "snr_probe", destination, "failed", type(exc).__name__
+                message_id,
+                "snr_probe",
+                destination,
+                "deferred",
+                f"JS8Call unavailable or busy: {type(exc).__name__}",
             )
         else:
             self.service.database.record_attempt(
@@ -614,7 +622,12 @@ class Handler(BaseHTTPRequestHandler):
             )
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.defer_message(
-            message_id, 60_000, "probe first; retry discovery in 1 minute(s)"
+            message_id,
+            30_000 if probe_busy else 60_000,
+            "JS8Call busy or unavailable; retrying probe in 30 seconds"
+            if probe_busy
+            else "probe first; retry discovery in 1 minute(s)",
+            increment_retry=not probe_busy,
         )
 
     def log_message(self, format: str, *args: object) -> None:

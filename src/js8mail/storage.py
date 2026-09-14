@@ -867,7 +867,9 @@ class Database:
         )
         self.connection.commit()
 
-    def defer_message(self, message_id: str, delay_ms: int, detail: str) -> None:
+    def defer_message(
+        self, message_id: str, delay_ms: int, detail: str, *, increment_retry: bool = True
+    ) -> None:
         from js8mail.application.lifecycle import MessageState, can_transition
 
         row = self.connection.execute("SELECT state, retry_count FROM messages WHERE id = ?", (message_id,)).fetchone()
@@ -879,7 +881,13 @@ class Database:
         now = utc_now_ms()
         self.connection.execute(
             "UPDATE messages SET state = ?, retry_count = ?, next_attempt_at_ms = ?, updated_at_ms = ? WHERE id = ?",
-            (MessageState.WAITING_ROUTE, int(row["retry_count"]) + 1, now + max(1000, delay_ms), now, message_id),
+            (
+                MessageState.WAITING_ROUTE,
+                int(row["retry_count"]) + (1 if increment_retry else 0),
+                now + max(1000, delay_ms),
+                now,
+                message_id,
+            ),
         )
         self.connection.commit()
         self.record_attempt(message_id, "defer", "route", "waiting", detail)
