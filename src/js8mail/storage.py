@@ -906,7 +906,17 @@ class Database:
             raise KeyError(message_id)
         if row["state"] == "in_progress":
             raise ValueError("cannot remove a message currently in progress")
-        self.connection.execute("DELETE FROM message_attempts WHERE message_id = ?", (message_id,))
-        self.connection.execute("DELETE FROM messages WHERE id = ?", (message_id,))
-        self.connection.commit()
+        # Remove dependent history before the parent row. Several older tables
+        # do not declare ON DELETE CASCADE, so deleting only attempts violates
+        # SQLite foreign-key enforcement for airtime and route history.
+        with self.connection:
+            for table in (
+                "message_attempts",
+                "message_parts",
+                "custody",
+                "message_paths",
+                "message_airtime",
+            ):
+                self.connection.execute(f"DELETE FROM {table} WHERE message_id = ?", (message_id,))
+            self.connection.execute("DELETE FROM messages WHERE id = ?", (message_id,))
         self.audit("message.removed", {"message_id": message_id})

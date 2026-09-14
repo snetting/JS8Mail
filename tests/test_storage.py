@@ -152,6 +152,27 @@ def test_group_alerts_can_be_listed_separately(tmp_path: Path) -> None:
     database.close()
 
 
+def test_remove_message_cleans_all_spool_history(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.enqueue_message("m1", "DEST", "body")
+    database.record_attempt("m1", "direct", "DEST", "submitted")
+    database.upsert_message_part(
+        "m1", 1, 1, "body", direction="outgoing", peer="DEST"
+    )
+    database.upsert_custody("m1", "RELAY", "accepted")
+    database.record_message_path("m1", ("ORIGIN", "RELAY", "DEST"))
+    database.save_message_airtime("m1", 1000)
+
+    database.delete_message("m1")
+
+    assert database.get_message("m1") is None
+    for table in ("message_attempts", "message_parts", "custody", "message_paths", "message_airtime"):
+        assert database.connection.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE message_id = ?", ("m1",)
+        ).fetchone()[0] == 0
+    database.close()
+
+
 def test_observation_retention_does_not_remove_audit_or_mail(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     database.record_observation(NormalizedEvent("OLD", "", {}, 1_000))
