@@ -757,7 +757,7 @@ class Handler(BaseHTTPRequestHandler):
             30_000 if probe_busy else 60_000,
             "JS8Call busy or unavailable; retrying probe in 30 seconds"
             if probe_busy
-            else "probe first; retry discovery in 1 minute(s)",
+            else "listening for probe response; discovery fallback in 1 minute(s)",
             increment_retry=not probe_busy,
         )
 
