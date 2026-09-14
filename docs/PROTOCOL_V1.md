@@ -1,6 +1,11 @@
 # JS8Mail enhanced envelope protocol v1
 
-Status: version 1 specification for the early `JS8Mail/0.0.1` implementation.
+Status: version 1 specification for the early `JS8Mail/0.0.2` implementation.
+
+This is the normative v1 wire specification, not an assertion that every
+JS8Call build exposes every transport feature. The adapter must capability
+probe the local API, and a station must never infer that a remote station is a
+JS8Mail peer merely because it can decode ordinary JS8Call traffic.
 
 This protocol adds correlation and recovery metadata to JS8Call messages. It
 does not replace JS8Call's modem, compression/token replacement, addressing,
@@ -30,10 +35,30 @@ Each enhanced body part is:
 J8M1 D <MID> <PART>/<TOTAL> <READABLE-BODY>
 ```
 
+For a routed or stored enhanced transfer, implementations should include the
+optional origin-aware form:
+
+```text
+J8M1 D <ORIGIN> <DEST> <MID> <PART>/<TOTAL> <READABLE-BODY>
+```
+
+Receivers accept both forms for compatibility. The origin-aware form lets an
+intermediate JS8Mail custodian address selective acknowledgements and final
+receipts back to the original sender instead of treating the last RF hop as
+the author.
+
 `MID` is the stable compact message identifier, `PART` starts at 1, and
 `TOTAL` is the complete part count. Implementations must bound identifiers,
 part counts, field sizes, and total message size. JS8Call performs its normal
 token replacement and RF encoding after receiving this readable text.
+
+The `J8M1` marker is intentionally visible. `D`, `CAP`, `PA`, `REQ`, and
+`DELIVERED` are the v1 record types. Fields are separated by whitespace,
+identifiers are bounded, and implementations reject oversized or unknown
+records. The final destination is supplied by the surrounding JS8Call
+directed or relay address; the stable `MID` is the correlation key. This keeps
+an enhanced record passable through an ordinary JS8Call relay while leaving
+the message body readable to an operator who sees it.
 
 Receivers persist parts by `(sender, MID, PART)`, ignore duplicates, and expose
 an incomplete preview with explicit missing-part markers. Once all parts are
@@ -84,6 +109,13 @@ Relays and custodians must preserve the `MID` and part metadata when forwarding
 enhanced messages. They must deduplicate repeated data and receipts, respect
 bounded hop/TTL policy, and never claim authentication beyond JS8Call's normal
 radio evidence.
+
+An ordinary JS8Call `DEST MSG TO:CUSTODIAN body` store transaction is not an
+enhanced custody transfer: its ACK proves only that JS8Call accepted the store
+operation. A JS8Mail custodian may retain and forward `J8M1` records, but the
+origin can claim `Complete+` only after a receipt that identifies the original
+`MID` and the final destination. A forwarded receipt is evidence of delivery,
+not cryptographic authentication.
 
 ## Compatibility and safety
 

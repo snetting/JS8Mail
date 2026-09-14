@@ -16,5 +16,5 @@ if [[ ! -f "${VENV_DIR}/.js8mail-installed" || "${SCRIPT_DIR}/pyproject.toml" -n
     touch "${VENV_DIR}/.js8mail-installed"
 fi
 
-echo "Starting JS8Mail local mailbox. Automatic RF handoff is enabled; use --tx-mode observe for receive-only mode."
+echo "Starting JS8Mail local mailbox. RF handoff is automatic by default; use --tx-mode observe for receive-only mode."
 exec "${VENV_DIR}/bin/python" -m js8mail.tools.app "$@"

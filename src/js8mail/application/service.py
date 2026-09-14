@@ -78,6 +78,18 @@ class MailService:
     ) -> RoutePlan:
         now = utc_now_ms() if now_ms is None else now_ms
         graph = TemporalGraph()
+
+        def score_from_snr(snr: object, evidence: str = "historical") -> float:
+            if isinstance(snr, (int, float)):
+                # -20 dB is useful but uncertain; -5 dB is strong. Do not
+                # floor weak/unknown links into viable routes.
+                base = 0.35 + (float(snr) + 20.0) / 50.0
+            else:
+                base = 0.42 if evidence in {"query_answered", "remote_query_call_yes"} else 0.32
+            if evidence == "remote_query_call_yes":
+                base *= 0.8  # reported reachability, not a local ACK
+            return max(0.0, min(1.0, base))
+
         if band == "":
             return RouteEngine(graph).choose(
                 origin, destination, now_ms=now, attempted_paths=attempted_paths
@@ -86,14 +98,14 @@ class MailService:
             if band is not None and str(link.get("band", "")).lower() != band.strip().lower():
                 continue
             snr = link.get("max_snr")
-            snr_value = float(snr) if isinstance(snr, (int, float)) else -30.0
-            score = max(0.25, min(1.0, 0.55 + (snr_value + 20.0) / 40.0))
+            score = score_from_snr(snr, "historical")
             graph.add(
                 LinkEvidence(
                     str(link["source"]),
                     str(link["destination"]),
                     int(link["last_observed_at_ms"]),
                     score,
+                    source_kind="historical",
                     expected_airtime_ms=1000,
                 )
             )
@@ -105,9 +117,9 @@ class MailService:
                 continue
             if not source or not target or target.startswith("@"):
                 continue
-            snr = params.get("SNR", -30)
-            snr_value = float(snr) if isinstance(snr, (int, float)) else -30.0
-            score = max(0.25, min(1.0, 0.55 + (snr_value + 20.0) / 40.0))
+            snr = params.get("SNR")
+            evidence = str(params.get("EVIDENCE", "local"))
+            score = score_from_snr(snr, evidence)
             reported_age = params.get("AGE_MIN", 0)
             age_ms = int(reported_age) * 60_000 if isinstance(reported_age, int) else 0
             graph.add(
@@ -116,6 +128,7 @@ class MailService:
                     target,
                     observation["observed_at_ms"] - age_ms,
                     score,
+                    source_kind="remote" if evidence == "remote_query_call_yes" else "local",
                     expected_airtime_ms=1000,
                 )
             )
@@ -385,7 +398,7 @@ class MailService:
                 continue
             snr = params.get("SNR", -30)
             value = float(snr) if isinstance(snr, (int, float)) else -30.0
-            scores[source.upper()] = max(scores.get(source.upper(), 0.0), value)
+            scores[source.upper()] = max(scores.get(source.upper(), -100.0), value)
         return [
             station
             for station, _ in sorted(

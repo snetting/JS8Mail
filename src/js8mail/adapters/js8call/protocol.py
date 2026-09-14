@@ -7,9 +7,12 @@ requests. Higher layers still decide whether an operator approved sending.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from js8mail.domain import NormalizedEvent
 
 MAX_LINE_BYTES = 16_384
 MAX_VALUE_BYTES = 4_096
@@ -39,7 +42,13 @@ READ_ONLY_REQUESTS = frozenset(
 )
 
 TRANSMIT_REQUESTS = frozenset({"TX.SET_TEXT", "TX.SEND_MESSAGE"})
-SPEED_VALUES = frozenset(range(5))
+# The halt command is deliberately isolated from ordinary transmit requests:
+# it can only stop an active JS8Call transmission and is used by the local
+# operator pause/kill control.
+CONTROL_REQUESTS = frozenset({"RIG.TX_HALT"})
+# These are the values used by JS8Call's API, not a sequential enum.
+# JS8-60 (8) is experimental but is still a valid API value.
+SPEED_VALUES = frozenset({0, 1, 2, 4, 8})
 
 
 class ApiProtocolError(ValueError):
@@ -56,6 +65,98 @@ class ApiMessage:
     def request_id(self) -> str | int | None:
         request_id = self.params.get("_ID")
         return request_id if isinstance(request_id, (str, int)) else None
+
+
+@dataclass(frozen=True, slots=True)
+class DirectedFrame:
+    """Semantic view of a JS8Call directed event.
+
+    JS8Call versions have emitted both a display-oriented ``value`` and a
+    command-oriented ``params.TEXT``.  The latter commonly contains the
+    destination and command again, so application code must not parse either
+    field as an application payload without normalizing it first.
+    """
+
+    source: str
+    destination: str
+    command: str
+    payload: str
+    wire_text: str
+    stored_recipient: str = ""
+    final: bool = True
+
+
+_EOT_RE = re.compile(r"\s*[♢◊]\s*$")
+def _clean_directed_text(value: str) -> str:
+    value = value.strip()
+    value = _EOT_RE.sub("", value).strip()
+    # Some versions include the source prefix in value/TEXT even though FROM
+    # is also supplied as a structured parameter.
+    value = re.sub(
+        r"^\s*[@A-Z0-9/]{1,32}:\s+", "", value, count=1, flags=re.IGNORECASE
+    )
+    return value.strip()
+
+
+def normalize_directed_event(event: NormalizedEvent) -> DirectedFrame | None:
+    """Normalize an RX.DIRECTED frame from known JS8Call API variants."""
+    params = event.params
+    source = params.get("FROM")
+    destination = params.get("TO")
+    command_value = params.get("CMD")
+    if not isinstance(source, str) or not isinstance(destination, str):
+        return None
+    if not isinstance(command_value, str):
+        return None
+    source = source.strip().upper()
+    destination = destination.strip().upper()
+    command = " ".join(command_value.strip().upper().split())
+    text_value = params.get("TEXT")
+    raw = text_value if isinstance(text_value, str) and text_value.strip() else event.value
+    wire_text = _clean_directed_text(raw)
+
+    # Remove the addressed destination from the command-oriented TEXT.  If a
+    # build supplies only the command/payload, this is harmless.
+    without_destination = wire_text
+    if destination:
+        without_destination = re.sub(
+            rf"^\s*{re.escape(destination)}(?=\s|$)\s*",
+            "",
+            without_destination,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+
+    # The API exposes MSG TO: as one command, while the human-readable text
+    # may contain either TO:CALL or TO: CALL.
+    stored_recipient = ""
+    payload = without_destination
+    if command == "MSG TO:":
+        match = re.match(
+            r"^MSG\s+TO:\s*([^\s]+)(?:\s+(.*))?$", payload, re.IGNORECASE
+        )
+        if match:
+            stored_recipient = match.group(1).strip().upper()
+            payload = (match.group(2) or "").strip()
+    elif command:
+        payload = re.sub(
+            rf"^{re.escape(command)}(?=\s|$)\s*",
+            "",
+            payload,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+
+    final = not bool(event.params.get("PARTIAL", False))
+    return DirectedFrame(
+        source,
+        destination,
+        command,
+        _EOT_RE.sub("", payload).strip(),
+        wire_text,
+        stored_recipient,
+        final,
+    )
 
 
 def _bounded_json_object(value: Any, *, depth: int = 0) -> Any:
@@ -135,4 +236,20 @@ def encode_speed_request(speed: int, *, request_id: str) -> bytes:
     encoded = (json.dumps(packet, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
     if len(encoded) > MAX_LINE_BYTES:
         raise ApiProtocolError("Encoded speed request is too large")
+    return encoded
+
+
+def encode_control_request(request_type: str, *, request_id: str) -> bytes:
+    """Encode a bounded operator control request.
+
+    JS8Call builds differ in whether ``RIG.TX_HALT`` is implemented.  Keeping
+    it behind this adapter lets the caller attempt it safely while the local
+    pause flag remains authoritative even when the command is unavailable.
+    """
+    if request_type not in CONTROL_REQUESTS:
+        raise ApiProtocolError(f"Unsupported control request: {request_type}")
+    packet = {"params": {"_ID": request_id}, "type": request_type, "value": ""}
+    encoded = (json.dumps(packet, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+    if len(encoded) > MAX_LINE_BYTES:
+        raise ApiProtocolError("Encoded control request is too large")
     return encoded

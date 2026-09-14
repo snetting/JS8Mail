@@ -3,8 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
-SPEED_AIRTIME_MS = (30_000, 15_000, 10_000, 7_500, 5_000)
+# JS8Call API speed identifiers are intentionally sparse.
+SPEED_AIRTIME_MS = {
+    0: 30_000,  # Normal
+    1: 15_000,  # Fast
+    2: 10_000,  # JS8-40 / Turbo
+    4: 45_000,  # Slow
+    8: 5_000,   # JS8-60 / Ultra (experimental)
+}
+SPEED_ORDER = (4, 0, 1, 2, 8)
 
 
 def estimate_airtime_ms(text: str, speed: int) -> int:
@@ -13,7 +22,7 @@ def estimate_airtime_ms(text: str, speed: int) -> int:
     JS8Call's exact occupied time is mode/cycle dependent; this deliberately
     overestimates and is used only for local duty-cycle protection.
     """
-    if not 0 <= speed < len(SPEED_AIRTIME_MS):
+    if speed not in SPEED_AIRTIME_MS:
         raise ValueError("unsupported JS8Call speed")
     return SPEED_AIRTIME_MS[speed] + max(0, len(text.encode("utf-8")) - 32) * 100
 
@@ -43,24 +52,34 @@ class SpeedDecision:
 class AdaptiveSpeedPolicy:
     """Choose a speed from evidence without oscillating between modes."""
 
-    # JS8Call's documented ordering: Slow, Normal, Fast, Turbo, Ultra.
-    SNR_MARGINS = (-24.0, -18.0, -12.0, -8.0, -5.0)
+    # JS8Call's documented API identifiers ordered from slowest to fastest.
+    SNR_MARGINS: ClassVar[dict[int, float]] = {
+        4: -24.0,
+        0: -18.0,
+        1: -12.0,
+        2: -12.0,
+        8: -5.0,
+    }
 
     def recommend(self, current: int, evidence: dict[int, SpeedEvidence]) -> SpeedDecision:
-        current = max(0, min(4, current))
+        if current not in SPEED_AIRTIME_MS:
+            current = 0
         current_evidence = evidence.get(current, SpeedEvidence())
         if current_evidence.attempts >= 2 and current_evidence.reliability < 0.5:
-            slower = max(0, current - 1)
+            current_index = SPEED_ORDER.index(current)
+            slower = SPEED_ORDER[max(0, current_index - 1)]
             return SpeedDecision(slower, slower != current, "recent failures justify stepping down one speed")
         chosen = current
-        for speed in range(4, -1, -1):
+        for speed in reversed(SPEED_ORDER):
             item = evidence.get(speed, SpeedEvidence())
             if item.successes >= 3 and item.reliability >= 0.8 and (
                 item.average_snr is None or item.average_snr >= self.SNR_MARGINS[speed]
             ):
                 chosen = speed
                 break
-        if chosen > current:
+        # API speed identifiers are sparse and are not ordered numerically;
+        # compare their position in the policy order instead.
+        if SPEED_ORDER.index(chosen) > SPEED_ORDER.index(current):
             return SpeedDecision(chosen, True, "sustained reliable evidence supports a cautious speed increase")
         return SpeedDecision(current, False, "retain current speed until stronger evidence is available")
 

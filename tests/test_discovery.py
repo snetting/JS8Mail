@@ -1,6 +1,9 @@
 from js8mail.discovery import (
+    PendingCallQuery,
+    QueryCallResponse,
     QueryScheduler,
     call_query,
+    correlate_query_call_response,
     custodian_messages_query,
     hearing_query,
     messages_query,
@@ -20,9 +23,43 @@ def test_standard_query_forms_are_bounded_and_normalized() -> None:
     assert retrieve_message_query("g0abc", 42) == "G0ABC QUERY MSG 42"
     assert parse_messages_available("YES MSG ID 42") == 42
     assert parse_messages_available("NO") is None
-    assert parse_query_call_response("OH3SPN YES -08 (1M)") == (-8, 1)
-    assert parse_query_call_response("OH3SPN YES -25 (33M)") == (-25, 33)
+    assert parse_query_call_response("OH3SPN YES") == QueryCallResponse("OH3SPN")
+    assert parse_query_call_response("OH3SPN YES …… ♢") == QueryCallResponse("OH3SPN")
+    assert parse_query_call_response("OH3SPN YES -08 (1M)") == QueryCallResponse(
+        "OH3SPN", -8, 1
+    )
+    assert parse_query_call_response("OH3SPN YES -25 (33M…… ♢") == QueryCallResponse(
+        "OH3SPN", -25, 33
+    )
+    assert parse_query_call_response("OH3SPN YES -06 (45S ♢") == QueryCallResponse(
+        "OH3SPN", -6, 0.75
+    )
     assert parse_query_call_response("OH3SPN NO") is None
+    assert parse_messages_available("OH3SPN YES MSG ID 42 ♢") == 42
+
+
+def test_compact_yes_without_repeated_recipient_is_valid() -> None:
+    assert parse_query_call_response("YES") == QueryCallResponse(None)
+
+
+def test_query_call_response_uses_unambiguous_outstanding_context() -> None:
+    pending = [
+        PendingCallQuery(1_000, "SP2ST", "MM0ZFG", "candidate-query:MM0ZFG:SP2ST", "20m")
+    ]
+    assert correlate_query_call_response(
+        pending, "MM0ZFG", now_ms=2_000, band="20m"
+    ) == pending[0]
+
+    ambiguous = [
+        PendingCallQuery(1_000, "SP2ST", "@ALLCALL", "call-query:SP2ST", "20m"),
+        PendingCallQuery(1_500, "G0ABC", "@ALLCALL", "call-query:G0ABC", "20m"),
+    ]
+    assert correlate_query_call_response(
+        ambiguous, "MM0ZFG", now_ms=2_000, band="20m"
+    ) is None
+    assert correlate_query_call_response(
+        pending, "MM0ZFG", now_ms=200_000, band="20m"
+    ) is None
 
 
 def test_empty_queries_back_off_exponentially_and_success_resets() -> None:

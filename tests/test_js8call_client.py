@@ -47,6 +47,16 @@ async def test_client_checks_and_sends_message() -> None:
             ).encode()
         )
         await writer.drain()
+        ptt = json.loads(await reader.readline())
+        writer.write(
+            (json.dumps({"type": "RIG.PTT_STATUS", "value": "", "params": {**ptt["params"], "PTT": False}}) + "\n").encode()
+        )
+        await writer.drain()
+        queue = json.loads(await reader.readline())
+        writer.write(
+            (json.dumps({"type": "TX.QUEUE_DEPTH", "value": "", "params": {**queue["params"], "DEPTH": 0}}) + "\n").encode()
+        )
+        await writer.drain()
         received.append(json.loads(await reader.readline()))
         writer.close()
         await writer.wait_closed()
@@ -71,3 +81,40 @@ async def test_client_checks_and_sends_message() -> None:
 
     assert [packet["type"] for packet in received] == ["TX.SEND_MESSAGE"]
     assert received[0]["value"] == "N0CALL test"
+
+
+@pytest.mark.asyncio
+async def test_event_handler_can_make_read_only_request_without_blocking_reader() -> None:
+    request_seen = asyncio.Event()
+
+    async def server_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writer.write(
+            (json.dumps({"type": "RX.DIRECTED", "value": "OH3SPN ACK ♢", "params": {"FROM": "N0CALL", "TO": "OH3SPN", "CMD": " ACK", "TEXT": "OH3SPN ACK ♢"}}) + "\n").encode()
+        )
+        await writer.drain()
+        request = json.loads(await reader.readline())
+        assert request["type"] == "TX.GET_TEXT"
+        writer.write(
+            (json.dumps({"type": "TX.TEXT", "value": "", "params": request["params"]}) + "\n").encode()
+        )
+        await writer.drain()
+        request_seen.set()
+        await asyncio.sleep(0.05)
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(server_handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = Js8CallClient(port=port)
+
+    async def handler(_: object) -> None:
+        await client.request_read_only("TX.GET_TEXT")
+
+    try:
+        await client.connect()
+        await client.read_events(handler)
+        assert request_seen.is_set()
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()

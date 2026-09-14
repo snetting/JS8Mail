@@ -8,7 +8,7 @@ JS8Mail adds a durable mailbox, evidence collection, route selection, custody
 tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
-This document describes the current `0.0.1` implementation. It is useful and
+This document describes the current `0.0.2` implementation. It is useful and
 radio-capable, but still early and experimental. In particular, a route score
 is evidence-based advice, not a guarantee that a station is listening now.
 Always operate within your licence, local band plan, power limits, and the
@@ -216,6 +216,24 @@ cooling down; the UI may show that the query was skipped or blocked while the
 message remains queued. This prevents a fleet of queued messages from turning
 into a broadcast beacon.
 
+`QUERY CALL` replies are deliberately compact. For example:
+
+```text
+OH3SPN: MM0ZFG QUERY CALL SP2ST
+MM0ZFG: OH3SPN YES
+```
+
+The `YES` is addressed back to the requester and does not repeat `SP2ST`.
+JS8Mail therefore correlates it with the recent outstanding query. A bare
+`YES` is valid; an SNR and age such as `YES -06 (12M)` may also be present.
+Only one destination query is kept outstanding for a particular station (or
+for `@ALLCALL`) at a time, because overlapping queries would make a compact
+reply ambiguous. A positive answer records both the successful interaction
+with the reporting station and its remote evidence for the requested
+destination, then immediately wakes matching queued mail for route planning.
+It is evidence for a route attempt, not a guarantee that relaying, AUTO, or
+store-and-forward is enabled at the reporting station.
+
 `@ALLCALL QUERY MSGS` is treated as a broad inbox check and is intentionally
 much slower—about every 30 minutes initially, with restrained backoff. Known
 custodians are queried directly before resorting to broad polling.
@@ -242,11 +260,13 @@ The current route engine uses a deterministic score so a decision can be
 explained. For each link:
 
 1. SNR-derived evidence is converted into a bounded base score. Roughly, the
-   implementation maps `-20 dB` to the middle of the usable range and clamps
-   weak evidence to a floor of `0.25` and strong evidence to `1.0`.
-2. Evidence decays exponentially with age using a 24-hour half-life. Recent
-   local evidence therefore beats old evidence, but old evidence remains
-   useful for discovering a possible route.
+   implementation maps `-20 dB` to the middle of the usable range and allows
+   very weak evidence to remain only a low-confidence candidate; strong
+   evidence approaches `1.0`.
+2. Evidence decays exponentially with age. Local observations decay over about
+   15 minutes, remote query reports over about one hour, and historical link
+   projections over about one day. Recent local evidence therefore beats old
+   evidence, while history can still suggest where to ask next.
 3. The strongest usable evidence for a directed pair is selected at planning
    time.
 4. Reported age from a query response is subtracted from the observation time,
@@ -363,6 +383,12 @@ Enhanced features are:
 - optional read receipts, separate from automatic delivery receipts;
 - custody and forwarded-receipt correlation.
 
+New enhanced transfers use the origin-aware part form
+`J8M1 D <ORIGIN> <DEST> <MID> <PART>/<TOTAL> <READABLE-BODY>`. The receiver
+still accepts the original compact form for compatibility. Keeping the
+origin and final destination in each part allows an enhanced intermediary to
+return selective ACKs and final receipts toward the correct endpoint.
+
 The v1 grammar is documented in [`PROTOCOL_V1.md`](PROTOCOL_V1.md). JS8Call
 still receives readable text and applies its own token replacement/varicode
 encoding. JS8Mail does not add encryption or an opaque compression layer.
@@ -417,6 +443,11 @@ Speed evidence is recorded per directed link. The adaptive policy is cautious:
 - never assume that a remote station decodes the local speed;
 - if safe speed control is unavailable in the installed JS8Call build, report
   a recommendation rather than pretending to change it.
+
+Use `--auto-speed` to permit an evidence-backed `MODE.SET_SPEED` request. It
+is off by default, and an unsupported or rejected JS8Call command only leaves
+the recommendation visible in the audit trail; it does not block ordinary
+operation or pretend that the speed changed.
 
 Queries and payload retries have separate exponential backoff. `@ALLCALL
 QUERY MSGS` is broad and slow; targeted custodians and recent successful

@@ -10,6 +10,7 @@ from js8mail.protocol import (
     format_relay_message,
     format_resend_request,
     format_store_message,
+    parse_human_data_part,
     parse_part_ack,
     parse_resend_request,
     split_human_message,
@@ -73,7 +74,7 @@ def test_standard_js8call_relay_and_store_forms() -> None:
 def test_first_ordinary_message_can_identify_js8mail() -> None:
     identified = format_ordinary_message("N0CALL", "hello", announce=True)
     later = format_ordinary_message("N0CALL", "hello")
-    assert "JS8Mail/0.0.1" in identified
+    assert "JS8Mail/0.0.2" in identified
     assert "JS8Mail" not in later
 
 
@@ -81,3 +82,13 @@ def test_long_unicode_body_splits_without_losing_characters() -> None:
     parts = split_human_message("m1", "Ä" * 100, chunk_bytes=32)
     assert "".join(part.payload for part in parts) == "Ä" * 100
     assert all(len(format_human_data_part(part).encode()) <= 4096 for part in parts)
+
+
+def test_origin_aware_part_round_trips_and_old_form_remains_supported() -> None:
+    part = MessagePart("m1", 1, 2, "EVACUATE", "OH3SPN", "G0ABC")
+    parsed = parse_human_data_part(format_human_data_part(part))
+    assert parsed is not None
+    assert parsed[0] == part
+    assert parsed[1:] == ("OH3SPN", "G0ABC")
+    compact = parse_human_data_part("J8M1 D m1 1/2 EVACUATE")
+    assert compact is not None and compact[1:] == (None, None)

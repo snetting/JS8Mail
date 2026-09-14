@@ -1,6 +1,6 @@
 # JS8Call API capability matrix
 
-This matrix describes the adapter boundary used by the current `0.0.1`
+This matrix describes the adapter boundary used by the current `0.0.2`
 daemon. `Runtime` is intentionally `unknown` where behaviour depends on the
 installed JS8Call build; a capability must not be inferred solely from an
 application version string. The live installation used during development has
@@ -14,8 +14,8 @@ claim for every JS8Call release.
 | Frequency | `RIG.GET_FREQ` / `RIG.FREQ` | documented | present | unknown | read-only snapshot |
 | Frequency change | `RIG.SET_FREQ` | documented | present | unknown | disabled until explicitly approved |
 | PTT observation | `RIG.PTT` | documented | emitted | unknown | evidence only |
-| PTT query | `RIG.GET_PTT` | unknown | absent in inspected source | unknown | optional gate |
-| Immediate halt | `RIG.TX_HALT` | unknown | absent in inspected source | unknown | never assume on 2.x |
+| PTT query | `RIG.GET_PTT` | runtime-dependent | runtime-dependent | optional | optional safety gate; failure falls back to TX text check |
+| Immediate halt | `RIG.TX_HALT` | runtime-dependent | runtime-dependent | optional | attempted only by the explicit local pause control; local pause remains authoritative |
 | Station identity | `STATION.GET_CALLSIGN` | documented | present | unknown | startup read-only probe |
 | Station grid/info/status | `STATION.GET_GRID`, `STATION.GET_INFO`, `STATION.GET_STATUS` | documented | present | unknown | startup read-only probe |
 | Version | `STATION.VERSION` | unknown | absent in inspected source | unknown | probe if available |
@@ -27,7 +27,7 @@ claim for every JS8Call release.
 | Current RX text | `RX.GET_TEXT` | documented | present | unknown | diagnostics only |
 | Current TX text | `TX.GET_TEXT` / `TX.TEXT` | documented | present | unknown | mandatory manual-activity guard |
 | Automated send | `TX.SEND_MESSAGE` | documented | present | observed in live testing | serialized, airtime-limited automatic submission; manual TX text is never overwritten |
-| TX queue depth | `TX.GET_QUEUE_DEPTH` | unknown | absent in inspected source | unknown | optional guard; unknown means defer |
+| TX queue depth | `TX.GET_QUEUE_DEPTH` | runtime-dependent | runtime-dependent | optional | optional guard; unknown means defer |
 | Speed | `MODE.GET_SPEED` / `MODE.SET_SPEED` | documented | present | GET observed; SET build-dependent | read first; recommendations are safe fallback when SET is unavailable |
 | Local inbox | `INBOX.GET_MESSAGES`, `INBOX.STORE_MESSAGE` | documented | present | unknown | local store integration later |
 | API failures | `API.ERROR` | documented | present | unknown | bounded diagnostic event |

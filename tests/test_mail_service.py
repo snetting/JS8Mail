@@ -79,3 +79,29 @@ def test_route_planning_uses_only_requested_band(tmp_path: Path) -> None:
     assert service.plan_route("A", "C", now_ms=1000, band="20m").path == ("A",)
     assert service.plan_route("A", "C", now_ms=1000, band="40m").path == ("A", "B", "C")
     database.close()
+
+
+def test_query_call_yes_builds_a_conservative_candidate_route(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    database.record_link_projection(
+        NormalizedEvent(
+            "QUERY.CALL.REACHABILITY",
+            "OH3SPN YES",
+            {"FROM": "OH3SPN", "TO": "MM0ZFG", "SNR": -7},
+            1_000,
+        ),
+        band="20m",
+    )
+    database.record_link_projection(
+        NormalizedEvent(
+            "QUERY.CALL.RESPONSE",
+            "OH3SPN YES",
+            {"FROM": "MM0ZFG", "TO": "SP2ST", "EVIDENCE": "remote_query_call_yes"},
+            1_000,
+        ),
+        band="20m",
+    )
+    plan = service.plan_route("OH3SPN", "SP2ST", now_ms=1_000, band="20m")
+    assert plan.path == ("OH3SPN", "MM0ZFG", "SP2ST")
+    database.close()

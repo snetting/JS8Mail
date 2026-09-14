@@ -1,0 +1,60 @@
+import asyncio
+
+import pytest
+
+from js8mail.application.service import MailService
+from js8mail.radio_policy import AirtimeBudget
+from js8mail.routing import RoutePlan
+from js8mail.storage import Database
+from js8mail.tools.app import Handler
+
+
+class FakeRadio:
+    connected = True
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def send_message(self, text: str) -> None:
+        self.sent.append(text)
+
+    async def set_speed(self, speed: int) -> None:
+        return
+
+
+@pytest.mark.asyncio
+async def test_selected_multi_hop_plan_reaches_fake_radio(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("SP2ST", "route", "test path")
+    database.upsert_peer_capabilities("SP2ST", 1, ("E2E", "MP"), 9_999_999_999_999)
+    radio = FakeRadio()
+    handler = object.__new__(Handler)
+    handler.service = service
+    handler.client = radio
+    handler.status = {
+        "callsign": "OH3SPN",
+        "tx_mode": "automatic",
+        "paused": False,
+        "speed": 0,
+        "band": "20m",
+        "js8_activity_until_ms": 0,
+    }
+    handler.announced_destinations = set()
+    handler.airtime_budget = AirtimeBudget()
+    handler.message_budgets = {}
+    handler.tx_lock = asyncio.Lock()
+    handler.last_tx_at_ms = None
+    handler.auto_speed = False
+    plan = RoutePlan("relay", ("OH3SPN", "MM0ZFG", "SP2ST"), 0.7, 0.6, 2_000, "fresh path")
+
+    await handler.transmit(message_id, plan)
+
+    assert radio.sent == [
+        "MM0ZFG>SP2ST MSG J8M1 D OH3SPN SP2ST " + message_id + " 1/1 test path"
+    ]
+    assert database.attempted_message_paths(message_id) == {
+        ("OH3SPN", "MM0ZFG", "SP2ST")
+    }
+    database.close()

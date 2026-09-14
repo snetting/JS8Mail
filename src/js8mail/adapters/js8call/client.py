@@ -1,4 +1,4 @@
-"""Async, bounded, receive-first JS8Call TCP client."""
+"""Async, bounded JS8Call TCP client with explicit RF safety gates."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from js8mail.adapters.js8call.protocol import (
     ApiMessage,
     ApiProtocolError,
     decode_line,
+    encode_control_request,
     encode_read_only_request,
     encode_speed_request,
     encode_transmit_request,
@@ -22,9 +23,9 @@ EventHandler = Callable[[NormalizedEvent], Awaitable[None]]
 class Js8CallClient:
     """One connection to JS8Call's JSON-line TCP API.
 
-    The initial client is intentionally receive-only. It can issue bounded
-    read-only probes supplied by a future capability manager, but has no method
-    that submits transmit text.
+    Read-only requests, bounded automatic text submission, optional speed
+    control, and the explicit operator halt are kept as separate adapter
+    operations. Higher layers decide when a message is eligible for RF.
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 2442) -> None:
@@ -34,6 +35,12 @@ class Js8CallClient:
         self._writer: asyncio.StreamWriter | None = None
         self._handler: EventHandler | None = None
         self._pending: dict[str, asyncio.Future[ApiMessage]] = {}
+        self._event_tasks: set[asyncio.Task[None]] = set()
+        self._request_counter = 0
+
+    def _request_id(self) -> str:
+        self._request_counter += 1
+        return f"{utc_now_ms()}-{self._request_counter}"
 
     @property
     def connected(self) -> bool:
@@ -49,6 +56,11 @@ class Js8CallClient:
             if not future.done():
                 future.set_exception(ConnectionError("JS8Call connection closed"))
         self._pending.clear()
+        tasks, self._event_tasks = self._event_tasks, set()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         if writer is not None:
             writer.close()
             with contextlib.suppress(Exception):
@@ -74,25 +86,51 @@ class Js8CallClient:
                 if pending is not None and not pending.done():
                     pending.set_result(message)
                     continue
-                await handler(
-                    NormalizedEvent(
-                        event_type=message.type,
-                        value=message.value,
-                        params=message.params,
-                        received_at_ms=utc_now_ms(),
-                    )
+                event = NormalizedEvent(
+                    event_type=message.type,
+                    value=message.value,
+                    params=message.params,
+                    received_at_ms=utc_now_ms(),
                 )
+
+                async def dispatch(current_event: NormalizedEvent = event) -> None:
+                    await handler(current_event)
+                task: asyncio.Task[None] = asyncio.create_task(dispatch())
+                self._event_tasks.add(task)
+                task.add_done_callback(self._event_tasks.discard)
         finally:
+            if self._event_tasks:
+                await asyncio.gather(*tuple(self._event_tasks), return_exceptions=True)
             self._handler = None
 
     async def send_message(self, text: str) -> None:
-        """Queue one operator-approved human-readable message in JS8Call."""
+        """Queue one validated human-readable message in JS8Call."""
         if self._writer is None or self._writer.is_closing():
             raise ConnectionError("JS8Call is not connected")
         current = await self.request_read_only("TX.GET_TEXT")
         if current.value.strip():
             raise RuntimeError("JS8Call transmit text is occupied by the operator")
-        request_id = str(utc_now_ms())
+        # Newer builds expose authoritative PTT and queue state. Older builds
+        # may return an API error; in that case the existing TX.TEXT guard is
+        # the strongest compatible check and the caller still records the
+        # capability as unavailable.
+        try:
+            ptt = await self.request_read_only("RIG.GET_PTT")
+        except (ConnectionError, TimeoutError, RuntimeError):
+            ptt = None
+        if ptt is not None and ptt.type == "RIG.PTT_STATUS":
+            raw_ptt = str(ptt.params.get("PTT", ptt.value)).strip().lower()
+            if raw_ptt in {"true", "on", "1", "tx"}:
+                raise RuntimeError("JS8Call is already transmitting")
+            if raw_ptt not in {"false", "off", "0", "rx", "idle", ""}:
+                raise RuntimeError("JS8Call PTT state is unavailable")
+        try:
+            queue = await self.request_read_only("TX.GET_QUEUE_DEPTH")
+        except (ConnectionError, TimeoutError, RuntimeError):
+            queue = None
+        if queue is not None and queue.type == "TX.QUEUE_DEPTH" and int(queue.params.get("DEPTH", 0)) > 0:
+            raise RuntimeError("JS8Call transmit queue is occupied")
+        request_id = self._request_id()
         # JS8Call's automatic API path is TX.SEND_MESSAGE with the text in
         # value. Sending an empty value only populates the UI text box.
         self._writer.write(encode_transmit_request("TX.SEND_MESSAGE", text, request_id=request_id))
@@ -101,7 +139,7 @@ class Js8CallClient:
     async def request_read_only(self, request_type: str) -> ApiMessage:
         if self._writer is None or self._writer.is_closing():
             raise ConnectionError("JS8Call is not connected")
-        request_id = str(utc_now_ms())
+        request_id = self._request_id()
         future: asyncio.Future[ApiMessage] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
         try:
@@ -115,6 +153,13 @@ class Js8CallClient:
         """Request a JS8Call speed change; callers must apply policy first."""
         if self._writer is None or self._writer.is_closing():
             raise ConnectionError("JS8Call is not connected")
-        request_id = str(utc_now_ms())
+        request_id = self._request_id()
         self._writer.write(encode_speed_request(speed, request_id=request_id))
+        await self._writer.drain()
+
+    async def halt(self) -> None:
+        """Ask JS8Call to halt TX when the installed build supports it."""
+        if self._writer is None or self._writer.is_closing():
+            raise ConnectionError("JS8Call is not connected")
+        self._writer.write(encode_control_request("RIG.TX_HALT", request_id=self._request_id()))
         await self._writer.drain()

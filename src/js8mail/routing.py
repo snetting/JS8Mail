@@ -29,7 +29,13 @@ class LinkEvidence:
     expected_airtime_ms: int = 1000
     available: bool = True
 
-    def score(self, now_ms: int, half_life_ms: int = 86_400_000) -> float:
+    def score(self, now_ms: int, half_life_ms: int | None = None) -> float:
+        if half_life_ms is None:
+            half_life_ms = {
+                "local": 15 * 60 * 1000,
+                "remote": 60 * 60 * 1000,
+                "historical": 24 * 60 * 60 * 1000,
+            }.get(self.source_kind, 30 * 60 * 1000)
         age = max(0, now_ms - self.observed_at_ms)
         decay = math.exp(-math.log(2) * age / half_life_ms)
         return max(0.0, min(1.0, self.base_score * decay))
@@ -88,8 +94,14 @@ class RouteEngine:
         origin, destination = origin.upper(), destination.upper()
         attempted = attempted_paths or set()
         paths: list[RoutePlan] = []
+        explored = 0
+        max_explored = 10_000
 
         def walk(node: str, path: tuple[str, ...], scores: tuple[float, ...], airtime: int) -> None:
+            nonlocal explored
+            explored += 1
+            if explored > max_explored:
+                return
             if self.max_hops is not None and len(path) - 1 > self.max_hops:
                 return
             if node == destination:

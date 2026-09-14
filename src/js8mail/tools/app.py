@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 import threading
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,13 +15,15 @@ from typing import Any, cast
 from urllib.parse import parse_qs, unquote, urlparse
 
 from js8mail.adapters.js8call.client import Js8CallClient
+from js8mail.adapters.js8call.protocol import normalize_directed_event
 from js8mail.application.lifecycle import MessageState
 from js8mail.application.service import MailService
 from js8mail.bands import band_from_frequency_hz, context_from_params
 from js8mail.discovery import (
+    PendingCallQuery,
     QueryScheduler,
     call_query,
-    custodian_messages_query,
+    correlate_query_call_response,
     messages_query,
     parse_messages_available,
     parse_query_call_response,
@@ -39,26 +42,68 @@ from js8mail.protocol import (
     format_ordinary_message,
     format_part_ack,
     format_relay_message,
+    format_relay_text,
     format_store_message,
     parse_ack,
     parse_capability,
     parse_delivery_ack,
+    parse_human_data_part,
     parse_part_ack,
     parse_resend_request,
     split_human_message,
 )
-from js8mail.radio_policy import AirtimeBudget, estimate_airtime_ms
+from js8mail.radio_policy import (
+    SPEED_AIRTIME_MS,
+    AdaptiveSpeedPolicy,
+    AirtimeBudget,
+    SpeedEvidence,
+    estimate_airtime_ms,
+)
 from js8mail.storage import Database
 
 DIRECT_RESPONSE_DEADLINE_MS = 2 * 60 * 1000
 AUTOMATED_TX_GAP_MS = 30 * 1000
+
+
+def _recent_outbound_transaction(
+    database: Database, source: str, now_ms: int
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Find one unambiguous legacy transaction for a plain JS8Call ACK."""
+    source = source.strip().upper()
+    candidates: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    delivery_actions = {"direct", "multipart", "relay", "store"}
+    for message in database.list_messages(MessageState.IN_PROGRESS):
+        destination = str(message["destination"]).upper()
+        for attempt in reversed(database.list_attempts(str(message["id"]))):
+            if attempt["status"] != "submitted":
+                continue
+            action = str(attempt["action"])
+            if action not in delivery_actions:
+                continue
+            target = str(attempt["target"]).upper()
+            if action == "store":
+                matches = target == source
+            elif action in {"direct", "multipart"}:
+                matches = destination == source or target == source
+            elif action == "relay":
+                # A relay ACK may be emitted by either the first hop or the
+                # final destination. Never let an unrelated ACK claim a mail.
+                matches = target == source or destination == source
+            else:
+                matches = False
+            if matches and now_ms - int(attempt["created_at_ms"]) <= DIRECT_RESPONSE_DEADLINE_MS:
+                candidates.append((int(attempt["created_at_ms"]), message, attempt))
+                break
+    if len(candidates) != 1:
+        return None
+    return candidates[0][1:]
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>JS8Mail</title><style>
 body{font:15px system-ui;max-width:1250px;margin:2em auto;padding:0 1em;background:#f5f7f9;color:#18222d}.topbar{position:sticky;top:0;z-index:10;background:#f5f7f9;padding:.35em 0 .5em}
  .workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:1em;align-items:stretch}.workspace section{margin:0;min-width:0}.workspace>section{min-height:260px}.inbox-panel{max-height:360px;overflow:auto}.live-panel{min-height:300px}.live-panel svg{width:100%;min-height:280px;background:#fbfcfd;border-radius:6px}.stations-panel{grid-column:2;grid-row:2 / span 2}.groups-panel{grid-column:1}#messages th:nth-child(2),#messages td:nth-child(2){width:8em}#messages th:nth-child(4),#messages td:nth-child(4){width:17em;white-space:nowrap}@media(max-width:800px){.workspace{display:block}.workspace>section{margin:1em 0}.stations-panel{grid-column:auto;grid-row:auto}#messages th:nth-child(4),#messages td:nth-child(4){width:auto;white-space:normal}}
 section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em;margin:1em 0}input,textarea,select{box-sizing:border-box;width:100%;padding:.5em;margin:.25em 0 .7em}textarea{height:110px}button{background:#1769aa;color:#fff;border:0;border-radius:5px;padding:.5em .8em;margin:.2em;cursor:pointer}.danger{background:#a33}.pill{display:inline-block;padding:.3em .6em;border-radius:1em;background:#e8edf2;margin:.2em}.ok{background:#d8f3dc}.warn{background:#fff1c2}.state-pill{display:inline-block;padding:.3em .6em;border-radius:1em;margin:.2em;font-weight:600;white-space:nowrap}.state-in-progress{background:#dbeafe;color:#174ea6}.state-complete{background:#d8f3dc;color:#176b35}.state-complete-plus{background:#b7f0d0;color:#075c38}.state-failed{background:#ffd9d9;color:#8b1e1e}.state-cancelled,.state-expired{background:#e8edf2;color:#53606d}#status .pill:nth-child(3){display:none}.mono{font:12px monospace;white-space:pre-wrap;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}svg{display:block;max-width:100%;height:auto}td,th{text-align:left;border-bottom:1px solid #e4e9ee;padding:.5em;vertical-align:top;overflow-wrap:anywhere}details summary{cursor:pointer;padding:.25em 0}details summary::marker{color:#1769aa}
-</style><div class=topbar><h1>JS8Mail</h1><p>Resilient radio mail for reliable offline comms · by <a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN</a> <button onclick="useStation('OH3SPN')">Compose to OH3SPN</button></p><section><div id=status>Loading…</div><div id=radio-leds class=leds><span id=led-rx class='led on-rx'>RX</span><span id=led-dcd class=led>DCD</span><span id=led-tx class=led>TX</span><span id=led-err class=led>ERR</span></div></section></div><style>.leds{display:inline-flex;gap:.3em;margin-left:.5em;vertical-align:middle}.led{padding:.25em .5em;border-radius:1em;background:#e8edf2;color:#53606d;font-size:12px;font-weight:600}.led.on-rx{background:#d8f3dc;color:#176b35}.led.on-tx{background:#ffd9d9;color:#8b1e1e}.led.on-dcd{background:#fff1c2;color:#785500}.led.on-err{background:#8b1e1e;color:white}#status .pill:nth-child(3),#status .pill:nth-child(4){display:none}</style>
+</style><div class=topbar><h1>JS8Mail</h1><p>Resilient radio mail for reliable offline comms · by <a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN</a> <button onclick="useStation('OH3SPN')">Compose to OH3SPN</button></p><section><div id=status>Loading…</div><div id=radio-leds class=leds><span id=led-rx class='led on-rx'>RX</span><span id=led-dcd class='led'>DCD</span><span id=led-tx class='led'>TX</span><span id=led-err class='led'>ERR</span><span id=led-js8 class='led'>JS8</span></div></section></div><style>.leds{display:inline-flex;gap:.3em;margin-left:.5em;vertical-align:middle}.led{padding:.25em .5em;border-radius:1em;background:#e8edf2;color:#53606d;font-size:12px;font-weight:600}.led.on-rx{background:#d8f3dc;color:#176b35}.led.on-tx{background:#ffd9d9;color:#8b1e1e}.led.on-dcd{background:#fff1c2;color:#785500}.led.on-err{background:#8b1e1e;color:white}#status .pill:nth-child(3){display:none}</style>
 <div class=workspace><section class=compose-panel><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section class=live-panel><h2>Live RF Activity <small id=live-graph-meta></small></h2><div id=live-graph><p>Waiting for active-band observations.</p></div></section>
 <section class=inbox-panel><h2>Inbox</h2><div id=inbox>Loading…</div></section>
@@ -77,13 +122,14 @@ async function showGraph(id){try{let s=await api('/api/status'),g=await api('/ap
 function useStation(call){document.querySelector('#compose input[name=destination]').value=call;document.querySelector('#compose input[name=destination]').focus()}
 let stationCache=[];function renderStations(){let q=document.getElementById('station-search').value.trim().toUpperCase();let s=stationCache.filter(x=>!q||x.callsign.includes(q)||x.evidence.join(' ').toUpperCase().includes(q));document.getElementById('stations').innerHTML=s.length?'<table><tr><th>Callsign</th><th>Age</th><th>SNR</th><th>Evidence</th><th>Action</th></tr>'+s.map(x=>`<tr><td><b>${esc(x.callsign)}</b></td><td>${esc(relativeAge(x.age_seconds))}</td><td>${x.snr==null?'—':esc(x.snr)+' dB'}</td><td>${esc(x.evidence.map(evidenceLabel).join(', '))}</td><td><button onclick="useStation('${esc(x.callsign)}')">Compose</button></td></tr>`).join('')+'</table>':'<p>No matching station evidence.</p>'}async function refreshStations(){stationCache=await api('/api/stations');renderStations()}
 function renderInbox(items){document.getElementById('inbox').innerHTML=items.length?'<table><tr><th>From</th><th>Status</th><th>Message</th><th>Updated</th></tr>'+items.map(x=>`<tr><td><b>${esc(x.sender)}</b></td><td><span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts+' parts'}</span></td><td class=mono>${esc(x.body)}</td><td>${esc(new Date(x.updated_at_ms).toLocaleString())}<br>${esc(x.path||'')}</td></tr>`).join('')+'</table>':'<p>No received messages.</p>'}
-async function refresh(){let s=await api('/api/status');document.getElementById('status').innerHTML=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class=pill>Speed: ${esc(s.speed??'unknown')}</span><span class=pill>TX mode: ${s.tx_mode}</span><span class=pill>Port: ${s.port}</span>`;let m=await api('/api/messages');document.getElementById('messages').innerHTML=m.length?'<table><tr><th>Message</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><details ${x.state==='in_progress'?'open':''}><summary>${statePill(x)} · <span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?` · retry ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (#${x.retry_count})`:''}</summary><div class=mono>${(x.attempts||[]).map(a=>`${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}`).join('<br>')||'No attempts recorded.'}</div></details></td><td>${esc(x.destination)}</td><td><b>${esc(x.subject||'(no subject)')}</b><br>${esc(x.body)}</td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled'].includes(x.state)?`<button onclick="act('${x.id}','retry')">Retry</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
+async function refresh(){let s=await api('/api/status'),statusHtml=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class='pill ${s.paused?'warn':'ok'}'>RF: ${s.paused?'paused':'active'}</span><span class=pill>Port: ${s.port}</span><button onclick="togglePause()">${s.paused?'Resume RF':'Pause RF'}</button>`;let statusEl=document.getElementById('status');if(statusEl.dataset.rendered!==statusHtml){statusEl.innerHTML=statusHtml;statusEl.dataset.rendered=statusHtml}let m=await api('/api/messages');let openIds=[...document.querySelectorAll('#messages details[open]')].map(d=>d.dataset.id);document.getElementById('messages').innerHTML=m.length?'<table><tr><th>Message</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><details data-id='${esc(x.id)}' ${openIds.includes(x.id)?'open':''}><summary>${statePill(x)} · <span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?` · retry ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (#${x.retry_count})`:''}</summary><div class=mono>${(x.attempts||[]).map(a=>`${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}`).join('<br>')||'No attempts recorded.'}</div></details></td><td>${esc(x.destination)}</td><td><b>${esc(x.subject||'(no subject)')}</b><br>${esc(x.body)}</td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route','in_progress'].includes(x.state)?`<button onclick="act('${x.id}','retry-now')">Retry now</button>`:''}${['queued','waiting_route','in_progress'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled','expired','delivered'].includes(x.state)?`<button class=danger onclick="act('${x.id}','delete')">Remove</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
 const EMERGENCY_GROUPS=['@EMCOMM','@ARES','@RACES','@RAYNET','@NTS','@SKYWARN','@WX','@AMRRON'];function useGroup(group){document.querySelector('#compose input[name=destination]').value=group;document.querySelector('#compose input[name=destination]').focus()}function renderGroups(items){let groups=items.filter(x=>EMERGENCY_GROUPS.includes(x.name));document.getElementById('groups').innerHTML=groups.length?'<table><tr><th>Group</th><th>Purpose</th><th>Seen</th><th>Action</th></tr>'+groups.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.description||'emergency group')}</td><td>${x.seen_count?esc(relativeAge((Date.now()-x.last_seen_at_ms)/1000)):'not yet observed'}</td><td><button onclick="useGroup('${esc(x.name)}')">Compose</button><button onclick="actGroup('${esc(x.name)}','${x.subscribed?'unsubscribe':'subscribe'}')">${x.subscribed?'Unsubscribe':'Subscribe'}</button></td></tr>`).join('')+'</table>':'<p>No emergency groups recorded.</p>'}function renderAlerts(items){let alerts=items.filter(x=>x.group_name);document.getElementById('alerts').innerHTML=alerts.length?alerts.map(x=>`<article><b>${esc(x.group_name)} · ${esc(x.sender)}</b> <span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts}</span><div class=mono>${esc(x.body)}</div><small>${esc(new Date(x.updated_at_ms).toLocaleString())} · ${esc(x.path||'')}</small></article>`).join(''):'<p>No group alerts received.</p>'}
 const refreshMailbox=refresh;refresh=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);return refreshMailbox()};const updateRadioLeds=async()=>{let s=await api('/api/status'),activity=s.connected?(s.radio_activity||'RX'):'ERR';document.querySelectorAll('#radio-leds .led').forEach(x=>x.className='led');let led=document.getElementById('led-'+activity.toLowerCase());if(led)led.className='led on-'+activity.toLowerCase()};const refreshWithRadioState=refresh;refresh=async()=>{await refreshWithRadioState();await updateRadioLeds()};
 async function actGroup(group,action){try{await api(`/api/groups/${encodeURIComponent(group)}/${action}`,{method:'POST'});refresh()}catch(e){alert(e)}}
 async function act(id,a){try{await api(`/api/messages/${id}/${a}`,{method:'POST'});refresh()}catch(e){alert(e)}}
+async function togglePause(){try{let s=await api('/api/status');await api(`/api/control/${s.paused?'resume':'pause'}`,{method:'POST'});refresh()}catch(e){alert(e)}}
 const expandedMessages=new Set;document.addEventListener('click',e=>{let summary=e.target.closest?.('#messages details summary');if(!summary)return;setTimeout(()=>{let detail=summary.parentElement,id=detail?.querySelector('small')?.textContent.trim();if(id){if(detail.open)expandedMessages.add(id);else expandedMessages.delete(id)}},0)});function restoreExpanded(){document.querySelectorAll('#messages details').forEach(d=>{let id=d.querySelector('small')?.textContent.trim();if(id&&expandedMessages.has(id))d.open=true})}const refreshKeepExpanded=refresh;refresh=async()=>{if(document.querySelector('#messages details[open]')){await updateRadioLeds();return}await refreshKeepExpanded();restoreExpanded()};
-async function addMessageControls(){let items=await api('/api/messages'),states=Object.fromEntries(items.map(x=>[x.id,x.state]));document.querySelectorAll('#messages tr').forEach(row=>{let id=row.querySelector('small')?.textContent.trim(),state=states[id],cell=row.lastElementChild;if(!id||!cell||row.dataset.controls)return;row.dataset.controls='1';if(['queued','waiting_route'].includes(state)){let b=document.createElement('button');b.textContent='Retry now';b.onclick=()=>act(id,'retry-now');let cancel=[...cell.querySelectorAll('button')].find(x=>x.textContent.trim()==='Cancel');cell.insertBefore(b,cancel||null)}if(state!=='in_progress'){let b=document.createElement('button');b.textContent='Remove';b.className='danger';b.onclick=()=>act(id,'delete');cell.appendChild(b)}})}
+const refreshStable=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);await refreshMailbox()};refresh=async()=>{await refreshStable();await updateRadioLeds();restoreExpanded()};async function addMessageControls(){/* controls are rendered with each stable mailbox refresh */}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
 document.addEventListener('submit',e=>{if(e.target.id==='compose')setTimeout(()=>document.getElementById('messages')?.scrollIntoView({behavior:'smooth',block:'start'}),700)},true);
 document.getElementById('station-search').oninput=renderStations;
@@ -94,7 +140,7 @@ function renderLiveGraph(g){let box=document.getElementById('live-graph');if(!bo
 function formatDial(hz){let n=Number(hz);return Number.isFinite(n)&&n>0?(n/1000000).toFixed(5)+' MHz':'not set'}
 function styleStatusPills(){let bar=document.getElementById('status'),p=bar?.querySelectorAll('.pill');if(!p||p.length<5)return;let s=window.lastStatus||{};p[0].className='pill '+(s.connected?'good':'bad');p[1].className='pill '+(s.callsign?'good':'bad');p[2].className='pill '+(s.speed!==''&&s.speed!=='unknown'&&s.speed!=='unavailable'?'good':'bad');p[3].className='pill '+(s.tx_mode?'good':'bad');p[4].className='pill '+(s.connected?'good':'bad')}
 async function updateBandStatus(){try{let s=await api('/api/status'),el=document.getElementById('status-band');window.lastStatus=s;if(!el){el=document.createElement('span');el.id='status-band';el.className='pill';document.getElementById('status').appendChild(el)}let valid=Boolean(s.band)&&Number(s.dial_frequency)>0;el.className='pill '+(valid?'good':'bad');let value=`Band: ${s.band||'not set'} · Dial: ${formatDial(s.dial_frequency)}`;if(el.textContent!==value)el.textContent=value;styleStatusPills()}catch(e){}}
-updateBandStatus();setInterval(updateBandStatus,3000);
+document.head.insertAdjacentHTML('beforeend',"<style>#status .pill:nth-child(3){display:inline-block!important}</style>");updateBandStatus();setInterval(updateBandStatus,3000);
 // refresh() redraws #status, so keep the band pill attached to the current
 // status contents instead of allowing that redraw to remove it.
 new MutationObserver(()=>updateBandStatus()).observe(document.getElementById('status'),{childList:true});
@@ -114,6 +160,56 @@ class Handler(BaseHTTPRequestHandler):
     message_budgets: dict[str, AirtimeBudget]
     tx_lock: asyncio.Lock
     last_tx_at_ms: int | None
+    auto_speed: bool
+
+    async def _maybe_adapt_speed(self, peer: str) -> None:
+        """Apply the conservative per-peer speed policy before a payload."""
+        try:
+            current = int(self.status.get("speed", ""))
+        except (TypeError, ValueError):
+            return
+        if current not in SPEED_AIRTIME_MS:
+            return
+        raw = self.service.database.speed_evidence(
+            str(self.status.get("callsign", "")),
+            peer,
+            str(self.status.get("band", "")),
+        )
+        evidence = {
+            speed: SpeedEvidence(
+                successes=int(values.get("successes", 0)),
+                failures=int(values.get("failures", 0)),
+                average_snr=(
+                    float(values["average_snr"])
+                    if isinstance(values.get("average_snr"), (int, float))
+                    else None
+                ),
+            )
+            for speed, values in raw.items()
+        }
+        decision = AdaptiveSpeedPolicy().recommend(current, evidence)
+        self.status["speed_recommendation"] = {
+            "peer": peer,
+            "speed": decision.speed,
+            "changed": decision.changed,
+            "explanation": decision.explanation,
+        }
+        self.service.database.audit(
+            "radio.speed_recommendation",
+            {"peer": peer, "speed": decision.speed, "changed": decision.changed},
+        )
+        if self.auto_speed and decision.changed:
+            try:
+                await self.client.set_speed(decision.speed)
+            except (ConnectionError, OSError, RuntimeError):
+                self.service.database.audit(
+                    "radio.speed_change_unavailable", {"peer": peer, "speed": decision.speed}
+                )
+            else:
+                self.status["speed"] = decision.speed
+                self.service.database.audit(
+                    "radio.speed_changed", {"peer": peer, "speed": decision.speed}
+                )
 
     def reply(self, code: int, value: Any, content_type: str = "application/json") -> None:
         data = value.encode() if isinstance(value, str) else json.dumps(value).encode()
@@ -181,6 +277,26 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.reply(200, {"ok": True})
                 return
+            if path == "/api/control/pause":
+                self.status["paused"] = True
+                self.service.database.audit("radio.automation_paused", {"source": "ui"})
+                if self.client.connected:
+                    future = asyncio.run_coroutine_threadsafe(self.client.halt(), self.loop)
+                    try:
+                        future.result(timeout=5)
+                    except (ConnectionError, OSError, RuntimeError, TimeoutError):
+                        # The local pause is still authoritative when the
+                        # installed JS8Call build does not expose TX.HALT.
+                        self.service.database.audit(
+                            "radio.halt_unavailable", {"source": "ui"}
+                        )
+                self.reply(200, {"ok": True, "paused": True})
+                return
+            if path == "/api/control/resume":
+                self.status["paused"] = False
+                self.service.database.audit("radio.automation_resumed", {"source": "ui"})
+                self.reply(200, {"ok": True, "paused": False})
+                return
             if path == "/api/messages":
                 message_id = self.service.compose(
                     str(payload.get("destination", "")),
@@ -217,7 +333,11 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, json.JSONDecodeError, TimeoutError, ConnectionError) as exc:
             self.reply(400, {"error": str(exc)})
 
-    async def transmit(self, message_id: str) -> None:
+    async def transmit(self, message_id: str, selected_plan: Any | None = None) -> None:
+        if self.status.get("paused"):
+            raise RuntimeError("RF automation is paused")
+        if self.status.get("tx_mode") != "automatic":
+            raise RuntimeError("automatic RF transmission is disabled")
         message = self.service.database.get_message(message_id)
         if message is None:
             raise KeyError(message_id)
@@ -236,16 +356,19 @@ class Handler(BaseHTTPRequestHandler):
             and attempt["status"] in {"started", "submitted", "failed"}
             for attempt in self.service.database.list_attempts(message_id)
         )
-        plan = (
-            self.service.plan_route(
+        # The scheduler may already have selected a route based on a fresh
+        # reply. Never recompute it here: doing so used to turn an indirect
+        # selection back into a direct first payload attempt.
+        plan = selected_plan
+        if plan is None and origin and not first_delivery_attempt:
+            plan = self.service.plan_route(
                 origin,
                 destination,
                 attempted_paths=self.service.database.attempted_message_paths(message_id),
                 band=str(self.status.get("band", "")),
             )
-            if origin and not first_delivery_attempt
-            else None
-        )
+        if plan is not None and getattr(plan, "action", None) == "defer":
+            raise RuntimeError("no usable route selected")
         path = plan.path if plan is not None else (origin, destination)
         peer = self.service.database.peer_capabilities(destination)
         enhanced_parts = (
@@ -255,14 +378,18 @@ class Handler(BaseHTTPRequestHandler):
         )
         wire_texts: tuple[str, ...]
         if plan is not None and len(path) >= 3:
-            payloads = tuple(format_human_data_part(part) for part in enhanced_parts) or (str(message["body"]),)
+            payloads = tuple(
+                format_human_data_part(part, origin, destination) for part in enhanced_parts
+            ) or (str(message["body"]),)
             wire_texts = tuple(format_relay_message(path, payload) for payload in payloads)
             action = "relay"
             target = path[1]
             detail = f"discovered path: {'→'.join(path)}"
         elif enhanced_parts:
             wire_texts = tuple(
-                format_ordinary_message(destination, format_human_data_part(part))
+                format_ordinary_message(
+                    destination, format_human_data_part(part, origin, destination)
+                )
                 for part in enhanced_parts
             )
             action = "multipart"
@@ -275,9 +402,18 @@ class Handler(BaseHTTPRequestHandler):
             detail = "initial direct attempt"
         if origin and len(path) >= 2:
             self.service.database.record_message_path(message_id, path)
-        if destination not in self.announced_destinations and self.service.database.peer_capabilities(destination) is None:
+        if (
+            not destination.startswith("@")
+            and destination not in self.announced_destinations
+            and self.service.database.peer_capabilities(destination) is None
+        ):
             try:
-                await Handler.send_rf(self, f"{destination} {format_capability()}", message_id)
+                capability_text = (
+                    f"{destination} {format_capability()}"
+                    if len(path) < 3
+                    else format_relay_text(path, format_capability())
+                )
+                await Handler.send_rf(self, capability_text, message_id)
                 self.service.database.record_attempt(
                     message_id, "capability", destination, "submitted", "JS8Mail capability advertisement"
                 )
@@ -291,6 +427,8 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
+            if target and not target.startswith("@"):
+                await self._maybe_adapt_speed(target)
             for part in enhanced_parts:
                 self.service.database.upsert_message_part(
                     part.message_id, part.number, part.total, part.payload,
@@ -299,9 +437,7 @@ class Handler(BaseHTTPRequestHandler):
             for text in wire_texts:
                 await Handler.send_rf(self, text, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
-            self.service.database.record_attempt(
-                message_id, "direct", destination, "failed", type(exc).__name__
-            )
+            self.service.database.record_attempt(message_id, action, target, "failed", type(exc).__name__)
             raise
         self.service.database.record_attempt(
             message_id, action, target, "submitted", "queued in JS8Call for next TX cycle"
@@ -328,6 +464,7 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
+            await self._maybe_adapt_speed(custodian)
             await Handler.send_rf(self, text, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(message_id, "store", custodian, "failed", type(exc).__name__)
@@ -343,6 +480,11 @@ class Handler(BaseHTTPRequestHandler):
         if message is None:
             raise KeyError(message_id)
         destination = str(message["destination"])
+        if destination.startswith("@"):
+            # Group traffic is explicitly operator-addressed and must not be
+            # preceded by a group-wide SNR? probe or capability fan-out.
+            await self.transmit(message_id)
+            return
         # Even when stale direct or indirect evidence exists, the first action
         # for a newly queued destination is the small direct SNR probe.  This
         # prevents spending a long JS8Call frame on a station that is not
@@ -378,6 +520,10 @@ class Handler(BaseHTTPRequestHandler):
 
     async def _send_rf_serialized(self, text: str, message_id: str | None = None) -> None:
         """Submit one frame after leaving a listening opportunity."""
+        if self.status.get("paused"):
+            raise RuntimeError("RF automation is paused")
+        if self.status.get("tx_mode") != "automatic":
+            raise RuntimeError("automatic RF transmission is disabled")
         now = utc_now_ms()
         if self.last_tx_at_ms is not None:
             wait_ms = self.last_tx_at_ms + AUTOMATED_TX_GAP_MS - now
@@ -389,10 +535,11 @@ class Handler(BaseHTTPRequestHandler):
                 await asyncio.sleep(wait_ms / 1000)
                 now = utc_now_ms()
         try:
-            speed = int(self.status.get("speed", 1))
+            speed = int(self.status.get("speed", 0))
         except (TypeError, ValueError):
             speed = 1
-        speed = max(0, min(4, speed))
+        if speed not in SPEED_AIRTIME_MS:
+            speed = 0
         airtime_ms = estimate_airtime_ms(text, speed)
         now = utc_now_ms()
         if not self.airtime_budget.can_spend_at(airtime_ms, now):
@@ -460,6 +607,7 @@ async def run(args: argparse.Namespace) -> None:
         "host": args.host,
         "port": args.port,
         "tx_mode": args.tx_mode,
+        "paused": False,
         "callsign": "",
         "band": "",
         "dial_frequency": None,
@@ -467,6 +615,7 @@ async def run(args: argparse.Namespace) -> None:
         "radio_activity": "RX",
         "dcd_until_ms": 0,
         "js8_activity_until_ms": 0,
+        "speed_recommendation": None,
     }
     handler: type[Handler] = type(
         "BoundHandler",
@@ -481,6 +630,7 @@ async def run(args: argparse.Namespace) -> None:
             "message_budgets": {},
             "tx_lock": asyncio.Lock(),
             "last_tx_at_ms": None,
+            "auto_speed": args.auto_speed,
         },
     )
     server = ThreadingHTTPServer((args.ui_host, args.ui_port), handler)
@@ -490,7 +640,6 @@ async def run(args: argparse.Namespace) -> None:
     delay = 1.0
     query_scheduler = QueryScheduler()
     inbox_scheduler = QueryScheduler(base_delay_ms=1_800_000, max_delay_ms=21_600_000)
-    custodian_scheduler = QueryScheduler(base_delay_ms=1_800_000, max_delay_ms=21_600_000)
     last_inbox_query = database.latest_audit_time(
         "discovery.query_submitted", "action", "messages_query"
     )
@@ -501,8 +650,46 @@ async def run(args: argparse.Namespace) -> None:
             int(asyncio.get_running_loop().time() * 1000),
             max(0, 1_800_000 - elapsed),
         )
-    reassembly: dict[str, MultipartAccumulator] = {}
-    recent_call_queries: list[tuple[int, str]] = []
+    # MID is only locally unique; the sender is part of the reassembly key.
+    reassembly: dict[tuple[str, str], MultipartAccumulator] = {}
+    pending_call_queries: list[PendingCallQuery] = []
+    pending_retrievals: set[tuple[str, int]] = set()
+    capability_last_sent: dict[str, int] = {}
+    recent_query_answers: dict[str, int] = {}
+    query_context_window_ms = 180_000
+
+    # A compact QUERY CALL response does not repeat the queried callsign.
+    # Restore very recent contexts so a daemon restart between query and
+    # response does not discard an otherwise useful positive answer.
+    query_context_now = utc_now_ms()
+    for audit in database.recent_audit_events(
+        "discovery.query_submitted", query_context_now - query_context_window_ms
+    ):
+        payload = audit["payload"]
+        action = str(payload.get("action", ""))
+        if action not in {"candidate_query_call", "allcall_query_call"}:
+            continue
+        text_fields = str(payload.get("text", "")).strip().upper().split()
+        if len(text_fields) < 4 or text_fields[-2:] == ["QUERY", "CALL"]:
+            continue
+        destination = text_fields[-1].rstrip("?")
+        responder = str(payload.get("target", "")).strip().upper()
+        if not destination or not responder:
+            continue
+        key = (
+            f"call-query:{destination}"
+            if responder == "@ALLCALL"
+            else f"candidate-query:{responder}:{destination}"
+        )
+        pending_call_queries.append(
+            PendingCallQuery(
+                int(audit["created_at_ms"]),
+                destination,
+                responder,
+                key,
+                str(payload.get("band", "")),
+            )
+        )
 
     def apply_radio_context(params: dict[str, Any]) -> None:
         band, dial_frequency = context_from_params(params)
@@ -522,15 +709,55 @@ async def run(args: argparse.Namespace) -> None:
         now = int(asyncio.get_running_loop().time() * 1000)
         if not client.connected or not scheduler.due(key, now):
             return False
+        now_wall = utc_now_ms()
+        pending_call_queries[:] = [
+            query
+            for query in pending_call_queries
+            if now_wall - query.submitted_at_ms <= query_context_window_ms
+        ]
+        if route_destination is not None:
+            responder = target.strip().upper()
+            destination = route_destination.strip().upper()
+            if responder == "@ALLCALL" and any(
+                query.responder == "@ALLCALL"
+                and query.destination != destination
+                and now_wall - query.submitted_at_ms <= query_context_window_ms
+                for query in pending_call_queries
+            ):
+                # A compact ALLCALL YES cannot identify which queried
+                # destination it answers. Keep one outstanding ALLCALL
+                # destination so a valid answer is never misrouted.
+                return False
+            if any(
+                query.responder == responder and query.destination != destination
+                for query in pending_call_queries
+            ):
+                # CALL YES does not repeat the destination. Keep at most one
+                # outstanding destination per directed station/@ALLCALL.
+                return False
         try:
             await Handler.send_rf(cast(Handler, handler), text)
             database.audit(
-                "discovery.query_submitted", {"action": action, "target": target, "text": text}
+                "discovery.query_submitted",
+                {
+                    "action": action,
+                    "target": target,
+                    "text": text,
+                    "band": str(status.get("band", "")),
+                },
             )
             scheduler.record(key, now)
             if route_destination is not None:
-                recent_call_queries.append((now, route_destination))
-                del recent_call_queries[:-16]
+                pending_call_queries.append(
+                    PendingCallQuery(
+                        now_wall,
+                        route_destination.strip().upper(),
+                        target.strip().upper(),
+                        key,
+                        str(status.get("band", "")),
+                    )
+                )
+                del pending_call_queries[:-16]
             return True
         except (ConnectionError, RuntimeError):
             scheduler.record(key, now)
@@ -547,7 +774,7 @@ async def run(args: argparse.Namespace) -> None:
                 database.prune_observations(now_ms=now_wall_ms)
                 database.prune_groups(now_ms=now_wall_ms)
                 last_prune_at_ms = now_wall_ms
-            if not client.connected or args.tx_mode != "automatic":
+            if not client.connected or args.tx_mode != "automatic" or status.get("paused"):
                 continue
             if now_wall_ms - last_context_refresh_at_ms >= 15_000:
                 try:
@@ -568,29 +795,6 @@ async def run(args: argparse.Namespace) -> None:
                     "@ALLCALL",
                     scheduler=inbox_scheduler,
                 )
-            # Ask only known custodians, and only on the same restrained
-            # cadence as the broadcast query.  A positive answer below is
-            # followed by a targeted message-ID retrieval.
-            for stored_message in database.list_messages():
-                for custody in database.list_custody(str(stored_message["id"])):
-                    if custody["status"] != "accepted":
-                        continue
-                    custodian = str(custody["custodian"])
-                    key = f"custodian:{custodian}"
-                    if custodian_scheduler.due(key, now):
-                        submitted = await submit_query(
-                            key,
-                            custodian_messages_query(custodian),
-                            "custodian_query_msgs",
-                            custodian,
-                        )
-                        database.record_attempt(
-                            str(stored_message["id"]),
-                            "custodian_query_msgs",
-                            custodian,
-                            "submitted" if submitted else "blocked",
-                            "checking for stored mail",
-                        )
             for message in database.list_messages():
                 if message["state"] not in {
                     MessageState.QUEUED,
@@ -643,11 +847,18 @@ async def run(args: argparse.Namespace) -> None:
                                 try:
                                     speed = int(status.get("speed", 1))
                                 except (TypeError, ValueError):
-                                    speed = 1
+                                    speed = 0
                                 database.record_link_outcome(
-                                    origin, destination, max(0, min(4, speed)), None, False
+                                    origin,
+                                    destination,
+                                    speed if speed in SPEED_AIRTIME_MS else 0,
+                                    None,
+                                    False,
+                                    str(status.get("band", "")),
                                 )
                 if (
+                    message["state"] == MessageState.WAITING_ROUTE
+                    and
                     service.recently_answered(
                         destination,
                         str(status.get("callsign", "")),
@@ -698,7 +909,7 @@ async def run(args: argparse.Namespace) -> None:
                             plan.explanation,
                         )
                         try:
-                            await handler.transmit(cast(Handler, handler), str(message["id"]))
+                            await handler.transmit(cast(Handler, handler), str(message["id"]), plan)
                         except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
                             database.record_attempt(
                                 str(message["id"]),
@@ -843,9 +1054,12 @@ async def run(args: argparse.Namespace) -> None:
                     )
                     for group in extract_groups(event.value, *[str(value) for value in event.params.values()]):
                         database.observe_group(group, default_group_description(group))
-                    ack = parse_ack(event.value)
-                    source = event.params.get("FROM")
-                    resend = parse_resend_request(event.value)
+                    frame = normalize_directed_event(event) if event.event_type.startswith("RX.DIRECTED") else None
+                    ack = parse_ack(frame.payload) if frame is not None else None
+                    source = frame.source if frame is not None else event.params.get("FROM")
+                    command = frame.command if frame is not None else ""
+                    message_text = frame.payload if frame is not None else ""
+                    resend = parse_resend_request(frame.payload) if frame is not None else None
                     if resend is not None and isinstance(source, str):
                         request_id, total, missing = resend
                         requested_message = database.get_message(request_id)
@@ -871,7 +1085,11 @@ async def run(args: argparse.Namespace) -> None:
                                 request_path = tuple(item.upper() for item in raw_path.split(">") if item)
                                 for number in missing:
                                     if number <= len(parts):
-                                        payload = format_human_data_part(parts[number - 1])
+                                        payload = format_human_data_part(
+                                            parts[number - 1],
+                                            str(status.get("callsign", "")).upper(),
+                                            str(requested_message["destination"]).upper(),
+                                        )
                                         text = (
                                             format_relay_message(request_path, payload)
                                             if len(request_path) >= 3
@@ -884,40 +1102,41 @@ async def run(args: argparse.Namespace) -> None:
                                 )
                             except (ValueError, RuntimeError, ConnectionError):
                                 database.record_attempt(request_id, "part_resend", source, "failed", "unable to serve request")
-                    available_id = parse_messages_available(event.value)
+                    available_id = parse_messages_available(frame.wire_text if frame is not None else "")
                     if available_id is not None and isinstance(source, str):
-                        for stored_message in database.list_messages(MessageState.IN_PROGRESS):
-                            message_id = str(stored_message["id"])
-                            if any(
-                                item["custodian"].upper() == source.upper()
-                                and item["status"] == "accepted"
-                                for item in database.list_custody(message_id)
-                            ):
-                                try:
-                                    await Handler.send_rf(cast(Handler, handler), retrieve_message_query(source, available_id))
-                                    database.upsert_custody(
-                                        message_id,
-                                        source,
-                                        "retrieval_pending",
-                                        f"requested JS8Call message ID {available_id}",
-                                    )
-                                    database.record_attempt(
-                                        message_id,
-                                        "custodian_retrieve",
-                                        source,
-                                        "submitted",
-                                        f"message ID {available_id}",
-                                    )
-                                except (ConnectionError, RuntimeError):
-                                    database.record_attempt(
-                                        message_id, "custodian_retrieve", source, "failed", "JS8Call unavailable"
-                                    )
-                    capability = parse_capability(event.value)
+                        retrieval_key = (source.upper(), available_id)
+                        if retrieval_key not in pending_retrievals:
+                            try:
+                                await Handler.send_rf(
+                                    cast(Handler, handler),
+                                    retrieve_message_query(source, available_id),
+                                )
+                                pending_retrievals.add(retrieval_key)
+                                database.audit(
+                                    "inbox.retrieval_submitted",
+                                    {"custodian": source.upper(), "js8call_message_id": available_id},
+                                )
+                            except (ConnectionError, RuntimeError):
+                                database.audit(
+                                    "inbox.retrieval_failed",
+                                    {"custodian": source.upper(), "js8call_message_id": available_id},
+                                )
+                    capability = parse_capability(frame.payload if frame is not None else "")
                     if capability is not None and isinstance(source, str):
                         version, features = capability
+                        capability_now = utc_now_ms()
                         database.upsert_peer_capabilities(
-                            source, version, features, utc_now_ms() + CAPABILITY_TTL_MS
+                            source, version, features, capability_now + CAPABILITY_TTL_MS
                         )
+                        # CAP is a request/response hint, not an endlessly
+                        # echoed heartbeat. One reply per peer per hour is
+                        # enough to establish capability and prevents loops.
+                        last_capability = capability_last_sent.get(source.upper(), 0)
+                        if capability_now - last_capability < 60 * 60 * 1000:
+                            capability = None
+                        else:
+                            capability_last_sent[source.upper()] = capability_now
+                    if capability is not None and isinstance(source, str):
                         try:
                             await Handler.send_rf(cast(Handler, handler), f"{source} {format_capability(features)}")
                             database.audit(
@@ -926,52 +1145,144 @@ async def run(args: argparse.Namespace) -> None:
                             )
                         except (ConnectionError, RuntimeError):
                             database.audit("peer.capability_ack_failed", {"peer": source.upper()})
-                    # Legacy JS8Call messages arrive without a JS8Mail ID.
-                    # Store them too, using a deterministic local fingerprint
-                    # so repeated custodian retrieval does not create copies.
-                    command = event.params.get("CMD")
-                    message_text = event.params.get("TEXT")
+                    # A group-directed MSG is useful alert traffic even when
+                    # no JS8Mail peer is present. Preserve it in the separate
+                    # group-alert inbox; @ALLCALL is deliberately excluded
+                    # because ordinary CQ/query traffic is not mail.
                     if (
-                        isinstance(source, str)
-                        and isinstance(command, str)
-                        and command.strip() in {"MSG", "MSG TO:"}
-                        and isinstance(message_text, str)
+                        frame is not None
+                        and isinstance(source, str)
+                        and command == "MSG"
+                        and frame.destination.startswith("@")
+                        and frame.destination != "@ALLCALL"
                         and message_text.strip()
-                        and not message_text.startswith("J8M1 D ")
                     ):
-                        legacy_id = "legacy-" + hashlib.sha256(
-                            f"{source.upper()}\n{message_text}".encode()
+                        group_id = "group-" + hashlib.sha256(
+                            f"{frame.destination}\n{source.upper()}\n{message_text}".encode()
                         ).hexdigest()[:16]
                         database.upsert_inbox_message(
                             source,
+                            group_id,
+                            message_text.strip(),
+                            1,
+                            (1,),
+                            True,
+                            tuple(str(event.params.get("PATH", source)).split(">")),
+                            frame.destination,
+                        )
+                    # Legacy JS8Call messages arrive without a JS8Mail ID.
+                    # Store them too, using a deterministic local fingerprint
+                    # so repeated custodian retrieval does not create copies.
+                    local_call = str(status.get("callsign", "")).upper()
+                    if (
+                        isinstance(source, str)
+                        and command in {"MSG", "MSG TO:"}
+                        and message_text.strip()
+                        and not message_text.startswith("J8M1 ")
+                        and frame is not None
+                        and frame.destination == local_call
+                    ):
+                        if command == "MSG TO:" and frame.stored_recipient.upper() not in {
+                            local_call,
+                            "",
+                        } and not frame.stored_recipient.startswith("@"):
+                            database.audit(
+                                "custody.inbound_accepted",
+                                {
+                                    "custodian": local_call,
+                                    "recipient": frame.stored_recipient,
+                                    "sender": source.upper(),
+                                },
+                            )
+                            # JS8Call also persists this in its own store. It
+                            # is not an operator inbox message for us.
+                            message_text = ""
+                        if not message_text:
+                            return
+                        else:
+                            original_sender = source
+                            retrieved = re.search(
+                                r"\s+FROM\s+([A-Z0-9/]{1,16})\s*$",
+                                message_text,
+                                re.IGNORECASE,
+                            )
+                            if retrieved is not None:
+                                original_sender = retrieved.group(1).upper()
+                                message_text = message_text[: retrieved.start()].rstrip()
+                        legacy_id = "legacy-" + hashlib.sha256(
+                            f"{original_sender.upper()}\n{message_text}".encode()
+                        ).hexdigest()[:16]
+                        database.upsert_inbox_message(
+                            original_sender,
                             legacy_id,
                             message_text.strip(),
                             1,
                             (1,),
                             True,
                             tuple(str(event.params.get("PATH", source)).split(">")),
-                            str(event.params.get("TO", "")),
+                            frame.stored_recipient if command == "MSG TO:" else "",
                         )
-                    query_response = parse_query_call_response(event.value)
-                    if query_response is not None and isinstance(source, str):
+                        pending_retrievals.difference_update(
+                            {key for key in pending_retrievals if key[0] == source.upper()}
+                        )
+                    query_response = parse_query_call_response(frame.wire_text if frame is not None else "")
+                    if (
+                        query_response is not None
+                        and isinstance(source, str)
+                        and local_call
+                        # The structured TO field carries our callsign, while
+                        # the compact YES reply normally omits it from TEXT.
+                        # A parsed recipient is therefore optional here.
+                        and query_response.recipient in {None, local_call}
+                        and command == "YES"
+                    ):
                         now = utc_now_ms()
-                        recent_call_queries[:] = [
-                            item for item in recent_call_queries if now - item[0] <= 180_000
+                        pending_call_queries[:] = [
+                            query
+                            for query in pending_call_queries
+                            if now - query.submitted_at_ms <= query_context_window_ms
                         ]
-                        if recent_call_queries:
-                            _, queried_destination = recent_call_queries[-1]
-                            snr, age_minutes = query_response
+                        matched_query = correlate_query_call_response(
+                            pending_call_queries,
+                            source,
+                            now_ms=now,
+                            band=str(status.get("band", "")),
+                            max_age_ms=query_context_window_ms,
+                        )
+                        if matched_query is not None:
+                            queried_destination = matched_query.destination
+                            # RX.ACTIVITY and RX.DIRECTED may expose partial
+                            # and completed forms of the same compact answer.
+                            # Since YES does not echo the query destination,
+                            # suppress another answer from this source briefly
+                            # rather than risk assigning a duplicate to a
+                            # different outstanding @ALLCALL query.
+                            answer_key = f"{source.upper()}:{matched_query.destination if matched_query else ''}"
+                            for key, answered_at in list(recent_query_answers.items()):
+                                if now - answered_at >= query_context_window_ms:
+                                    recent_query_answers.pop(key, None)
+                            if now - recent_query_answers.get(answer_key, 0) < 30_000:
+                                matched_query = None
+                            else:
+                                recent_query_answers[answer_key] = now
+                        if matched_query is not None:
+                            snr = query_response.snr
+                            age_minutes = query_response.age_minutes
+                            observed_at = int(now - ((age_minutes or 0) * 60_000))
+                            remote_params: dict[str, Any] = {
+                                "FROM": source.upper(),
+                                "TO": queried_destination,
+                                "EVIDENCE": "remote_query_call_yes",
+                            }
+                            if snr is not None:
+                                remote_params["SNR"] = snr
+                            if age_minutes is not None:
+                                remote_params["AGE_MIN"] = age_minutes
                             remote_link = NormalizedEvent(
                                 "QUERY.CALL.RESPONSE",
                                 event.value,
-                                {
-                                    "FROM": source.upper(),
-                                    "TO": queried_destination,
-                                    "SNR": snr,
-                                    "AGE_MIN": age_minutes,
-                                    "EVIDENCE": "remote_query_call_yes",
-                                },
-                                now,
+                                remote_params,
+                                observed_at,
                             )
                             database.record_observation(
                                 remote_link,
@@ -983,17 +1294,19 @@ async def run(args: argparse.Namespace) -> None:
                                 band=str(status.get("band", "")),
                                 dial_frequency=status.get("dial_frequency"),
                             )
-                            local_call = str(status.get("callsign", "")).upper()
                             if local_call and local_call != source.upper():
+                                local_snr = event.params.get("SNR")
+                                reachability_params: dict[str, Any] = {
+                                    "FROM": local_call,
+                                    "TO": source.upper(),
+                                    "EVIDENCE": "query_answered",
+                                }
+                                if isinstance(local_snr, (int, float)):
+                                    reachability_params["SNR"] = local_snr
                                 reachability_link = NormalizedEvent(
                                     "QUERY.CALL.REACHABILITY",
                                     event.value,
-                                    {
-                                        "FROM": local_call,
-                                        "TO": source.upper(),
-                                        "SNR": snr,
-                                        "EVIDENCE": "directed_response",
-                                    },
+                                    reachability_params,
                                     now,
                                 )
                                 database.record_observation(
@@ -1006,63 +1319,96 @@ async def run(args: argparse.Namespace) -> None:
                                     band=str(status.get("band", "")),
                                     dial_frequency=status.get("dial_frequency"),
                                 )
+                            query_scheduler.record(
+                                matched_query.scheduler_key,
+                                int(asyncio.get_running_loop().time() * 1000),
+                                success=True,
+                            )
+                            if matched_query.responder != "@ALLCALL":
+                                pending_call_queries.remove(matched_query)
                             for message in database.list_messages(MessageState.WAITING_ROUTE):
                                 if str(message["destination"]).upper() == queried_destination.upper():
+                                    evidence_detail = (
+                                        f"confirmed reachability to {queried_destination}"
+                                        if snr is None
+                                        else f"heard {queried_destination} at {snr} dB"
+                                    )
+                                    if age_minutes is not None:
+                                        evidence_detail += f", {age_minutes} minute(s) ago"
                                     database.record_attempt(
                                         str(message["id"]),
                                         "route_evidence",
                                         source.upper(),
                                         "received",
-                                        f"heard {queried_destination} at {snr} dB, {age_minutes} minute(s) ago",
+                                        evidence_detail,
                                     )
+                                    database.wake_message_for_route(str(message["id"]))
+                    # A direct SNR response is the answer to the inexpensive
+                    # reachability probe. Do not wait for the full defer
+                    # interval before using it, but still let the single RF
+                    # arbiter decide when the next payload may go out.
                     if (
-                        isinstance(source, str)
-                        and event.event_type in {"RX.DIRECTED.ME", "RX.DIRECTED"}
-                        and event.value.strip().split()[1:] == ["ACK"]
+                        frame is not None
+                        and frame.command in {"SNR", "YES"}
+                        and source
+                        and frame.destination == local_call
                     ):
-                            for message in database.list_messages(MessageState.IN_PROGRESS):
-                                if str(message["destination"]).upper() == source.upper():
-                                    stored = any(
-                                        item["action"] == "store"
-                                        and item["target"].upper() == source.upper()
-                                        and item["status"] == "submitted"
-                                        for item in database.list_attempts(str(message["id"]))
-                                    )
-                                    if stored:
-                                        database.upsert_custody(
-                                            str(message["id"]), source, "accepted", "standard JS8Call store ACK"
-                                        )
-                                        database.record_attempt(
-                                            str(message["id"]), "custody_ack", source, "received", "stored for later retrieval"
-                                        )
-                                        continue
-                                    database.record_attempt(
+                        for message in database.list_messages(MessageState.WAITING_ROUTE):
+                            if str(message["destination"]).upper() == source.upper():
+                                database.record_attempt(
                                     str(message["id"]),
-                                    "standard_ack",
-                                    source,
+                                    "route_evidence",
+                                    source.upper(),
                                     "received",
-                                    "standard JS8Call ACK; hop acknowledged, delivery unproven",
+                                    "direct reachability response",
                                 )
+                                database.wake_message_for_route(str(message["id"]))
+                    if isinstance(source, str) and frame is not None and frame.command == "ACK":
+                        matched = _recent_outbound_transaction(database, source, utc_now_ms())
+                        if matched is not None:
+                            message, attempt = matched
+                            message_id = str(message["id"])
+                            if attempt["action"] == "store":
+                                database.upsert_custody(
+                                    message_id, source, "accepted", "standard JS8Call store ACK"
+                                )
+                                database.record_attempt(
+                                    message_id, "custody_ack", source, "received",
+                                    "stored for later retrieval; end-to-end delivery unproven",
+                                )
+                            else:
+                                destination = str(message["destination"]).upper()
+                                detail = (
+                                    "standard JS8Call ACK; complete MSG accepted by destination inbox"
+                                    if source.upper() == destination
+                                    else "standard JS8Call ACK; relay hop acknowledged, delivery unproven"
+                                )
+                                database.record_attempt(
+                                    message_id, "standard_ack", source, "received", detail
+                                )
+                                if source.upper() == destination and message["state"] == MessageState.IN_PROGRESS:
+                                    database.transition_message(message_id, MessageState.DELIVERED)
                                 origin = str(status.get("callsign", "")).upper()
                                 if origin:
                                     try:
-                                        speed = int(event.params.get("SPEED", status.get("speed", 1)))
+                                        speed = int(event.params.get("SPEED", status.get("speed", 0)))
                                     except (TypeError, ValueError):
-                                        speed = 1
+                                        speed = 0
                                     ack_snr = event.params.get("SNR")
                                     database.record_link_outcome(
                                         origin,
                                         source,
-                                        max(0, min(4, speed)),
+                                        speed if speed in SPEED_AIRTIME_MS else 0,
                                         float(ack_snr) if isinstance(ack_snr, (int, float)) else None,
                                         True,
+                                        str(status.get("band", "")),
                                     )
                     if ack and isinstance(source, str):
                         kind, message_id, bitmap = ack
                         receipt_message = database.get_message(message_id)
                         if receipt_message is not None:
                             if kind == "delivered":
-                                metadata = parse_delivery_ack(event.value)
+                                metadata = parse_delivery_ack(frame.payload if frame is not None else "")
                                 receipt_path = metadata[2] if metadata is not None else ()
                                 destination_matches = source.upper() == str(receipt_message["destination"]).upper()
                                 custody_row = next(
@@ -1094,7 +1440,7 @@ async def run(args: argparse.Namespace) -> None:
                                     if receipt_message["state"] == MessageState.IN_PROGRESS:
                                         database.transition_message(message_id, MessageState.DELIVERED)
                             else:
-                                part_ack = parse_part_ack(event.value)
+                                part_ack = parse_part_ack(frame.payload if frame is not None else "")
                                 detail = bitmap or "acknowledged"
                                 if part_ack is not None and part_ack.missing:
                                     detail = f"missing parts: {','.join(map(str, part_ack.missing))}"
@@ -1118,7 +1464,11 @@ async def run(args: argparse.Namespace) -> None:
                                                     ),
                                                     (),
                                                 )
-                                                resend_payload = format_human_data_part(parts[number - 1])
+                                                resend_payload = format_human_data_part(
+                                                    parts[number - 1],
+                                                    str(status.get("callsign", "")).upper(),
+                                                    str(receipt_message["destination"]).upper(),
+                                                )
                                                 resend_text = (
                                                     format_relay_message(resend_path, resend_payload)
                                                     if len(resend_path) >= 3
@@ -1133,18 +1483,27 @@ async def run(args: argparse.Namespace) -> None:
                                             message_id, "part_resend", source, "failed", detail
                                         )
                                 database.record_attempt(message_id, "hop_ack", source, "received", detail)
-                    if event.value.startswith("J8M1 D ") and isinstance(source, str) and source.upper() != status["callsign"]:
-                        fields = event.value.split(" ", 4)
-                        if len(fields) == 5:
+                    parsed_part = parse_human_data_part(frame.payload) if frame is not None else None
+                    if parsed_part is not None and isinstance(source, str) and source.upper() != status["callsign"]:
+                        part, envelope_origin, envelope_destination = parsed_part
+                        if envelope_destination and envelope_destination.upper() not in {
+                            local_call,
+                            str(event.params.get("TO", "")).upper(),
+                        }:
+                            # The surrounding JS8Call address and the
+                            # explicit final destination disagree; do not
+                            # turn a misaddressed frame into an inbox item.
+                            parsed_part = None
+                        else:
                             try:
-                                position, part_total = fields[3].split("/", 1)
-                                part = MessagePart(fields[2], int(position), int(part_total), fields[4])
+                                logical_sender = (envelope_origin or source).upper()
+                                reassembly_key = (logical_sender, part.message_id)
                                 accumulator = reassembly.setdefault(
-                                    part.message_id, MultipartAccumulator(part.message_id, part.total)
+                                    reassembly_key, MultipartAccumulator(part.message_id, part.total)
                                 )
                                 if not accumulator.receipt().received:
                                     for stored_part in database.list_message_parts(
-                                        part.message_id, direction="incoming", peer=source
+                                        part.message_id, direction="incoming", peer=logical_sender
                                     ):
                                         accumulator.add(
                                             MessagePart(
@@ -1161,27 +1520,46 @@ async def run(args: argparse.Namespace) -> None:
                                     part.total,
                                     part.payload,
                                     direction="incoming",
-                                    peer=source,
+                                    peer=logical_sender,
                                 )
                                 receipt = accumulator.receipt()
+                                route = tuple(
+                                    item.strip().upper()
+                                    for item in str(event.params.get("PATH", "")).split(">")
+                                    if item.strip()
+                                )
+                                local_call = str(status.get("callsign", "")).upper()
+                                reverse_route = tuple(reversed(route))
+                                if local_call not in reverse_route:
+                                    reverse_route = ()
+
+                                def reply_text(body: str) -> str:
+                                    if len(reverse_route) >= 3 and reverse_route[0] == local_call:
+                                        return format_relay_text(reverse_route, body)
+                                    return f"{logical_sender} {body}"
+
                                 database.upsert_inbox_message(
-                                    source,
+                                    logical_sender,
                                     part.message_id,
                                     accumulator.partial_preview(),
                                     part.total,
                                     receipt.received,
                                     receipt.complete,
-                                    (source,),
-                                    str(event.params.get("TO", "")),
+                                    route or (source,),
+                                    envelope_destination if envelope_destination and envelope_destination.startswith("@") else "",
                                 )
                                 if accumulator.should_ack(utc_now_ms()):
-                                    await Handler.send_rf(cast(Handler, handler), f"{source} {format_part_ack(accumulator.receipt())}")
-                                    database.audit("message.part_ack_submitted", {"message_id": part.message_id, "to": source})
-                                if accumulator.receipt().complete:
-                                    await Handler.send_rf(cast(Handler, handler),
-                                        f"{source} {format_delivery_ack(part.message_id, utc_now_ms(), (status['callsign'], source))}"
+                                    await Handler.send_rf(
+                                        cast(Handler, handler),
+                                        reply_text(format_part_ack(receipt)),
                                     )
-                                    database.audit("message.delivered_ack_submitted", {"message_id": part.message_id, "to": source})
+                                    database.audit("message.part_ack_submitted", {"message_id": part.message_id, "to": logical_sender})
+                                if receipt.complete:
+                                    await Handler.send_rf(
+                                        cast(Handler, handler),
+                                        reply_text(format_delivery_ack(part.message_id, utc_now_ms(), route or (local_call, logical_sender))),
+                                    )
+                                    database.audit("message.delivered_ack_submitted", {"message_id": part.message_id, "to": logical_sender})
                             except (ValueError, RuntimeError, ConnectionError):
                                 database.audit("message.ack_failed", {"source": source})
 
@@ -1239,6 +1617,11 @@ def main() -> None:
         choices=("observe", "automatic"),
         default="automatic",
         help="RF handoff mode (default: automatic; use observe for receive-only)",
+    )
+    parser.add_argument(
+        "--auto-speed",
+        action="store_true",
+        help="Allow the adapter to request evidence-backed JS8Call speed changes",
     )
     args = parser.parse_args()
     try:

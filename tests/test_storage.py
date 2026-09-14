@@ -37,6 +37,37 @@ def test_message_retry_is_durable_and_progressively_scheduled(tmp_path: Path) ->
     reopened.close()
 
 
+def test_route_evidence_wakes_deferred_message_without_incrementing_retry(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.enqueue_message("m1", "SP2ST", "hello")
+    database.defer_message("m1", 60_000, "no route")
+    database.wake_message_for_route("m1")
+    message = database.get_message("m1")
+    assert message is not None
+    assert message["state"] == "waiting_route"
+    assert message["retry_count"] == 1
+    assert message["next_attempt_at_ms"] is None
+    assert database.due_for_retry("m1")
+
+
+def test_recent_audit_events_restore_query_context(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.audit(
+        "discovery.query_submitted",
+        {
+            "action": "candidate_query_call",
+            "target": "MM0ZFG",
+            "text": "MM0ZFG QUERY CALL SP2ST",
+            "band": "20m",
+        },
+    )
+    rows = database.recent_audit_events("discovery.query_submitted", 0)
+    assert rows[-1]["payload"]["text"] == "MM0ZFG QUERY CALL SP2ST"
+    assert rows[-1]["payload"]["band"] == "20m"
+
+
 def test_airtime_accounting_survives_reopen(tmp_path: Path) -> None:
     path = tmp_path / "mail.sqlite3"
     database = Database(path)

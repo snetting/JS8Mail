@@ -4,30 +4,50 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
 from js8mail.bands import context_from_params
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 class Database:
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
-        # The local UI serves requests in worker threads while the daemon
-        # records radio events. SQLite's serialized connection mode plus the
-        # application-level small operations make this safe for this slice.
-        self.connection = sqlite3.connect(self.path, check_same_thread=False)
-        self.connection.row_factory = sqlite3.Row
-        self.connection.execute("PRAGMA foreign_keys = ON")
-        self.connection.execute("PRAGMA journal_mode = WAL")
-        self.connection.execute("PRAGMA synchronous = FULL")
+        # The local UI uses worker threads while the daemon consumes the radio
+        # socket. Keep one SQLite connection per thread; WAL then gives us
+        # safe concurrent readers without sharing Python transaction state.
+        self._thread_local = threading.local()
+        self._connections: list[sqlite3.Connection] = []
+        self._connections_lock = threading.Lock()
         self._migrate()
 
+    def _open_connection(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=30)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = FULL")
+        with self._connections_lock:
+            self._connections.append(connection)
+        return connection
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        connection = getattr(self._thread_local, "connection", None)
+        if connection is None:
+            connection = self._open_connection()
+            self._thread_local.connection = connection
+        return connection
+
     def close(self) -> None:
-        self.connection.close()
+        with self._connections_lock:
+            connections, self._connections = self._connections, []
+        for connection in connections:
+            connection.close()
 
     def _migrate(self) -> None:
         self.connection.execute(
@@ -315,6 +335,34 @@ class Database:
                 "INSERT INTO schema_migrations(version, applied_at_ms) "
                 "VALUES (16, strftime('%s','now') * 1000)"
             )
+        if current < 17:
+            # A station can be heard on more than one band in the same
+            # half-hour. Keep those sessions distinct so band-filtered route
+            # decisions never inherit the wrong observation context.
+            self.connection.executescript(
+                """
+                CREATE TABLE station_sessions_v17 (
+                    station TEXT NOT NULL,
+                    session_bucket TEXT NOT NULL,
+                    first_seen_at_ms INTEGER NOT NULL,
+                    last_seen_at_ms INTEGER NOT NULL,
+                    observation_count INTEGER NOT NULL DEFAULT 0,
+                    band TEXT NOT NULL DEFAULT '',
+                    speed TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY(station, session_bucket, band, speed)
+                );
+                INSERT INTO station_sessions_v17
+                    (station, session_bucket, first_seen_at_ms, last_seen_at_ms,
+                     observation_count, band, speed)
+                    SELECT station, session_bucket, first_seen_at_ms,
+                           last_seen_at_ms, observation_count, band, speed
+                    FROM station_sessions;
+                DROP TABLE station_sessions;
+                ALTER TABLE station_sessions_v17 RENAME TO station_sessions;
+                INSERT INTO schema_migrations(version, applied_at_ms)
+                    VALUES (17, strftime('%s','now') * 1000);
+                """
+            )
         self.connection.commit()
 
     def record_observation(
@@ -363,7 +411,7 @@ class Database:
         for station in (source.upper(), destination.upper()):
             self.connection.execute(
                 "INSERT INTO station_sessions(station, session_bucket, first_seen_at_ms, last_seen_at_ms, observation_count, band, speed) "
-                "VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT(station, session_bucket) DO UPDATE SET "
+                "VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT(station, session_bucket, band, speed) DO UPDATE SET "
                 "last_seen_at_ms=excluded.last_seen_at_ms, observation_count=station_sessions.observation_count+1",
                 (station, bucket, observed, observed, band, speed),
             )
@@ -377,30 +425,57 @@ class Database:
         )
         self.connection.commit()
 
-    def record_link_outcome(self, source: str, destination: str, speed: int, snr: float | None, success: bool) -> None:
+    def record_link_outcome(
+        self,
+        source: str,
+        destination: str,
+        speed: int,
+        snr: float | None,
+        success: bool,
+        band: str = "",
+    ) -> None:
         """Persist per-peer speed outcomes used by adaptive policy."""
-        row = self.connection.execute(
-            "SELECT band, observation_count, max_snr, success_count, failure_count FROM temporal_links "
-            "WHERE source = ? AND destination = ? AND speed = ? ORDER BY last_observed_at_ms DESC LIMIT 1",
-            (source.upper(), destination.upper(), str(speed)),
-        ).fetchone()
+        normalized_band = band.strip().lower()
+        if normalized_band:
+            row = self.connection.execute(
+                "SELECT band, observation_count, max_snr, success_count, failure_count FROM temporal_links "
+                "WHERE source = ? AND destination = ? AND speed = ? AND band = ? "
+                "ORDER BY last_observed_at_ms DESC LIMIT 1",
+                (source.upper(), destination.upper(), str(speed), normalized_band),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                "SELECT band, observation_count, max_snr, success_count, failure_count FROM temporal_links "
+                "WHERE source = ? AND destination = ? AND speed = ? ORDER BY last_observed_at_ms DESC LIMIT 1",
+                (source.upper(), destination.upper(), str(speed)),
+            ).fetchone()
         now = utc_now_ms()
-        band = str(row["band"]) if row else ""
+        normalized_band = str(row["band"]) if row else normalized_band
         self.connection.execute(
             "INSERT INTO temporal_links(source, destination, band, speed, first_observed_at_ms, last_observed_at_ms, observation_count, max_snr, success_count, failure_count) "
             "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?) ON CONFLICT(source, destination, band, speed) DO UPDATE SET "
             "last_observed_at_ms=excluded.last_observed_at_ms, observation_count=temporal_links.observation_count+1, "
             "max_snr=CASE WHEN excluded.max_snr IS NULL THEN temporal_links.max_snr WHEN temporal_links.max_snr IS NULL THEN excluded.max_snr ELSE MAX(temporal_links.max_snr, excluded.max_snr) END, "
             "success_count=temporal_links.success_count+excluded.success_count, failure_count=temporal_links.failure_count+excluded.failure_count",
-            (source.upper(), destination.upper(), band, str(speed), now, now, snr, int(success), int(not success)),
+            (source.upper(), destination.upper(), normalized_band, str(speed), now, now, snr, int(success), int(not success)),
         )
         self.connection.commit()
 
-    def speed_evidence(self, source: str, destination: str) -> dict[int, dict[str, Any]]:
-        rows = self.connection.execute(
-            "SELECT speed, success_count, failure_count, max_snr FROM temporal_links WHERE source = ? AND destination = ?",
-            (source.upper(), destination.upper()),
-        ).fetchall()
+    def speed_evidence(
+        self, source: str, destination: str, band: str = ""
+    ) -> dict[int, dict[str, Any]]:
+        if band.strip():
+            rows = self.connection.execute(
+                "SELECT speed, success_count, failure_count, max_snr FROM temporal_links "
+                "WHERE source = ? AND destination = ? AND band = ?",
+                (source.upper(), destination.upper(), band.strip().lower()),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                "SELECT speed, success_count, failure_count, max_snr FROM temporal_links "
+                "WHERE source = ? AND destination = ?",
+                (source.upper(), destination.upper()),
+            ).fetchall()
         return {
             int(row["speed"]): {
                 "successes": int(row["success_count"]),
@@ -408,7 +483,7 @@ class Database:
                 "average_snr": row["max_snr"],
             }
             for row in rows
-            if str(row["speed"]).isdigit() and 0 <= int(row["speed"]) <= 4
+            if str(row["speed"]).isdigit() and int(row["speed"]) in {0, 1, 2, 4, 8}
         }
 
     def airtime_state(self, scope: str = "radio") -> dict[str, int | None]:
@@ -470,6 +545,17 @@ class Database:
                     continue
             return int(row["created_at_ms"])
         return None
+
+    def recent_audit_events(self, event_type: str, since_ms: int) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT payload_json, created_at_ms FROM audit_events "
+            "WHERE event_type = ? AND created_at_ms >= ? ORDER BY created_at_ms",
+            (event_type, since_ms),
+        ).fetchall()
+        return [
+            {"payload": json.loads(row["payload_json"]), "created_at_ms": int(row["created_at_ms"])}
+            for row in rows
+        ]
 
     def enqueue_message(
         self,
@@ -802,6 +888,16 @@ class Database:
             "SELECT next_attempt_at_ms FROM messages WHERE id = ?", (message_id,)
         ).fetchone()
         return row is not None and (row["next_attempt_at_ms"] is None or row["next_attempt_at_ms"] <= utc_now_ms())
+
+    def wake_message_for_route(self, message_id: str) -> None:
+        """Make a waiting message due without changing its retry count or state."""
+        now = utc_now_ms()
+        self.connection.execute(
+            "UPDATE messages SET next_attempt_at_ms = NULL, updated_at_ms = ? "
+            "WHERE id = ? AND state = ?",
+            (now, message_id, "waiting_route"),
+        )
+        self.connection.commit()
 
     def delete_message(self, message_id: str) -> None:
         row = self.connection.execute("SELECT state FROM messages WHERE id = ?", (message_id,)).fetchone()

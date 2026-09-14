@@ -12,7 +12,7 @@ from dataclasses import dataclass
 MAX_PARTS = 255
 MAX_PART_BYTES = 4096
 MAX_FRAME_BYTES = 4096
-DISPLAY_VERSION = "JS8Mail/0.0.1"
+DISPLAY_VERSION = "JS8Mail/0.0.2"
 CAPABILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 
@@ -53,6 +53,8 @@ class MessagePart:
     number: int
     total: int
     payload: str
+    origin: str = ""
+    destination: str = ""
 
     def __post_init__(self) -> None:
         if not self.message_id or len(self.message_id) > 32:
@@ -252,14 +254,57 @@ def parse_ack(text: str) -> tuple[str, str, str | None] | None:
     return None
 
 
-def format_human_data_part(part: MessagePart) -> str:
+def format_human_data_part(
+    part: MessagePart, origin: str = "", destination: str = ""
+) -> str:
     """Format a readable body part with a compact JS8Mail correlation prefix.
 
     The body is intentionally not compressed or binary-packed here. JS8Call
     receives readable text and remains responsible for its own token/varicode
     encoding. The prefix is defined by the v1 protocol specification.
     """
-    return f"J8M1 D {part.message_id} {part.number}/{part.total} {part.payload}"
+    origin = origin or part.origin
+    destination = destination or part.destination
+    if origin or destination:
+        if not origin or not destination or any(
+            not value or len(value) > 16 or any(char in value for char in " >")
+            for value in (origin, destination)
+        ):
+            raise MultipartError("invalid multipart route context")
+        result = f"J8M1 D {origin} {destination} {part.message_id} {part.number}/{part.total} {part.payload}"
+    else:
+        result = f"J8M1 D {part.message_id} {part.number}/{part.total} {part.payload}"
+    if len(result.encode()) > MAX_FRAME_BYTES:
+        raise MultipartError("multipart frame is too large")
+    return result
+
+
+def parse_human_data_part(
+    text: str,
+) -> tuple[MessagePart, str | None, str | None] | None:
+    """Parse old compact or origin-aware v1 multipart data."""
+    fields = text.strip().split(" ", 6)
+    if len(fields) < 5 or fields[:2] != ["J8M1", "D"]:
+        return None
+    origin: str | None = None
+    destination: str | None = None
+    if len(fields) >= 7 and "/" in fields[5]:
+        origin, destination, message_id, position, payload = fields[2:]
+    else:
+        message_id, position, payload = fields[2:]
+    try:
+        number_text, total_text = position.split("/", 1)
+        part = MessagePart(
+            message_id,
+            int(number_text),
+            int(total_text),
+            payload,
+            origin or "",
+            destination or "",
+        )
+    except (ValueError, MultipartError):
+        return None
+    return part, origin, destination
 
 
 def split_human_message(message_id: str, body: str, chunk_bytes: int = 180) -> tuple[MessagePart, ...]:
@@ -304,6 +349,18 @@ def format_relay_message(path: tuple[str, ...], body: str) -> str:
     result = f"{path[1]}>{'>'.join(path[2:])} MSG {body}"
     if len(result.encode()) > MAX_FRAME_BYTES:
         raise MultipartError("relay message is too large")
+    return result
+
+
+def format_relay_text(path: tuple[str, ...], body: str) -> str:
+    """Build a JS8Call free-text relay, without the MSG command."""
+    if len(path) < 3 or any(not call or len(call) > 16 for call in path):
+        raise MultipartError("a relay path needs at least three callsigns")
+    if any(" " in call or ">" in call for call in path):
+        raise MultipartError("invalid relay callsign")
+    result = f"{path[1]}>{'>'.join(path[2:])}>{body}"
+    if len(result.encode()) > MAX_FRAME_BYTES:
+        raise MultipartError("relay text is too large")
     return result
 
 
