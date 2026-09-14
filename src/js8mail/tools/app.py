@@ -961,36 +961,48 @@ async def run(args: argparse.Namespace) -> None:
                         if recent_call_queries:
                             _, queried_destination = recent_call_queries[-1]
                             snr, age_minutes = query_response
+                            remote_link = NormalizedEvent(
+                                "QUERY.CALL.RESPONSE",
+                                event.value,
+                                {
+                                    "FROM": source.upper(),
+                                    "TO": queried_destination,
+                                    "SNR": snr,
+                                    "AGE_MIN": age_minutes,
+                                    "EVIDENCE": "remote_query_call_yes",
+                                },
+                                now,
+                            )
                             database.record_observation(
-                                NormalizedEvent(
-                                    "QUERY.CALL.RESPONSE",
-                                    event.value,
-                                    {
-                                        "FROM": source.upper(),
-                                        "TO": queried_destination,
-                                        "SNR": snr,
-                                        "AGE_MIN": age_minutes,
-                                        "EVIDENCE": "remote_query_call_yes",
-                                    },
-                                    now,
-                                ),
+                                remote_link,
+                                band=str(status.get("band", "")),
+                                dial_frequency=status.get("dial_frequency"),
+                            )
+                            database.record_link_projection(
+                                remote_link,
                                 band=str(status.get("band", "")),
                                 dial_frequency=status.get("dial_frequency"),
                             )
                             local_call = str(status.get("callsign", "")).upper()
                             if local_call and local_call != source.upper():
+                                reachability_link = NormalizedEvent(
+                                    "QUERY.CALL.REACHABILITY",
+                                    event.value,
+                                    {
+                                        "FROM": local_call,
+                                        "TO": source.upper(),
+                                        "SNR": snr,
+                                        "EVIDENCE": "directed_response",
+                                    },
+                                    now,
+                                )
                                 database.record_observation(
-                                    NormalizedEvent(
-                                        "QUERY.CALL.REACHABILITY",
-                                        event.value,
-                                        {
-                                            "FROM": local_call,
-                                            "TO": source.upper(),
-                                            "SNR": snr,
-                                            "EVIDENCE": "directed_response",
-                                        },
-                                        now,
-                                    ),
+                                    reachability_link,
+                                    band=str(status.get("band", "")),
+                                    dial_frequency=status.get("dial_frequency"),
+                                )
+                                database.record_link_projection(
+                                    reachability_link,
                                     band=str(status.get("band", "")),
                                     dial_frequency=status.get("dial_frequency"),
                                 )
