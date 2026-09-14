@@ -239,8 +239,9 @@ class MailService:
                 continue
             nodes.update((source, destination))
             key = (source, destination)
-            item = directions.setdefault(key, {"latest": 0, "active": 0, "js8m": False, "snr": None})
+            item = directions.setdefault(key, {"latest": 0, "count": 0, "active": 0, "js8m": False, "snr": None})
             item["latest"] = max(int(item["latest"]), int(observation["observed_at_ms"]))
+            item["count"] = int(item["count"]) + 1
             if age_ms <= 10 * 60 * 1000:
                 item["active"] = int(item["active"]) + 1
             text = f"{observation['value']} {params.get('TEXT', '')}".upper()
@@ -270,7 +271,7 @@ class MailService:
                 "age_seconds": age_ms // 1000,
                 "freshness": round(freshness, 3),
                 "snr": forward.get("snr") if forward.get("snr") is not None else reverse.get("snr"),
-                "observations": sum(int(directions[key]["active"]) for key in directed_keys),
+                "observations": sum(int(directions[key]["count"]) for key in directed_keys),
                 "js8m": js8m,
             })
         return {"band": band, "generated_at_ms": now, "nodes": sorted(nodes), "edges": edges}
