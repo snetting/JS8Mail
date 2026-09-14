@@ -738,7 +738,11 @@ async def run(args: argparse.Namespace) -> None:
     pending_retrievals: set[tuple[str, int]] = set()
     capability_last_sent: dict[str, int] = {}
     recent_query_answers: dict[str, int] = {}
-    query_context_window_ms = 180_000
+    # A targeted QUERY CALL normally receives an answer within one or two
+    # JS8Call cycles. Keep enough context for that response without blocking
+    # discovery for several minutes; the fallback defer below is never shorter
+    # than this window.
+    query_context_window_ms = 90_000
 
     # A compact QUERY CALL response does not repeat the queried callsign.
     # Restore very recent contexts so a daemon restart between query and
@@ -1132,12 +1136,17 @@ async def run(args: argparse.Namespace) -> None:
                 )
                 defer_detail = (
                     f"query submitted; awaiting response for up to "
-                    f"{query_context_window_ms // 60000} minute(s); "
-                    f"fallback discovery in {delay_ms // 60000} minute(s)"
+                    f"{query_context_window_ms // 1000} seconds; "
+                    f"fallback discovery in "
+                    f"{max(delay_ms, query_context_window_ms) // 1000} seconds"
                     if query_submitted
                     else f"no current route; discovery will retry in {delay_ms // 60000} minute(s)"
                 )
-                database.defer_message(str(message["id"]), delay_ms, defer_detail)
+                database.defer_message(
+                    str(message["id"]),
+                    max(delay_ms, query_context_window_ms) if query_submitted else delay_ms,
+                    defer_detail,
+                )
 
     async def discovery_supervisor() -> None:
         """Keep discovery alive and make unexpected failures auditable."""
