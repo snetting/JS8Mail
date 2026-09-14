@@ -64,10 +64,11 @@ Then open <http://127.0.0.1:8765>. `start.sh` creates `.venv` when needed and
 installs the project and test dependencies. It is safe to run again after a
 source update.
 
-For live automatic handoff:
+For live automatic handoff, simply omit `--tx-mode` (automatic is the
+default):
 
 ```sh
-./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode automatic
+./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765
 ```
 
 The current command-line modes are:

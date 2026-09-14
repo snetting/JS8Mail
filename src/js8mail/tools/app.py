@@ -1142,7 +1142,12 @@ def main() -> None:
     parser.add_argument("--database", default="js8mail.sqlite3")
     parser.add_argument("--ui-host", default="127.0.0.1")
     parser.add_argument("--ui-port", default=8765, type=int)
-    parser.add_argument("--tx-mode", choices=("observe", "automatic"), default="automatic")
+    parser.add_argument(
+        "--tx-mode",
+        choices=("observe", "automatic"),
+        default="automatic",
+        help="RF handoff mode (default: automatic; use observe for receive-only)",
+    )
     args = parser.parse_args()
     try:
         asyncio.run(run(args))
