@@ -11,7 +11,7 @@ from typing import Any
 from js8mail.bands import context_from_params
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 class Database:
@@ -380,6 +380,14 @@ class Database:
             self.connection.execute(
                 "INSERT INTO schema_migrations(version, applied_at_ms) "
                 "VALUES (19, strftime('%s','now') * 1000)"
+            )
+        if current < 20:
+            self.connection.execute(
+                "ALTER TABLE inbox_messages ADD COLUMN protocol TEXT NOT NULL DEFAULT 'standard'"
+            )
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at_ms) "
+                "VALUES (20, strftime('%s','now') * 1000)"
             )
         self.connection.commit()
 
@@ -808,6 +816,7 @@ class Database:
         complete: bool,
         path: tuple[str, ...] = (),
         group_name: str = "",
+        protocol: str = "standard",
     ) -> None:
         if not sender or not message_id or not 1 <= total_parts <= 255:
             raise ValueError("invalid inbox message")
@@ -815,14 +824,15 @@ class Database:
             raise ValueError("invalid inbox message content")
         now = utc_now_ms()
         group_name = group_name.upper()[:32] if group_name.startswith("@") else ""
+        protocol = "js8m" if protocol.lower() == "js8m" else "standard"
         self.connection.execute(
-            "INSERT INTO inbox_messages(sender, message_id, body, total_parts, received_parts_json, complete, path, first_received_at_ms, updated_at_ms, group_name) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sender, message_id) DO UPDATE SET body=excluded.body, "
+            "INSERT INTO inbox_messages(sender, message_id, body, total_parts, received_parts_json, complete, path, first_received_at_ms, updated_at_ms, group_name, protocol) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sender, message_id) DO UPDATE SET body=excluded.body, "
             "total_parts=excluded.total_parts, received_parts_json=excluded.received_parts_json, complete=excluded.complete, "
-            "path=excluded.path, updated_at_ms=excluded.updated_at_ms, group_name=excluded.group_name",
+            "path=excluded.path, updated_at_ms=excluded.updated_at_ms, group_name=excluded.group_name, protocol=excluded.protocol",
             (
                 sender.upper(), message_id, body, total_parts, json.dumps(received_parts),
-                int(complete), "→".join(path), now, now, group_name,
+                int(complete), "→".join(path), now, now, group_name, protocol,
             ),
         )
         self.connection.commit()
