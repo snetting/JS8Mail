@@ -217,6 +217,37 @@ class MailService:
             "edges": list(edges.values()),
         }
 
+    def live_activity_graph(
+        self, band: str, *, max_age_ms: int = 2 * 60 * 60 * 1000
+    ) -> dict[str, object]:
+        """Return a compact, quickly aging graph for the live UI panel."""
+        now = utc_now_ms()
+        nodes: set[str] = set()
+        edges: list[dict[str, object]] = []
+        for link in self.database.temporal_link_views(500):
+            if band == "" or str(link.get("band", "")) != band:
+                continue
+            age_ms = max(0, now - int(link["last_observed_at_ms"]))
+            if age_ms > max_age_ms:
+                continue
+            source = str(link["source"])
+            destination = str(link["destination"])
+            nodes.update((source, destination))
+            freshness = max(0.05, 1.0 - age_ms / max_age_ms)
+            successes = int(link.get("success_count", 0))
+            failures = int(link.get("failure_count", 0))
+            kind = "confirmed" if successes else ("attempted" if failures else "observed")
+            edges.append({
+                "from": source,
+                "to": destination,
+                "kind": kind,
+                "age_seconds": age_ms // 1000,
+                "freshness": round(freshness, 3),
+                "snr": link.get("max_snr"),
+                "observations": int(link.get("observation_count", 0)),
+            })
+        return {"band": band, "generated_at_ms": now, "nodes": sorted(nodes), "edges": edges}
+
     def station_views(self, limit: int = 30, band: str | None = None) -> list[dict[str, object]]:
         """Summarise recent direct and remotely reported callsigns."""
         now = utc_now_ms()
