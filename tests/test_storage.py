@@ -37,6 +37,14 @@ def test_message_retry_is_durable_and_progressively_scheduled(tmp_path: Path) ->
     reopened.close()
 
 
+def test_partial_legacy_inbox_fragment_can_be_reconciled(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.upsert_inbox_message("MM0ZFG", "legacy-partial-426", "TEST SELF DELIVERY …", 1, (), False)
+    assert database.find_partial_inbox("mm0zfg", "TEST SELF DELIVERY") == "legacy-partial-426"
+    assert database.list_inbox()[0]["protocol"] == "standard"
+    database.close()
+
+
 def test_route_evidence_wakes_deferred_message_without_incrementing_retry(
     tmp_path: Path,
 ) -> None:

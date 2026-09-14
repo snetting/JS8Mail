@@ -902,7 +902,10 @@ async def run(args: argparse.Namespace) -> None:
     # MID is only locally unique; the sender is part of the reassembly key.
     reassembly: dict[tuple[str, str], MultipartAccumulator] = {}
     pending_call_queries: list[PendingCallQuery] = []
-    pending_retrievals: set[tuple[str, int]] = set()
+    # (custodian, JS8Call message id) -> (next retry time, retry count).
+    pending_retrievals: dict[tuple[str, int], tuple[int, int]] = {}
+    max_retrieval_retries = 3
+    retrieval_retry_delay_ms = 45_000
     capability_last_sent: dict[str, int] = {}
     recent_query_answers: dict[str, int] = {}
     # A targeted QUERY CALL normally receives an answer within one or two
@@ -1450,7 +1453,7 @@ async def run(args: argparse.Namespace) -> None:
                                     cast(Handler, handler),
                                     retrieve_message_query(source, available_id),
                                 )
-                                pending_retrievals.add(retrieval_key)
+                                pending_retrievals[retrieval_key] = (utc_now_ms(), 1)
                                 database.audit(
                                     "inbox.retrieval_submitted",
                                     {"custodian": source.upper(), "js8call_message_id": available_id},
@@ -1551,22 +1554,68 @@ async def run(args: argparse.Namespace) -> None:
                             if retrieved is not None:
                                 original_sender = retrieved.group(1).upper()
                                 message_text = message_text[: retrieved.start()].rstrip()
-                        legacy_id = "legacy-" + hashlib.sha256(
-                            f"{original_sender.upper()}\n{message_text}".encode()
-                        ).hexdigest()[:16]
+                        partial = (
+                            not frame.final
+                            or bool(re.search(r"(?:…|\.{3,})\s*$", message_text))
+                        )
+                        partial_id = database.find_partial_inbox(source, message_text)
+                        legacy_id = partial_id or (
+                            "legacy-partial-" + hashlib.sha256(
+                                f"{original_sender.upper()}\n{message_text.rstrip('… .')}".encode()
+                            ).hexdigest()[:16]
+                            if partial
+                            else "legacy-" + hashlib.sha256(
+                                f"{original_sender.upper()}\n{message_text}".encode()
+                            ).hexdigest()[:16]
+                        )
                         database.upsert_inbox_message(
                             original_sender,
                             legacy_id,
                             message_text.strip(),
                             1,
-                            (1,),
-                            True,
+                            () if partial else (1,),
+                            not partial,
                             tuple(str(event.params.get("PATH", source)).split(">")),
                             frame.stored_recipient if command == "MSG TO:" else "",
                         )
-                        pending_retrievals.difference_update(
-                            {key for key in pending_retrievals if key[0] == source.upper()}
-                        )
+                        matching_retrievals = [
+                            (key, state) for key, state in pending_retrievals.items()
+                            if key[0] == source.upper()
+                        ]
+                        if partial and matching_retrievals:
+                            key, (next_retry_at, retry_count) = matching_retrievals[0]
+                            now = utc_now_ms()
+                            if retry_count < max_retrieval_retries and now >= next_retry_at:
+                                retry_at = now + retrieval_retry_delay_ms
+                                pending_retrievals[key] = (retry_at, retry_count + 1)
+
+                                async def retry_partial_retrieval(
+                                    custodian: str = source.upper(),
+                                    stored_id: int = key[1],
+                                    message_id: str = legacy_id,
+                                    attempt: int = retry_count + 1,
+                                ) -> None:
+                                    await asyncio.sleep(retrieval_retry_delay_ms / 1000)
+                                    try:
+                                        await Handler.send_rf(
+                                            cast(Handler, handler),
+                                            retrieve_message_query(custodian, stored_id),
+                                        )
+                                        database.record_attempt(
+                                            message_id, "inbox_retrieval", custodian, "submitted",
+                                            f"re-requested JS8Call message {stored_id} after partial decode (attempt {attempt})",
+                                        )
+                                    except (ConnectionError, RuntimeError):
+                                        database.audit(
+                                            "inbox.retrieval_retry_failed",
+                                            {"custodian": custodian, "js8call_message_id": stored_id},
+                                        )
+
+                                asyncio.create_task(retry_partial_retrieval())
+                        elif not partial:
+                            for key in tuple(pending_retrievals):
+                                if key[0] == source.upper():
+                                    pending_retrievals.pop(key, None)
                     query_response = parse_query_call_response(frame.wire_text if frame is not None else "")
                     if (
                         query_response is not None

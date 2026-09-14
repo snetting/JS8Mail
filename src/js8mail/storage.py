@@ -853,6 +853,22 @@ class Database:
             result.append(item)
         return result
 
+    def find_partial_inbox(self, sender: str, body: str) -> str | None:
+        """Find a provisional legacy fragment that a later full decode can replace."""
+        row = self.connection.execute(
+            "SELECT message_id, body FROM inbox_messages "
+            "WHERE sender = ? AND complete = 0 ORDER BY updated_at_ms DESC",
+            (sender.upper(),),
+        ).fetchall()
+        candidate = body.strip().rstrip("…").rstrip(".").strip()
+        if not candidate:
+            return None
+        for item in row:
+            fragment = str(item["body"]).strip().rstrip("…").rstrip(".").strip()
+            if fragment and (candidate.startswith(fragment) or fragment.startswith(candidate)):
+                return str(item["message_id"])
+        return None
+
     def observe_group(self, name: str, description: str = "") -> None:
         now = utc_now_ms()
         self.connection.execute(
