@@ -420,6 +420,28 @@ class Handler(BaseHTTPRequestHandler):
             detail = "initial direct attempt"
         if origin and len(path) >= 2:
             self.service.database.record_message_path(message_id, path)
+        # Advertise before the first payload so a JS8Mail peer can recognize
+        # and prepare for enhanced framing. This is opportunistic: no response
+        # is awaited, and ordinary stations remain valid recipients.
+        if (
+            not destination.startswith("@")
+            and destination not in self.announced_destinations
+            and self.service.database.peer_capabilities(destination) is None
+        ):
+            try:
+                capability_text = (
+                    f"{destination} {format_capability()}"
+                    if len(path) < 3
+                    else format_relay_text(path, format_capability())
+                )
+                await Handler.send_rf(self, capability_text, message_id)
+                self.service.database.record_attempt(
+                    message_id, "capability", destination, "submitted", "JS8Mail capability advertisement"
+                )
+            except (ConnectionError, OSError, RuntimeError) as exc:
+                self.service.database.record_attempt(
+                    message_id, "capability", destination, "failed", type(exc).__name__
+                )
         self.service.database.record_attempt(
             message_id, action, target, "started", detail
         )
@@ -454,28 +476,6 @@ class Handler(BaseHTTPRequestHandler):
             "message.submitted_to_js8call",
             {"message_id": message_id, "text_length": sum(len(text) for text in wire_texts), "frames": len(wire_texts)},
         )
-        # Capability discovery is opportunistic. Do not make an unknown
-        # station wait for (or even understand) a JS8Mail advertisement before
-        # receiving its ordinary human-readable message.
-        if (
-            not destination.startswith("@")
-            and destination not in self.announced_destinations
-            and self.service.database.peer_capabilities(destination) is None
-        ):
-            try:
-                capability_text = (
-                    f"{destination} {format_capability()}"
-                    if len(path) < 3
-                    else format_relay_text(path, format_capability())
-                )
-                await Handler.send_rf(self, capability_text, message_id)
-                self.service.database.record_attempt(
-                    message_id, "capability", destination, "submitted", "JS8Mail capability advertisement"
-                )
-            except (ConnectionError, OSError, RuntimeError) as exc:
-                self.service.database.record_attempt(
-                    message_id, "capability", destination, "failed", type(exc).__name__
-                )
         self.announced_destinations.add(destination)
 
     async def transmit_store(self, message_id: str, custodian: str) -> None:
