@@ -542,8 +542,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             except (ConnectionError, OSError, RuntimeError) as exc:
                 self.service.database.record_attempt(
-                    message_id, "capability", destination, "failed", type(exc).__name__
+                    message_id,
+                    "capability",
+                    destination,
+                    "deferred",
+                    f"JS8Call unavailable or busy: {type(exc).__name__}",
                 )
+                self.service.database.defer_message(
+                    message_id,
+                    30_000,
+                    "CAP handoff deferred until JS8Call is available; retrying in 30 seconds",
+                    increment_retry=False,
+                )
+                return
         self.service.database.record_attempt(
             message_id, action, target, "started", detail
         )
