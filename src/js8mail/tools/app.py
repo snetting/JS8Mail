@@ -1088,6 +1088,7 @@ async def run(args: argparse.Namespace) -> None:
                     # message defer every five-second loop iteration.
                     continue
                 call_key = f"call-query:{destination}"
+                query_submitted = False
                 if query_scheduler.due(call_key, now):
                     candidates = promising
                     if candidates:
@@ -1108,6 +1109,7 @@ async def run(args: argparse.Namespace) -> None:
                                     "submitted" if candidate_submitted else "blocked",
                                     destination,
                                 )
+                                query_submitted = query_submitted or candidate_submitted
                     else:
                         allcall_submitted = await submit_query(
                             call_key,
@@ -1123,15 +1125,19 @@ async def run(args: argparse.Namespace) -> None:
                             "submitted" if allcall_submitted else "blocked",
                             destination,
                         )
+                        query_submitted = allcall_submitted
                 delay_ms = min(
                     60_000 * (2 ** min(int(message.get("retry_count", 0)), 8)),
                     21_600_000,
                 )
-                database.defer_message(
-                    str(message["id"]),
-                    delay_ms,
-                    f"no current route; discovery will retry in {delay_ms // 60000} minute(s)",
+                defer_detail = (
+                    f"query submitted; awaiting response for up to "
+                    f"{query_context_window_ms // 60000} minute(s); "
+                    f"fallback discovery in {delay_ms // 60000} minute(s)"
+                    if query_submitted
+                    else f"no current route; discovery will retry in {delay_ms // 60000} minute(s)"
                 )
+                database.defer_message(str(message["id"]), delay_ms, defer_detail)
 
     async def discovery_supervisor() -> None:
         """Keep discovery alive and make unexpected failures auditable."""
