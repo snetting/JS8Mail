@@ -378,6 +378,13 @@ ACK: it advertises features, while a valid JS8Mail data/ACK/receipt frame is
 passive evidence of the specific feature it demonstrates. A normal JS8Call
 `ACK` remains hop evidence.
 
+When a JS8Mail receiver gets an ordinary direct message, it may return a
+separate, rate-limited `CAP` advertisement. This is the passive discovery clue
+used by Opportunistic mode; it does not change the current message into an
+enhanced message and does not apply to group broadcasts. If no CAP or valid
+JS8Mail frame is ever observed, Opportunistic mode correctly remains on
+ordinary JS8Call delivery.
+
 ### 9. Submit safely to JS8Call
 
 Before submission JS8Mail validates callsigns, sizes, framing, and airtime.

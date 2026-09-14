@@ -1643,6 +1643,34 @@ async def run(args: argparse.Namespace) -> None:
                             frame.stored_recipient if command == "MSG TO:" else "",
                             delivery="stored_collected" if collected else "direct",
                         )
+                        # A JS8Mail receiver can passively reveal its
+                        # capability after receiving ordinary directed mail.
+                        # This gives an Opportunistic sender a safe clue for
+                        # the next message without placing CAP before the
+                        # current message or competing with its ACK. Keep it
+                        # strictly rate-limited.
+                        capability_now = utc_now_ms()
+                        capability_peer = source.upper()
+                        if (
+                            capability_peer != local_call
+                            and capability_now - capability_last_sent.get(capability_peer, 0)
+                            >= 60 * 60 * 1000
+                        ):
+                            try:
+                                await Handler.send_rf(
+                                    cast(Handler, handler),
+                                    f"{capability_peer} {format_capability()}",
+                                )
+                                capability_last_sent[capability_peer] = capability_now
+                                database.audit(
+                                    "peer.capability_advertisement_submitted",
+                                    {"peer": capability_peer, "reason": "ordinary_message_received"},
+                                )
+                            except (ConnectionError, RuntimeError):
+                                database.audit(
+                                    "peer.capability_advertisement_deferred",
+                                    {"peer": capability_peer, "reason": "ordinary_message_received"},
+                                )
                         matching_retrievals = [
                             (key, state) for key, state in pending_retrievals.items()
                             if key[0] == source.upper()
