@@ -109,6 +109,7 @@ def correlate_query_call_response(
     now_ms: int,
     band: str = "",
     max_age_ms: int = 180_000,
+    allow_late: bool = False,
 ) -> PendingCallQuery | None:
     """Find the one unambiguous query represented by a compact YES reply.
 
@@ -120,7 +121,9 @@ def correlate_query_call_response(
     active = [
         query
         for query in pending
-        if 0 <= now_ms - query.submitted_at_ms <= min(max_age_ms, query.response_window_ms)
+        if 0 <= now_ms - query.submitted_at_ms <= (
+            max_age_ms if allow_late else min(max_age_ms, query.response_window_ms)
+        )
         and (not band or not query.band or query.band.lower() == band)
     ]
     exact = [query for query in active if query.responder == responder]

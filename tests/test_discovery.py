@@ -60,6 +60,9 @@ def test_query_call_response_uses_unambiguous_outstanding_context() -> None:
     assert correlate_query_call_response(
         pending, "MM0ZFG", now_ms=200_000, band="20m"
     ) is None
+    assert correlate_query_call_response(
+        pending, "MM0ZFG", now_ms=200_000, band="20m", max_age_ms=300_000, allow_late=True
+    ) == pending[0]
 
 
 def test_empty_queries_back_off_exponentially_and_success_resets() -> None:

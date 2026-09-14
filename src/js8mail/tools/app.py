@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import threading
+import traceback
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -65,6 +66,23 @@ DIRECT_RESPONSE_DEADLINE_MS = 2 * 60 * 1000
 CAPABILITY_RESPONSE_DEADLINE_MS = 45 * 1000
 AUTOMATED_TX_GAP_MS = 30 * 1000
 QUERY_RESPONSE_MAX_MS = 3 * 60 * 1000
+LATE_QUERY_CONTEXT_MS = 15 * 60 * 1000
+
+
+def capability_response_window_ms(path: tuple[str, ...], speed: object) -> int:
+    """Allow a CAP response to traverse the selected path and return."""
+    try:
+        speed_id = int(str(speed))
+    except (TypeError, ValueError):
+        speed_id = 0
+    cycle_ms = SPEED_AIRTIME_MS.get(speed_id, SPEED_AIRTIME_MS[0])
+    hops = max(1, len(path) - 1)
+    if hops == 1:
+        return CAPABILITY_RESPONSE_DEADLINE_MS
+    # One outbound and one return slot per hop, plus a response slot and a
+    # modest guard. This is capped so a broken path cannot hold a message
+    # forever.
+    return min(QUERY_RESPONSE_MAX_MS, (2 * hops + 1) * cycle_ms + 15_000)
 
 
 def query_response_window_ms(action: str, speed: object) -> int:
@@ -408,6 +426,9 @@ class Handler(BaseHTTPRequestHandler):
             attempt for attempt in self.service.database.list_attempts(message_id)
             if attempt["action"] == "capability" and attempt["status"] == "submitted"
         ]
+        capability_window_ms = capability_response_window_ms(
+            path, self.status.get("speed", 0)
+        )
         if (
             not destination.startswith("@")
             and peer is None
@@ -415,7 +436,7 @@ class Handler(BaseHTTPRequestHandler):
         ):
             capability_sent_at = int(capability_attempts[-1]["created_at_ms"])
             elapsed = utc_now_ms() - capability_sent_at
-            if elapsed < CAPABILITY_RESPONSE_DEADLINE_MS:
+            if elapsed < capability_window_ms:
                 self.service.database.record_attempt(
                     message_id, "capability_wait", destination, "waiting",
                     "waiting for JS8Mail capability response",
@@ -423,7 +444,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
                 self.service.database.defer_message(
                     message_id,
-                    max(5_000, CAPABILITY_RESPONSE_DEADLINE_MS - elapsed),
+                    max(5_000, capability_window_ms - elapsed),
                     "waiting for capability response before ordinary fallback",
                 )
                 return
@@ -483,13 +504,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.announced_destinations.add(destination)
                 self.service.database.record_attempt(
                     message_id, "capability_wait", destination, "waiting",
-                    "waiting for JS8Mail capability response",
+                    f"waiting for JS8Mail capability response; estimated window "
+                    f"{capability_window_ms // 1000}s for {max(1, len(path) - 1)} hop(s)",
                 )
                 self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
                 self.service.database.defer_message(
                     message_id,
-                    CAPABILITY_RESPONSE_DEADLINE_MS,
-                    "waiting for capability response before ordinary fallback",
+                    capability_window_ms,
+                    f"waiting for capability response before ordinary fallback "
+                    f"({capability_window_ms // 1000}s estimated)",
                 )
                 return
             except (ConnectionError, OSError, RuntimeError) as exc:
@@ -516,11 +539,21 @@ class Handler(BaseHTTPRequestHandler):
             raise
         except Exception as exc:
             self.service.database.record_attempt(
-                message_id, action, target, "failed", f"unexpected {type(exc).__name__}"
+                message_id,
+                action,
+                target,
+                "failed",
+                f"local error {type(exc).__name__}: {str(exc)[:240]}",
             )
             self.service.database.audit(
                 "message.transmit_unexpected_error",
-                {"message_id": message_id, "action": action, "error": type(exc).__name__},
+                {
+                    "message_id": message_id,
+                    "action": action,
+                    "error": type(exc).__name__,
+                    "detail": str(exc)[:240],
+                    "traceback": traceback.format_exc(limit=8)[-2000:],
+                },
             )
             raise
         self.service.database.record_attempt(
@@ -847,9 +880,7 @@ async def run(args: argparse.Namespace) -> None:
         pending_call_queries[:] = [
             query
             for query in pending_call_queries
-            if now_wall - query.submitted_at_ms <= min(
-                QUERY_RESPONSE_MAX_MS, query.response_window_ms
-            )
+            if now_wall - query.submitted_at_ms <= LATE_QUERY_CONTEXT_MS
         ]
         if route_destination is not None:
             responder = target.strip().upper()
@@ -1072,13 +1103,13 @@ async def run(args: argparse.Namespace) -> None:
                                 handler.transmit(cast(Handler, handler), str(message["id"]))
                             )
                             await future
-                        except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
+                        except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                             database.record_attempt(
                                 str(message["id"]),
                                 "direct",
                                 destination,
                                 "deferred",
-                                f"probe/queue still busy: {type(exc).__name__}",
+                                f"local/API handoff deferred: {type(exc).__name__}",
                             )
                             database.defer_message(
                                 str(message["id"]),
@@ -1106,7 +1137,7 @@ async def run(args: argparse.Namespace) -> None:
                         )
                         try:
                             await handler.transmit(cast(Handler, handler), str(message["id"]), plan)
-                        except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
+                        except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                             database.record_attempt(
                                 str(message["id"]),
                                 "relay",
@@ -1131,7 +1162,7 @@ async def run(args: argparse.Namespace) -> None:
                     if candidate_custodian is not None and candidate_custodian.upper() not in active_custody:
                         try:
                             await handler.transmit_store(cast(Handler, handler), str(message["id"]), candidate_custodian)
-                        except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
+                        except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                             database.record_attempt(
                                 str(message["id"]), "store", candidate_custodian, "deferred", type(exc).__name__
                             )
@@ -1464,7 +1495,7 @@ async def run(args: argparse.Namespace) -> None:
                         pending_call_queries[:] = [
                             query
                             for query in pending_call_queries
-                            if now - query.submitted_at_ms <= query.response_window_ms
+                            if now - query.submitted_at_ms <= LATE_QUERY_CONTEXT_MS
                         ]
                         matched_query = correlate_query_call_response(
                             pending_call_queries,
@@ -1473,6 +1504,21 @@ async def run(args: argparse.Namespace) -> None:
                             band=str(status.get("band", "")),
                             max_age_ms=QUERY_RESPONSE_MAX_MS,
                         )
+                        late_response = False
+                        if matched_query is None:
+                            # A delayed compact YES is still useful when it
+                            # can be mapped unambiguously to one recent query.
+                            # Keep this bounded to avoid attributing stale
+                            # AllCall traffic to a newer message.
+                            matched_query = correlate_query_call_response(
+                                pending_call_queries,
+                                source,
+                                now_ms=now,
+                                band=str(status.get("band", "")),
+                                max_age_ms=LATE_QUERY_CONTEXT_MS,
+                                allow_late=True,
+                            )
+                            late_response = matched_query is not None
                         if matched_query is not None:
                             queried_destination = matched_query.destination
                             # RX.ACTIVITY and RX.DIRECTED may expose partial
@@ -1559,6 +1605,8 @@ async def run(args: argparse.Namespace) -> None:
                                     )
                                     if age_minutes is not None:
                                         evidence_detail += f", {age_minutes} minute(s) ago"
+                                    if late_response:
+                                        evidence_detail += "; delayed query response"
                                     database.record_attempt(
                                         str(message["id"]),
                                         "route_evidence",
