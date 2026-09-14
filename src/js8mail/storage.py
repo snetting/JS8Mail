@@ -10,7 +10,7 @@ from typing import Any
 from js8mail.bands import context_from_params
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 class Database:
@@ -267,6 +267,44 @@ class Database:
                     ON observations(band, observed_at_ms DESC);
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (14, strftime('%s','now') * 1000);
                 """
+            )
+            # Recover normalized bands for observations created before the
+            # band-aware schema. Their original API parameters retain DIAL or
+            # FREQ, so this does not guess from UI state.
+            legacy_rows = self.connection.execute(
+                "SELECT id, params_json FROM observations WHERE band = ''"
+            ).fetchall()
+            for row in legacy_rows:
+                try:
+                    params = json.loads(str(row["params_json"]))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                band, dial_frequency = context_from_params(params)
+                if band or dial_frequency is not None:
+                    self.connection.execute(
+                        "UPDATE observations SET band = ?, dial_frequency = ? WHERE id = ?",
+                        (band, dial_frequency, row["id"]),
+                    )
+        if current < 15:
+            # Also repair databases that already applied migration 14 before
+            # the legacy backfill was added.
+            legacy_rows = self.connection.execute(
+                "SELECT id, params_json FROM observations WHERE band = ''"
+            ).fetchall()
+            for row in legacy_rows:
+                try:
+                    params = json.loads(str(row["params_json"]))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                band, dial_frequency = context_from_params(params)
+                if band or dial_frequency is not None:
+                    self.connection.execute(
+                        "UPDATE observations SET band = ?, dial_frequency = ? WHERE id = ?",
+                        (band, dial_frequency, row["id"]),
+                    )
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at_ms) "
+                "VALUES (15, strftime('%s','now') * 1000)"
             )
         self.connection.commit()
 
