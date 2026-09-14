@@ -78,8 +78,12 @@ class MailService:
     ) -> RoutePlan:
         now = utc_now_ms() if now_ms is None else now_ms
         graph = TemporalGraph()
+        if band == "":
+            return RouteEngine(graph).choose(
+                origin, destination, now_ms=now, attempted_paths=attempted_paths
+            )
         for link in self.database.temporal_link_views(5000):
-            if band and str(link.get("band", "")).lower() != band.strip().lower():
+            if band is not None and str(link.get("band", "")).lower() != band.strip().lower():
                 continue
             snr = link.get("max_snr")
             snr_value = float(snr) if isinstance(snr, (int, float)) else -30.0

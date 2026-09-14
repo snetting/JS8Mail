@@ -480,6 +480,8 @@ class Database:
 
     def recent_observations(self, limit: int = 50, band: str | None = None) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(limit, 500))
+        if band == "":
+            return []
         where = " WHERE band = ?" if band else ""
         parameters: tuple[Any, ...] = (band.strip().lower(),) if band else ()
         rows = self.connection.execute(

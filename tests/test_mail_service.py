@@ -62,3 +62,20 @@ def test_message_graph_omits_self_links(tmp_path: Path) -> None:
     graph = service.message_graph(message_id, "OH3SPN")
     assert graph["edges"] == []
     database.close()
+
+
+def test_route_planning_uses_only_requested_band(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    database.connection.execute(
+        "INSERT INTO temporal_links(source, destination, band, speed, first_observed_at_ms, last_observed_at_ms, observation_count, max_snr) "
+        "VALUES ('A', 'B', '40m', '0', 1000, 1000, 1, -5)"
+    )
+    database.connection.execute(
+        "INSERT INTO temporal_links(source, destination, band, speed, first_observed_at_ms, last_observed_at_ms, observation_count, max_snr) "
+        "VALUES ('B', 'C', '40m', '0', 1000, 1000, 1, -5)"
+    )
+    database.connection.commit()
+    assert service.plan_route("A", "C", now_ms=1000, band="20m").path == ("A",)
+    assert service.plan_route("A", "C", now_ms=1000, band="40m").path == ("A", "B", "C")
+    database.close()
