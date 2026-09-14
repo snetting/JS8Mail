@@ -456,6 +456,15 @@ class Handler(BaseHTTPRequestHandler):
         except (ConnectionError, OSError, RuntimeError) as exc:
             self.service.database.record_attempt(message_id, action, target, "failed", type(exc).__name__)
             raise
+        except Exception as exc:
+            self.service.database.record_attempt(
+                message_id, action, target, "failed", f"unexpected {type(exc).__name__}"
+            )
+            self.service.database.audit(
+                "message.transmit_unexpected_error",
+                {"message_id": message_id, "action": action, "error": type(exc).__name__},
+            )
+            raise
         self.service.database.record_attempt(
             message_id, action, target, "submitted", "queued in JS8Call for next TX cycle"
         )
