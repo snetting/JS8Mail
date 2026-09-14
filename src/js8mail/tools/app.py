@@ -64,6 +64,18 @@ from js8mail.storage import Database
 DIRECT_RESPONSE_DEADLINE_MS = 2 * 60 * 1000
 CAPABILITY_RESPONSE_DEADLINE_MS = 45 * 1000
 AUTOMATED_TX_GAP_MS = 30 * 1000
+QUERY_RESPONSE_MAX_MS = 3 * 60 * 1000
+
+
+def query_response_window_ms(action: str, speed: object) -> int:
+    """Estimate how long a query may need to collect JS8Call replies."""
+    try:
+        speed_id = int(str(speed))
+    except (TypeError, ValueError):
+        speed_id = 0
+    cycle_ms = SPEED_AIRTIME_MS.get(speed_id, SPEED_AIRTIME_MS[0])
+    cycles = 3 if action == "allcall_query_call" else 2
+    return min(QUERY_RESPONSE_MAX_MS, max(60_000, cycles * cycle_ms + 15_000))
 
 
 def _recent_outbound_transaction(
@@ -749,7 +761,7 @@ async def run(args: argparse.Namespace) -> None:
     # response does not discard an otherwise useful positive answer.
     query_context_now = utc_now_ms()
     for audit in database.recent_audit_events(
-        "discovery.query_submitted", query_context_now - query_context_window_ms
+        "discovery.query_submitted", query_context_now - QUERY_RESPONSE_MAX_MS
     ):
         payload = audit["payload"]
         action = str(payload.get("action", ""))
@@ -774,6 +786,7 @@ async def run(args: argparse.Namespace) -> None:
                 responder,
                 key,
                 str(payload.get("band", "")),
+                QUERY_RESPONSE_MAX_MS,
             )
         )
 
@@ -799,7 +812,9 @@ async def run(args: argparse.Namespace) -> None:
         pending_call_queries[:] = [
             query
             for query in pending_call_queries
-            if now_wall - query.submitted_at_ms <= query_context_window_ms
+            if now_wall - query.submitted_at_ms <= min(
+                QUERY_RESPONSE_MAX_MS, query.response_window_ms
+            )
         ]
         if route_destination is not None:
             responder = target.strip().upper()
@@ -807,7 +822,7 @@ async def run(args: argparse.Namespace) -> None:
             if responder == "@ALLCALL" and any(
                 query.responder == "@ALLCALL"
                 and query.destination != destination
-                and now_wall - query.submitted_at_ms <= query_context_window_ms
+                and now_wall - query.submitted_at_ms <= query.response_window_ms
                 for query in pending_call_queries
             ):
                 # A compact ALLCALL YES cannot identify which queried
@@ -834,6 +849,9 @@ async def run(args: argparse.Namespace) -> None:
             )
             scheduler.record(key, now)
             if route_destination is not None:
+                response_window_ms = query_response_window_ms(
+                    action, status.get("speed", 0)
+                )
                 pending_call_queries.append(
                     PendingCallQuery(
                         now_wall,
@@ -841,6 +859,7 @@ async def run(args: argparse.Namespace) -> None:
                         target.strip().upper(),
                         key,
                         str(status.get("band", "")),
+                        response_window_ms,
                     )
                 )
                 del pending_call_queries[:-16]
@@ -1093,6 +1112,7 @@ async def run(args: argparse.Namespace) -> None:
                     continue
                 call_key = f"call-query:{destination}"
                 query_submitted = False
+                query_wait_ms = query_context_window_ms
                 if query_scheduler.due(call_key, now):
                     candidates = promising
                     if candidates:
@@ -1114,6 +1134,13 @@ async def run(args: argparse.Namespace) -> None:
                                     destination,
                                 )
                                 query_submitted = query_submitted or candidate_submitted
+                                if candidate_submitted:
+                                    query_wait_ms = max(
+                                        query_wait_ms,
+                                        query_response_window_ms(
+                                            "candidate_query_call", status.get("speed", 0)
+                                        ),
+                                    )
                     else:
                         allcall_submitted = await submit_query(
                             call_key,
@@ -1130,21 +1157,25 @@ async def run(args: argparse.Namespace) -> None:
                             destination,
                         )
                         query_submitted = allcall_submitted
+                        if allcall_submitted:
+                            query_wait_ms = query_response_window_ms(
+                                "allcall_query_call", status.get("speed", 0)
+                            )
                 delay_ms = min(
                     60_000 * (2 ** min(int(message.get("retry_count", 0)), 8)),
                     21_600_000,
                 )
                 defer_detail = (
                     f"query submitted; awaiting response for up to "
-                    f"{query_context_window_ms // 1000} seconds; "
+                    f"{query_wait_ms // 1000} seconds; "
                     f"fallback discovery in "
-                    f"{max(delay_ms, query_context_window_ms) // 1000} seconds"
+                    f"{max(delay_ms, query_wait_ms) // 1000} seconds"
                     if query_submitted
                     else f"no current route; discovery will retry in {delay_ms // 60000} minute(s)"
                 )
                 database.defer_message(
                     str(message["id"]),
-                    max(delay_ms, query_context_window_ms) if query_submitted else delay_ms,
+                    max(delay_ms, query_wait_ms) if query_submitted else delay_ms,
                     defer_detail,
                 )
 
@@ -1398,14 +1429,14 @@ async def run(args: argparse.Namespace) -> None:
                         pending_call_queries[:] = [
                             query
                             for query in pending_call_queries
-                            if now - query.submitted_at_ms <= query_context_window_ms
+                            if now - query.submitted_at_ms <= query.response_window_ms
                         ]
                         matched_query = correlate_query_call_response(
                             pending_call_queries,
                             source,
                             now_ms=now,
                             band=str(status.get("band", "")),
-                            max_age_ms=query_context_window_ms,
+                            max_age_ms=QUERY_RESPONSE_MAX_MS,
                         )
                         if matched_query is not None:
                             queried_destination = matched_query.destination

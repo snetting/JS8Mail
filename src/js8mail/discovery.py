@@ -31,6 +31,7 @@ class PendingCallQuery:
     responder: str
     scheduler_key: str
     band: str = ""
+    response_window_ms: int = 90_000
 
 
 class QueryScheduler:
@@ -119,7 +120,7 @@ def correlate_query_call_response(
     active = [
         query
         for query in pending
-        if 0 <= now_ms - query.submitted_at_ms <= max_age_ms
+        if 0 <= now_ms - query.submitted_at_ms <= min(max_age_ms, query.response_window_ms)
         and (not band or not query.band or query.band.lower() == band)
     ]
     exact = [query for query in active if query.responder == responder]
