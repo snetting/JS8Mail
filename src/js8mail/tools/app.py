@@ -72,8 +72,8 @@ CAPABILITY_MAX_RESPONSE_MS = 5 * 60 * 1000
 # A message may use a bounded burst, then continue in later rolling windows.
 # The total is intentionally larger than the three-day default message TTL;
 # the station-wide budget remains the ultimate safety ceiling.
-MESSAGE_BURST_LIMIT_MS = 5 * 60 * 1000
-MESSAGE_TOTAL_LIMIT_MS = 24 * 60 * 60 * 1000
+MESSAGE_BURST_LIMIT_MS = 10 * 60 * 1000
+MESSAGE_TOTAL_LIMIT_MS = 60 * 60 * 1000
 
 
 def capability_response_window_ms(path: tuple[str, ...], speed: object) -> int:
@@ -581,20 +581,19 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             except AirtimeBudgetExceeded as exc:
-                wait_ms = (
-                    6 * 60 * 60 * 1000
-                    if exc.scope == "per-message-total"
-                    else 15 * 60 * 1000
-                )
                 detail = (
                     f"{exc.scope} airtime budget exhausted; radio is idle and policy blocked TX"
                 )
                 self.service.database.record_attempt(
-                    message_id, "capability", destination, "deferred", detail
+                    message_id, "capability", destination,
+                    "failed" if exc.scope == "per-message-total" else "deferred", detail
                 )
-                self.service.database.defer_message(
-                    message_id, wait_ms, detail, increment_retry=False
-                )
+                if exc.scope == "per-message-total":
+                    self.service.database.transition_message(message_id, MessageState.FAILED)
+                else:
+                    self.service.database.defer_message(
+                        message_id, 15 * 60 * 1000, detail, increment_retry=False
+                    )
                 return
             except (ConnectionError, OSError, RuntimeError) as exc:
                 self.service.database.record_attempt(
@@ -1236,6 +1235,13 @@ async def run(args: argparse.Namespace) -> None:
                             )
                             await future
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                            if isinstance(exc, AirtimeBudgetExceeded) and exc.scope == "per-message-total":
+                                database.record_attempt(
+                                    str(message["id"]), "direct", destination, "failed",
+                                    "one-hour per-message airtime ceiling reached",
+                                )
+                                database.transition_message(str(message["id"]), MessageState.FAILED)
+                                continue
                             database.record_attempt(
                                 str(message["id"]),
                                 "direct",
@@ -1270,6 +1276,13 @@ async def run(args: argparse.Namespace) -> None:
                         try:
                             await controller.transmit(str(message["id"]), plan)
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                            if isinstance(exc, AirtimeBudgetExceeded) and exc.scope == "per-message-total":
+                                database.record_attempt(
+                                    str(message["id"]), "relay", plan.path[1], "failed",
+                                    "one-hour per-message airtime ceiling reached",
+                                )
+                                database.transition_message(str(message["id"]), MessageState.FAILED)
+                                continue
                             database.record_attempt(
                                 str(message["id"]),
                                 "relay",
@@ -1295,6 +1308,13 @@ async def run(args: argparse.Namespace) -> None:
                         try:
                             await controller.transmit_store(str(message["id"]), candidate_custodian)
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                            if isinstance(exc, AirtimeBudgetExceeded) and exc.scope == "per-message-total":
+                                database.record_attempt(
+                                    str(message["id"]), "store", candidate_custodian, "failed",
+                                    "one-hour per-message airtime ceiling reached",
+                                )
+                                database.transition_message(str(message["id"]), MessageState.FAILED)
+                                continue
                             database.record_attempt(
                                 str(message["id"]), "store", candidate_custodian, "deferred", type(exc).__name__
                             )
