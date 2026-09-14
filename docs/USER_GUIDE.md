@@ -363,8 +363,10 @@ from the daemon's RF handoff mode:
 - **Standard** sends ordinary JS8Call-readable text and does not wait for a
   JS8Mail capability exchange;
 - **Opportunistic** (the default) uses enhanced framing for peers whose valid
-  `CAP` advertisement is already known, while an unknown peer proceeds with
-  ordinary delivery;
+  `CAP` advertisement or JS8Mail frame has already been observed. For an
+  unknown peer it skips CAP and sends ordinary mail immediately, preserving
+  the opportunity to hear a response. A later observed CAP or valid JS8Mail
+  frame enables enhanced delivery on subsequent messages;
 - **Required** sends `J8M1 CAP` first and waits for a capability response
   before using enhanced framing; if no response arrives within the calculated
   path-aware window, it falls back to ordinary delivery according to policy.
@@ -372,8 +374,9 @@ from the daemon's RF handoff mode:
 Group and bulletin messages are always Standard. Every receiver still parses
 valid JS8Mail frames and can answer capability, part, resend, and delivery
 receipts regardless of its outbound default. A `CAP` advertisement is not an
-ACK: only a valid response establishes the peer capability, and a normal
-JS8Call `ACK` remains hop evidence.
+ACK: it advertises features, while a valid JS8Mail data/ACK/receipt frame is
+passive evidence of the specific feature it demonstrates. A normal JS8Call
+`ACK` remains hop evidence.
 
 ### 9. Submit safely to JS8Call
 

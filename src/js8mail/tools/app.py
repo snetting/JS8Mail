@@ -540,7 +540,7 @@ class Handler(BaseHTTPRequestHandler):
         # and prepare for enhanced framing. This is opportunistic: no response
         # is awaited, and ordinary stations remain valid recipients.
         if (
-            enhanced_mode != "standard"
+            enhanced_mode == "required"
             and
             not destination.startswith("@")
             and destination not in self.announced_destinations
@@ -563,28 +563,23 @@ class Handler(BaseHTTPRequestHandler):
                     "capability",
                     destination,
                     "submitted",
-                    (
-                        f"JS8Mail capability advertisement; awaiting response for "
-                        f"{capability_window_ms // 1000}s"
-                        if enhanced_mode == "required"
-                        else "JS8Mail capability advertisement; continuing with ordinary delivery"
-                    ),
+                    f"JS8Mail capability advertisement; awaiting response for "
+                    f"{capability_window_ms // 1000}s",
                 )
                 self.announced_destinations.add(destination)
-                if enhanced_mode == "required":
-                    self.service.database.record_attempt(
-                        message_id, "capability_wait", destination, "waiting",
-                        f"waiting for JS8Mail capability response; estimated window "
-                        f"{capability_window_ms // 1000}s for {max(1, len(path) - 1)} hop(s)",
-                    )
-                    self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
-                    self.service.database.defer_message(
-                        message_id,
-                        capability_window_ms,
-                        f"waiting for capability response before ordinary fallback "
-                        f"({capability_window_ms // 1000}s estimated)",
-                    )
-                    return
+                self.service.database.record_attempt(
+                    message_id, "capability_wait", destination, "waiting",
+                    f"waiting for JS8Mail capability response; estimated window "
+                    f"{capability_window_ms // 1000}s for {max(1, len(path) - 1)} hop(s)",
+                )
+                self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+                self.service.database.defer_message(
+                    message_id,
+                    capability_window_ms,
+                    f"waiting for capability response before ordinary fallback "
+                    f"({capability_window_ms // 1000}s estimated)",
+                )
+                return
             except AirtimeBudgetExceeded as exc:
                 detail = (
                     f"{exc.scope} airtime budget exhausted; radio is idle and policy blocked TX"
@@ -1894,6 +1889,15 @@ async def run(args: argparse.Namespace) -> None:
                                     )
                     if ack and isinstance(source, str):
                         kind, message_id, bitmap = ack
+                        known_capabilities = database.peer_capabilities(source)
+                        inferred_features = set(known_capabilities[1] if known_capabilities else ())
+                        inferred_features.update(("E2E",) if kind == "delivered" else ("MP", "PA"))
+                        database.upsert_peer_capabilities(
+                            source,
+                            known_capabilities[0] if known_capabilities else 1,
+                            tuple(sorted(inferred_features)),
+                            utc_now_ms() + CAPABILITY_TTL_MS,
+                        )
                         receipt_message = database.get_message(message_id)
                         if receipt_message is not None:
                             if kind == "delivered":
@@ -1985,6 +1989,19 @@ async def run(args: argparse.Namespace) -> None:
                     parsed_part = parse_human_data_part(frame.payload) if frame is not None else None
                     if parsed_part is not None and isinstance(source, str) and source.upper() != status["callsign"]:
                         part, envelope_origin, envelope_destination = parsed_part
+                        # A valid JS8Mail data part is passive proof that this
+                        # peer understands at least multipart framing. Do not
+                        # infer E2E/PA from data alone; explicit CAP/receipts
+                        # remain authoritative for those features.
+                        known_capabilities = database.peer_capabilities(source)
+                        inferred_features = set(known_capabilities[1] if known_capabilities else ())
+                        inferred_features.add("MP")
+                        database.upsert_peer_capabilities(
+                            source,
+                            known_capabilities[0] if known_capabilities else 1,
+                            tuple(sorted(inferred_features)),
+                            utc_now_ms() + CAPABILITY_TTL_MS,
+                        )
                         if envelope_destination and envelope_destination.upper() != local_call:
                             # The surrounding JS8Call address and the
                             # explicit final destination disagree; do not

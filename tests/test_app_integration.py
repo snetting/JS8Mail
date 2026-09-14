@@ -113,7 +113,7 @@ async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tm
 
 
 @pytest.mark.asyncio
-async def test_opportunistic_capability_advertises_then_sends_plain_message(tmp_path, monkeypatch) -> None:
+async def test_opportunistic_unknown_peer_sends_plain_message_without_capability_probe(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
@@ -141,10 +141,7 @@ async def test_opportunistic_capability_advertises_then_sends_plain_message(tmp_
 
     await handler.transmit(message_id)
 
-    assert radio.sent == [
-        "N0CALL J8M1 CAP 1 E2E,MP,PA",
-        "N0CALL MSG [JS8Mail/0.0.3] hello ordinary station",
-    ]
+    assert radio.sent == ["N0CALL MSG [JS8Mail/0.0.3] hello ordinary station"]
     assert not any(
         attempt["action"] == "capability_wait"
         for attempt in database.list_attempts(message_id)
