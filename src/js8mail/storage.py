@@ -7,9 +7,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from js8mail.bands import context_from_params
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 class Database:
@@ -257,18 +258,35 @@ class Database:
                 INSERT INTO schema_migrations(version, applied_at_ms) VALUES (13, strftime('%s','now') * 1000);
                 """
             )
+        if current < 14:
+            self.connection.executescript(
+                """
+                ALTER TABLE observations ADD COLUMN band TEXT NOT NULL DEFAULT '';
+                ALTER TABLE observations ADD COLUMN dial_frequency INTEGER;
+                CREATE INDEX IF NOT EXISTS observations_band_time_idx
+                    ON observations(band, observed_at_ms DESC);
+                INSERT INTO schema_migrations(version, applied_at_ms) VALUES (14, strftime('%s','now') * 1000);
+                """
+            )
         self.connection.commit()
 
-    def record_observation(self, event: NormalizedEvent) -> int:
+    def record_observation(
+        self, event: NormalizedEvent, *, band: str = "", dial_frequency: int | None = None
+    ) -> int:
+        derived_band, derived_dial = context_from_params(event.params)
+        band = band.strip().lower() or derived_band
+        dial_frequency = dial_frequency if dial_frequency is not None else derived_dial
         cursor = self.connection.execute(
-            "INSERT INTO observations(event_type, value, params_json, observed_at_ms, received_at_ms) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO observations(event_type, value, params_json, observed_at_ms, received_at_ms, band, dial_frequency) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 event.event_type,
                 event.value,
                 json.dumps(event.params, sort_keys=True),
                 event.received_at_ms,
                 utc_now_ms(),
+                band,
+                dial_frequency,
             ),
         )
         self.connection.commit()
@@ -276,7 +294,9 @@ class Database:
             raise RuntimeError("SQLite did not return an observation row id")
         return int(cursor.lastrowid)
 
-    def record_link_projection(self, event: NormalizedEvent) -> None:
+    def record_link_projection(
+        self, event: NormalizedEvent, *, band: str = "", dial_frequency: int | None = None
+    ) -> None:
         source = event.params.get("FROM")
         destination = event.params.get("TO")
         if not isinstance(source, str) or not isinstance(destination, str):
@@ -284,7 +304,9 @@ class Database:
         if not source or not destination or source.startswith("@") or destination.startswith("@"):
             return
         observed = event.received_at_ms
-        band = str(event.params.get("BAND", ""))[:32]
+        derived_band, derived_dial = context_from_params(event.params)
+        band = (band.strip().lower() or derived_band)[:32]
+        dial_frequency = dial_frequency if dial_frequency is not None else derived_dial
         speed = str(event.params.get("SPEED", ""))[:32]
         snr = event.params.get("SNR")
         snr_value = float(snr) if isinstance(snr, (int, float)) else None
@@ -456,12 +478,14 @@ class Database:
         ).fetchone()
         return dict(row) if row is not None else None
 
-    def recent_observations(self, limit: int = 50) -> list[dict[str, Any]]:
+    def recent_observations(self, limit: int = 50, band: str | None = None) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(limit, 500))
+        where = " WHERE band = ?" if band else ""
+        parameters: tuple[Any, ...] = (band.strip().lower(),) if band else ()
         rows = self.connection.execute(
             "SELECT id, event_type, value, params_json, observed_at_ms "
-            "FROM observations ORDER BY observed_at_ms DESC LIMIT ?",
-            (bounded_limit,),
+            ", band, dial_frequency FROM observations" + where + " ORDER BY observed_at_ms DESC LIMIT ?",
+            parameters + (bounded_limit,),
         ).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:

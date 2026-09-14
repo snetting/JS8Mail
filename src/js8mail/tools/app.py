@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from js8mail.adapters.js8call.client import Js8CallClient
 from js8mail.application.lifecycle import MessageState
 from js8mail.application.service import MailService
+from js8mail.bands import band_from_frequency_hz, context_from_params
 from js8mail.discovery import (
     QueryScheduler,
     call_query,
@@ -85,6 +86,8 @@ function addMessageControls(){document.querySelectorAll('#messages tr').forEach(
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();refresh()}catch(e){document.getElementById('result').textContent=e}}
 document.addEventListener('submit',e=>{if(e.target.id==='compose')setTimeout(()=>document.getElementById('messages')?.scrollIntoView({behavior:'smooth',block:'start'}),700)},true);
 document.getElementById('station-search').oninput=renderStations;
+async function updateBandStatus(){try{let s=await api('/api/status'),el=document.getElementById('status-band');if(!el){el=document.createElement('span');el.id='status-band';el.className='pill';document.getElementById('status').appendChild(el)}el.textContent=`Band: ${s.band||'unknown'} · Dial: ${s.dial_frequency||'—'}`}catch(e){}}
+updateBandStatus();setInterval(updateBandStatus,3000);
 refresh().then(addMessageControls);refreshStations();setInterval(()=>{refresh().then(addMessageControls);refreshStations()},3000);
 </script>"""
 
@@ -126,20 +129,23 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             message_id = query.get("message_id", [""])[0]
             origin = query.get("origin", [""])[0]
+            band = query.get("band", [""])[0] or str(self.status.get("band", ""))
             if not message_id or not origin:
                 self.reply(400, {"error": "message_id and origin are required"})
             else:
-                self.reply(200, self.service.message_graph(message_id, origin))
+                self.reply(200, self.service.message_graph(message_id, origin, band=band))
         elif path == "/api/stations":
-            self.reply(200, self.service.station_views())
+            band = parse_qs(urlparse(self.path).query).get("band", [""])[0] or str(self.status.get("band", ""))
+            self.reply(200, self.service.station_views(band=band))
         elif path == "/api/route":
             query = parse_qs(urlparse(self.path).query)
             origin = query.get("origin", [""])[0]
             destination = query.get("destination", [""])[0]
+            band = query.get("band", [""])[0] or str(self.status.get("band", ""))
             if not origin or not destination:
                 self.reply(400, {"error": "origin and destination are required"})
             else:
-                self.reply(200, asdict(self.service.plan_route(origin, destination)))
+                self.reply(200, asdict(self.service.plan_route(origin, destination, band=band)))
         else:
             self.reply(404, {"error": "not found"})
 
@@ -219,6 +225,7 @@ class Handler(BaseHTTPRequestHandler):
                 origin,
                 destination,
                 attempted_paths=self.service.database.attempted_message_paths(message_id),
+                band=str(self.status.get("band", "")),
             )
             if origin and not first_delivery_attempt
             else None
@@ -435,6 +442,8 @@ async def run(args: argparse.Namespace) -> None:
         "port": args.port,
         "tx_mode": args.tx_mode,
         "callsign": "",
+        "band": "",
+        "dial_frequency": None,
         "speed": "unknown",
         "radio_activity": "RX",
     }
@@ -474,6 +483,13 @@ async def run(args: argparse.Namespace) -> None:
     reassembly: dict[str, MultipartAccumulator] = {}
     recent_call_queries: list[tuple[int, str]] = []
 
+    def apply_radio_context(params: dict[str, Any]) -> None:
+        band, dial_frequency = context_from_params(params)
+        if band:
+            status["band"] = band
+        if dial_frequency is not None:
+            status["dial_frequency"] = dial_frequency
+
     async def submit_query(
         key: str,
         text: str,
@@ -502,6 +518,7 @@ async def run(args: argparse.Namespace) -> None:
     async def discovery_loop() -> None:
         inbox_key = "inbox:broadcast"
         last_prune_at_ms = 0
+        last_context_refresh_at_ms = 0
         while True:
             await asyncio.sleep(5)
             now_wall_ms = utc_now_ms()
@@ -511,6 +528,16 @@ async def run(args: argparse.Namespace) -> None:
                 last_prune_at_ms = now_wall_ms
             if not client.connected or args.tx_mode != "automatic":
                 continue
+            if now_wall_ms - last_context_refresh_at_ms >= 15_000:
+                try:
+                    frequency = await client.request_read_only("RIG.GET_FREQ")
+                    apply_radio_context(dict(frequency.params))
+                    if not status.get("dial_frequency") and frequency.value.strip().isdigit():
+                        status["dial_frequency"] = int(frequency.value.strip())
+                        status["band"] = band_from_frequency_hz(int(frequency.value.strip()))
+                except (ConnectionError, OSError, RuntimeError):
+                    pass
+                last_context_refresh_at_ms = now_wall_ms
             now = int(asyncio.get_running_loop().time() * 1000)
             if inbox_scheduler.due(inbox_key, now):
                 await submit_query(
@@ -600,7 +627,11 @@ async def run(args: argparse.Namespace) -> None:
                                     origin, destination, max(0, min(4, speed)), None, False
                                 )
                 if (
-                    service.recently_answered(destination, str(status.get("callsign", "")))
+                    service.recently_answered(
+                        destination,
+                        str(status.get("callsign", "")),
+                        band=str(status.get("band", "")),
+                    )
                     and not direct_expired
                     and database.due_for_retry(str(message["id"]))
                 ):
@@ -635,6 +666,7 @@ async def run(args: argparse.Namespace) -> None:
                         str(status.get("callsign", "")),
                         destination,
                         attempted_paths=database.attempted_message_paths(str(message["id"])),
+                        band=str(status.get("band", "")),
                     )
                     if len(plan.path) >= 3:
                         database.record_attempt(
@@ -658,7 +690,9 @@ async def run(args: argparse.Namespace) -> None:
                                 str(message["id"]), 60_000, "selected route could not be submitted"
                             )
                         continue
-                promising = service.promising_stations(destination)[:3]
+                promising = service.promising_stations(
+                    destination, band=str(status.get("band", ""))
+                )[:3]
                 if message.get("retry_count", 0) >= 3:
                     candidate_custodian = next((candidate for candidate in promising if candidate != destination), None)
                     active_custody = {
@@ -753,6 +787,7 @@ async def run(args: argparse.Namespace) -> None:
                 delay = 1.0
 
                 async def handle(event: NormalizedEvent) -> None:
+                    apply_radio_context(dict(event.params))
                     # RIG.PTT is the authoritative live TX/RX transition. A
                     # TX.FRAME event proves a frame was produced, but may be
                     # followed by a delayed or missing UI refresh; using it
@@ -773,8 +808,16 @@ async def run(args: argparse.Namespace) -> None:
                         # visible without pretending the radio is not
                         # continuously receiving between decoder passes.
                         loop.call_later(4.5, clear_dcd)
-                    database.record_observation(event)
-                    database.record_link_projection(event)
+                    database.record_observation(
+                        event,
+                        band=str(status.get("band", "")),
+                        dial_frequency=status.get("dial_frequency"),
+                    )
+                    database.record_link_projection(
+                        event,
+                        band=str(status.get("band", "")),
+                        dial_frequency=status.get("dial_frequency"),
+                    )
                     for group in extract_groups(event.value, *[str(value) for value in event.params.values()]):
                         database.observe_group(group, default_group_description(group))
                     ack = parse_ack(event.value)
@@ -907,7 +950,9 @@ async def run(args: argparse.Namespace) -> None:
                                         "EVIDENCE": "remote_query_call_yes",
                                     },
                                     now,
-                                )
+                                ),
+                                band=str(status.get("band", "")),
+                                dial_frequency=status.get("dial_frequency"),
                             )
                             local_call = str(status.get("callsign", "")).upper()
                             if local_call and local_call != source.upper():
@@ -922,7 +967,9 @@ async def run(args: argparse.Namespace) -> None:
                                             "EVIDENCE": "directed_response",
                                         },
                                         now,
-                                    )
+                                    ),
+                                    band=str(status.get("band", "")),
+                                    dial_frequency=status.get("dial_frequency"),
                                 )
                             for message in database.list_messages(MessageState.WAITING_ROUTE):
                                 if str(message["destination"]).upper() == queried_destination.upper():
@@ -1107,6 +1154,16 @@ async def run(args: argparse.Namespace) -> None:
                 try:
                     identity = await client.request_read_only("STATION.GET_CALLSIGN")
                     status["callsign"] = identity.value.strip().upper()
+                    try:
+                        frequency = await client.request_read_only("RIG.GET_FREQ")
+                        apply_radio_context(dict(frequency.params))
+                        if not status.get("dial_frequency"):
+                            value = frequency.value.strip()
+                            if value.isdigit():
+                                status["dial_frequency"] = int(value)
+                                status["band"] = band_from_frequency_hz(int(value))
+                    except (ConnectionError, OSError, RuntimeError):
+                        pass
                     try:
                         speed = await client.request_read_only("MODE.GET_SPEED")
                         reported_speed = speed.params.get("SPEED", speed.value.strip())

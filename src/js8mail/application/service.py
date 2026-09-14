@@ -74,10 +74,13 @@ class MailService:
         destination: str,
         now_ms: int | None = None,
         attempted_paths: set[tuple[str, ...]] | None = None,
+        band: str | None = None,
     ) -> RoutePlan:
         now = utc_now_ms() if now_ms is None else now_ms
         graph = TemporalGraph()
         for link in self.database.temporal_link_views(5000):
+            if band and str(link.get("band", "")).lower() != band.strip().lower():
+                continue
             snr = link.get("max_snr")
             snr_value = float(snr) if isinstance(snr, (int, float)) else -30.0
             score = max(0.25, min(1.0, 0.55 + (snr_value + 20.0) / 40.0))
@@ -90,7 +93,7 @@ class MailService:
                     expected_airtime_ms=1000,
                 )
             )
-        for observation in self.database.recent_observations(500):
+        for observation in self.database.recent_observations(500, band=band):
             params = observation["params"]
             source = params.get("FROM")
             target = params.get("TO")
@@ -156,7 +159,7 @@ class MailService:
             views.append(view)
         return views
 
-    def message_graph(self, message_id: str, origin: str) -> dict[str, object]:
+    def message_graph(self, message_id: str, origin: str, band: str | None = None) -> dict[str, object]:
         message = self.database.get_message(message_id)
         if message is None:
             raise KeyError(message_id)
@@ -165,7 +168,7 @@ class MailService:
         nodes: set[str] = {origin, destination}
         edges: dict[tuple[str, str], dict[str, Any]] = {}
 
-        for observation in self.database.recent_observations(500):
+        for observation in self.database.recent_observations(500, band=band):
             params = observation["params"]
             source, target = params.get("FROM"), params.get("TO")
             if not isinstance(source, str) or not isinstance(target, str):
@@ -210,11 +213,11 @@ class MailService:
             "edges": list(edges.values()),
         }
 
-    def station_views(self, limit: int = 30) -> list[dict[str, object]]:
+    def station_views(self, limit: int = 30, band: str | None = None) -> list[dict[str, object]]:
         """Summarise recent direct and remotely reported callsigns."""
         now = utc_now_ms()
         stations: dict[str, dict[str, Any]] = {}
-        for observation in self.database.recent_observations(500):
+        for observation in self.database.recent_observations(500, band=band):
             params = observation["params"]
             source = params.get("FROM")
             target = params.get("TO")
@@ -255,11 +258,12 @@ class MailService:
         return result[: max(1, min(limit, 100))]
 
     def recently_heard(
-        self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000
+        self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000,
+        band: str | None = None,
     ) -> bool:
         now = utc_now_ms() if now_ms is None else now_ms
         wanted = callsign.strip().upper()
-        for observation in self.database.recent_observations(500):
+        for observation in self.database.recent_observations(500, band=band):
             source = observation["params"].get("FROM")
             if (
                 isinstance(source, str)
@@ -275,6 +279,7 @@ class MailService:
         local_callsign: str,
         now_ms: int | None = None,
         window_ms: int = 600_000,
+        band: str | None = None,
     ) -> bool:
         """Return true only for a recent directed response to this station."""
         now = utc_now_ms() if now_ms is None else now_ms
@@ -282,7 +287,7 @@ class MailService:
         local = local_callsign.strip().upper()
         if not wanted or not local:
             return False
-        for observation in self.database.recent_observations(500):
+        for observation in self.database.recent_observations(500, band=band):
             params = observation["params"]
             source = params.get("FROM")
             target = params.get("TO")
@@ -298,12 +303,13 @@ class MailService:
         return False
 
     def promising_stations(
-        self, destination: str, now_ms: int | None = None, window_ms: int = 600_000
+        self, destination: str, now_ms: int | None = None, window_ms: int = 600_000,
+        band: str | None = None,
     ) -> list[str]:
         wanted = destination.strip().upper()
         now = utc_now_ms() if now_ms is None else now_ms
         scores: dict[str, float] = {}
-        for observation in self.database.recent_observations(500):
+        for observation in self.database.recent_observations(500, band=band):
             if now - int(observation["observed_at_ms"]) > window_ms:
                 continue
             params = observation["params"]

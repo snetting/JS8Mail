@@ -444,13 +444,23 @@ airtime, or safety limits.
 
 ## Band operation
 
-The current MVP is effectively single-band: JS8Mail observes and submits in
-the JS8Call context that the operator has selected. It records band/frequency
-where available and does not autonomously change frequency. This is
-intentional; reliable band hopping requires dwell scheduling, rendezvous
-signalling, antenna profiles, return-path handling, and protection against
-missing a receipt window. Those controls are not yet mature enough to enable
-by default.
+The current MVP is deliberately single-band for automatic decisions. JS8Mail
+reads the active JS8Call dial context at startup, refreshes it periodically,
+and updates it from frequency events when available. It derives a normalized
+band such as `20m`, while retaining the raw dial frequency for provenance.
+Small VFO nudges therefore remain in the same routing context.
+
+Observations, temporal links, recently-heard stations, route graphs, and route
+planning are filtered to the currently selected band. Evidence recorded on a
+different band remains in the database but is not used to trigger an automatic
+route on the active band. Unknown-band evidence is likewise excluded from
+automatic band-scoped planning. A manual QSY should be allowed to settle before
+starting a new route decision.
+
+JS8Mail does not autonomously change frequency yet. Reliable band hopping
+requires dwell scheduling, rendezvous signalling, antenna profiles,
+return-path handling, and protection against missing a receipt window. Those
+controls are not mature enough to enable by default.
 
 An allowed-band profile and optional band hopping remain suitable future work.
 Until then, change bands manually in JS8Call and treat evidence from another
