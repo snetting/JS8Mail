@@ -215,7 +215,7 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 <script>
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
-const confidenceName={new:'New · waiting for discovery',uncertain:'No delivery evidence',discovery_in_progress:'Discovery in progress',submitted_to_js8call:'Queued in JS8Call · awaiting TX',awaiting_delivery_ack:'TX submitted · awaiting delivery ACK',awaiting_custodian_ack:'Store offer submitted · awaiting custodian ACK',delivery_uncertain:'Delivery unconfirmed · retry pending',stored_at_custodian:'Delivered to custodian',radio_acknowledged:'Radio acknowledged (hop only)',delivered_to_js8mail:'Delivered to JS8Mail client',broadcast_submitted:'Broadcast submitted · no ACK expected',cancelled:'Cancelled',delivery_failed:'Delivery failed',expired:'Expired'};
+const confidenceName={new:'New · waiting for discovery',uncertain:'No delivery evidence',discovery_in_progress:'Discovery in progress',submitted_to_js8call:'Queued in JS8Call · awaiting TX',awaiting_delivery_ack:'TX submitted · awaiting delivery ACK',awaiting_custodian_ack:'Store offer submitted · awaiting custodian ACK',delivery_uncertain:'Delivery unconfirmed · retry pending',stored_at_custodian:'Delivered to custodian',radio_acknowledged:'Radio acknowledged (hop only)',delivered_to_js8mail:'Delivered to JS8Mail client',broadcast_submitted:'Broadcast complete · no ACK expected',cancelled:'Cancelled',delivery_failed:'Delivery failed',expired:'Expired'};
 function statePill(x){if(x.tx_active)return `<span class='state-pill state-failed'>In progress · TX</span>`;if(x.confidence==='delivered_to_js8mail')return `<span class='state-pill state-complete-plus'>Complete+</span>`;if(x.state==='delivered')return `<span class='state-pill state-complete'>Complete</span>`;if(x.state==='stored')return `<span class='state-pill state-complete'>Stored</span>`;if(['failed','expired','cancelled'].includes(x.state))return `<span class='state-pill state-${esc(x.state)}'>${esc(x.state[0].toUpperCase()+x.state.slice(1))}</span>`;if(x.state==='queued'&&!(x.attempts||[]).length)return `<span class='state-pill state-in-progress'>New</span>`;if(['in_progress','waiting_route','queued'].includes(x.state))return `<span class='state-pill state-in-progress'>In progress</span>`;return `<span class='state-pill'>${esc(x.state)}</span>`}
 function relativeAge(seconds){seconds=Math.max(0,Number(seconds)||0);if(seconds<60)return `${Math.round(seconds)}s ago`;if(seconds<600)return `${Math.floor(seconds/60)}m ${Math.floor(seconds%60)}s ago`;if(seconds<3600)return `${Math.floor(seconds/60)}m ago`;if(seconds<86400)return `${Math.floor(seconds/3600)}h ago`;return `${Math.floor(seconds/86400)}d ago`}function evidenceLabel(value){return value==='direct'?'Direct':value==='reported_target'?'Remote':value==='remote_report'?'Reported':value}
 async function showGraph(id){try{let s=await api('/api/status'),g=await api('/api/graph?message_id='+encodeURIComponent(id)+'&origin='+encodeURIComponent(s.callsign||''));let cols=Math.min(4,Math.max(1,g.nodes.length)),rows=Math.max(1,Math.ceil(g.nodes.length/cols)),w=Math.max(720,cols*250+120),h=rows*120+100,nodes=g.nodes,pos={};nodes.forEach((n,i)=>pos[n]={x:60+(i%cols)*250,y:70+Math.floor(i/cols)*120});let edges=g.edges.map(e=>{let a=pos[e.from],b=pos[e.to];return `<line x1=${a.x} y1=${a.y} x2=${b.x} y2=${b.y} stroke='${e.kind==='confirmed'?'#17823b':e.kind==='attempted'?'#c77800':'#78909c'}' stroke-width=3 marker-end='url(#arrow)'/><text x=${(a.x+b.x)/2} y=${(a.y+b.y)/2-6} font-size=12>${esc(e.kind)}${e.snr!=null?' '+esc(e.snr)+'dB':''}</text>`}).join('');let circles=nodes.map(n=>`<circle cx=${pos[n].x} cy=${pos[n].y} r=28 fill='${n===g.origin?'#1769aa':n===g.destination?'#a33':'#e8edf2'}' stroke='#18222d'/><text x=${pos[n].x} y=${pos[n].y+4} text-anchor=middle font-size=12 fill='${n===g.origin||n===g.destination?'white':'#18222d'}'>${esc(n)}</text>`).join('');document.getElementById('graph-result').innerHTML=`<p><b>${esc(g.origin)} → ${esc(g.destination)}</b> · green confirmed, orange attempted, grey observed</p><svg viewBox='0 0 ${w} ${h}' width='100%' height='auto' preserveAspectRatio='xMidYMin meet' role='img' aria-label='Message route graph'><defs><marker id=arrow markerWidth=8 markerHeight=8 refX=6 refY=3 orient=auto><path d='M0,0 L0,6 L7,3 z' fill='#555'/></marker></defs>${edges}${circles}</svg>`}catch(e){document.getElementById('graph-result').textContent=e}}
@@ -1529,6 +1529,32 @@ async def run(args: argparse.Namespace) -> None:
                 }:
                     continue
                 destination = str(message["destination"])
+                # Group traffic is a one-way broadcast, not a directed
+                # delivery operation. Do this before route discovery so a
+                # queued group post can never wait for an ACK or generate
+                # QUERY CALL traffic for the group.
+                if destination.startswith("@") and message["state"] in {
+                    MessageState.QUEUED,
+                    MessageState.IN_PROGRESS,
+                    MessageState.WAITING_ROUTE,
+                }:
+                    try:
+                        await controller.transmit(str(message["id"]))
+                    except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                        database.record_attempt(
+                            str(message["id"]),
+                            "group_broadcast",
+                            destination,
+                            "deferred",
+                            f"broadcast handoff unavailable: {type(exc).__name__}",
+                        )
+                        database.defer_message(
+                            str(message["id"]),
+                            60_000,
+                            "group broadcast waiting for an available JS8Call TX slot",
+                            increment_retry=False,
+                        )
+                    continue
                 expires_at_ms = message.get("expires_at_ms")
                 if isinstance(expires_at_ms, int) and expires_at_ms <= utc_now_ms():
                     database.transition_message(str(message["id"]), MessageState.EXPIRED)
