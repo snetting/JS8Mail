@@ -23,9 +23,38 @@ evidence, selective path discovery, alternative routes, bounded retries, and
 time-aware backoff. Internet topology data may enhance local decisions in a
 future service, but it is never required for RF operation.
 
-## Development
+## First start (recommended)
 
 Python 3.12 or newer is required.
+
+From the repository directory, run:
+
+```sh
+./js8mail
+```
+
+The launcher creates or repairs the local `.venv` and asks before installing
+the JS8Mail runtime. It then checks the usual JS8Call API endpoint and starts
+the daemon with sensible defaults: automatic RF handoff, API `127.0.0.1:2442`,
+and web UI `http://127.0.0.1:8765`. Open that address in a browser. If JS8Call
+is not running or its API is not enabled, the launcher gives setup guidance;
+the daemon still starts and will reconnect when JS8Call becomes available.
+
+Useful launcher commands:
+
+```sh
+./js8mail --check-only       # validate Python, the environment, and API access
+./js8mail --yes              # allow first-run installation without prompting
+./js8mail --tx-mode observe  # receive/observe only; no RF handoff
+./js8mail --no-install       # never create or modify the local environment
+```
+
+`start.sh` remains an equivalent compatibility entry point and accepts the
+same options. To make the command available from anywhere, optionally put a
+symlink to this checkout's `js8mail` script in a directory on your `PATH`, such
+as `~/bin`.
+
+For development and tests, install the extra test dependencies explicitly:
 
 ```sh
 python3 -m venv .venv
@@ -34,18 +63,10 @@ python -m pip install -e '.[test]'
 pytest
 ```
 
-The local mailbox can be run against a locally configured JS8Call API:
+The local mailbox can also be started directly with explicit options:
 
 ```sh
-./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode automatic
-```
-
-Open http://127.0.0.1:8765 in a browser. `automatic` submits queued messages
-to JS8Call for its next transmit cycle. `observe` allows queueing but no RF
-submission:
-
-```sh
-./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode observe
+./js8mail --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode automatic
 ```
 
 Automatic submission hands text to JS8Call; the UI reports only delivery

@@ -53,16 +53,33 @@ airtime counters, and audit events. UTC milliseconds are used internally.
 
 ## Installation and first start
 
-Python 3.12 or newer is required for the current development build. From the
-repository directory:
+Python 3.12 or newer is required for the current development build. The
+recommended first-start command is:
 
 ```sh
-./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode observe
+./js8mail
 ```
 
-Then open <http://127.0.0.1:8765>. `start.sh` creates `.venv` when needed and
-installs the project and test dependencies. It is safe to run again after a
-source update.
+On first run, `js8mail` creates or repairs `.venv`, asks before installing the
+runtime package, checks the JS8Call API, and then starts the daemon. It uses
+automatic RF handoff by default. Open <http://127.0.0.1:8765> when the launcher
+prints the URL. If JS8Call is not running or the API is disabled, this is a
+warning with setup guidance; JS8Mail still starts and retries its connection.
+
+`start.sh` is a compatibility alias for the same guided launcher. Useful
+options are:
+
+```sh
+./js8mail --check-only       # perform setup/API checks without starting
+./js8mail --yes              # do not prompt for local installation
+./js8mail --no-install       # fail rather than create/update .venv
+./js8mail --tx-mode observe  # no RF submission; useful for initial testing
+```
+
+The launcher passes normal daemon options through, including `--host`, `--port`,
+`--ui-host`, `--ui-port`, `--auto-speed`, and `--tx-mode`. It installs only the
+runtime package; developers who want the test suite should use the explicit
+setup in the development section below and install `.[test]`.
 
 For live automatic handoff, simply omit `--tx-mode` (automatic is the
 default):
