@@ -299,6 +299,7 @@ async function updateProtocolLeds(){try{let s=await api('/api/status'),now=Date.
 let protocolLedStyle=document.createElement('style');protocolLedStyle.textContent='.led.on-js8{background:#d9d2ff;color:#4b2c82}';document.head.appendChild(protocolLedStyle);updateProtocolLeds();setInterval(updateProtocolLeds,250);
 const refreshWithoutOpenOutbox=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);if(!document.querySelector('#messages details[open]'))await refreshMailbox();await updateRadioLeds();restoreExpanded()};refresh=refreshWithoutOpenOutbox;
 const standardInboxRenderer=renderInbox;renderInbox=items=>standardInboxRenderer(items.filter(x=>!x.group_name));
+const cataloguedGroupRenderer=renderGroups;renderGroups=items=>{let observed=items.filter(x=>Number(x.seen_count)>0).map(x=>x.name);let added=observed.filter(x=>!EMERGENCY_GROUPS.includes(x));EMERGENCY_GROUPS.push(...added);cataloguedGroupRenderer(items);EMERGENCY_GROUPS.splice(EMERGENCY_GROUPS.length-added.length,added.length)};
 refresh().then(addMessageControls);refreshStations();setInterval(()=>{refresh().then(addMessageControls);refreshStations()},3000);
 </script>"""
 
