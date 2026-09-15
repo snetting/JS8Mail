@@ -1,0 +1,27 @@
+name: Windows bundle
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build portable executable
+        shell: pwsh
+        run: .\builds\windows\build.ps1
+      - name: Upload Windows bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: JS8Mail-windows-x64
+          path: builds/windows/dist/JS8Mail.exe
+          if-no-files-found: error

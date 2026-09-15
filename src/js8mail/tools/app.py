@@ -9,6 +9,7 @@ import json
 import re
 import threading
 import traceback
+import webbrowser
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1206,6 +1207,10 @@ async def run(args: argparse.Namespace) -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     print(f"JS8Mail UI: http://{args.ui_host}:{args.ui_port}", flush=True)
+    if args.open_browser:
+        # Used by the packaged desktop executable; the development launcher
+        # stays headless unless explicitly asked to open a browser.
+        webbrowser.open(f"http://{args.ui_host}:{args.ui_port}")
     delay = 1.0
     query_scheduler = QueryScheduler()
     inbox_scheduler = QueryScheduler(base_delay_ms=1_800_000, max_delay_ms=21_600_000)
@@ -2740,6 +2745,11 @@ def main() -> None:
         "--auto-speed",
         action="store_true",
         help="Allow the adapter to request evidence-backed JS8Call speed changes",
+    )
+    parser.add_argument(
+        "--open-browser",
+        action="store_true",
+        help="Open the local web UI after startup (used by the desktop bundle)",
     )
     args = parser.parse_args()
     try:

@@ -86,10 +86,11 @@ the UI should be treated as setup guidance and the operator remains in control
 of RF transmission. Intermediate stations may not have these facilities, so
 the routing logic degrades to the strongest standard JS8Call behavior available.
 
-Linux is the current development platform. A packaged Windows build is planned;
-Python applications can be distributed as compiled/frozen executables (for
-example with PyInstaller), so users should not ultimately need to install or
-manage a Python environment manually.
+Linux is the current development platform. A portable Windows bundle can be
+built with PyInstaller on Windows; users of that bundle do not need to install
+Python or manage a virtual environment. See [`builds/README.md`](builds/README.md)
+and the `Windows bundle` GitHub Actions workflow. The workflow produces a
+downloadable `JS8Mail.exe` artifact using the standard API and web UI ports.
 
 For the complete operator guide—including JS8Call setup, TCP/API configuration,
 the end-to-end message lifecycle, path discovery, route scoring, custody,

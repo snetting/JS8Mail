@@ -80,6 +80,25 @@ The launcher passes normal daemon options through, including `--host`, `--port`,
 runtime package; developers who want the test suite should use the explicit
 setup in the development section below and install `.[test]`.
 
+### Windows desktop bundle
+
+The repository also provides a portable Windows executable build. Download the
+`JS8Mail-windows-x64` artifact from a successful `Windows bundle` workflow run,
+place `JS8Mail.exe` in a writable directory, and double-click it. The bundle
+starts with automatic RF handoff, connects to JS8Call at `127.0.0.1:2442`,
+serves the UI at `http://127.0.0.1:8765`, and opens that address automatically.
+Its local `js8mail.sqlite3` database is kept beside the executable. JS8Call
+must still be installed and configured separately; the bundle does not include
+JS8Call, audio drivers, or radio control software.
+
+The executable is built on a Windows runner with PyInstaller, so it is a
+bundled/frozen Python application rather than a cross-compiled Linux binary.
+For a local build, run `builds\\windows\\build.ps1` in PowerShell. The script
+creates a temporary build environment and writes
+`builds\\windows\\dist\\JS8Mail.exe`. Unsigned local builds may trigger a
+normal Windows Defender warning. Use a dedicated writable directory and back
+up the SQLite file before replacing the executable.
+
 For live automatic handoff, simply omit `--tx-mode` (automatic is the
 default):
 
