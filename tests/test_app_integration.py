@@ -83,6 +83,44 @@ async def test_selected_multi_hop_plan_reaches_fake_radio(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_group_broadcast_is_terminal_without_ack_wait(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("@JS8MAIL", "group test", "hello group", enhanced_mode="required")
+    radio = FakeRadio()
+    handler = object.__new__(Handler)
+    handler.service = service
+    handler.client = radio
+    handler.status = {
+        "callsign": "OH3SPN",
+        "tx_mode": "automatic",
+        "paused": False,
+        "speed": 0,
+        "band": "20m",
+        "js8_activity_until_ms": 0,
+    }
+    handler.announced_destinations = set()
+    handler.airtime_budget = AirtimeBudget()
+    handler.message_budgets = {}
+    handler.tx_lock = asyncio.Lock()
+    handler.last_tx_at_ms = None
+    handler.next_tx_not_before_ms = None
+    handler.auto_speed = False
+
+    await handler.transmit(message_id)
+
+    assert radio.sent == ["@JS8MAIL MSG [JS8Mail/0.0.3] hello group"]
+    assert database.get_message(message_id)["state"] == "delivered"  # type: ignore[index]
+    assert service.message_views()[0]["confidence"] == "broadcast_submitted"
+    assert not any(
+        attempt["action"] == "capability" for attempt in database.list_attempts(message_id)
+    )
+    database.close()
+
+
+@pytest.mark.asyncio
 async def test_stale_multi_hop_route_probes_first_hop_before_payload(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)

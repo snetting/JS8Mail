@@ -186,6 +186,8 @@ class MailService:
                 view["confidence"] = "delivery_failed"
             elif state == "expired":
                 view["confidence"] = "expired"
+            elif state == "delivered" and str(message["destination"]).upper().startswith("@"):
+                view["confidence"] = "broadcast_submitted"
             elif state == "stored":
                 view["confidence"] = "stored_at_custodian"
             elif any(

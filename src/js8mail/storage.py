@@ -11,7 +11,7 @@ from typing import Any
 from js8mail.bands import context_from_params
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 
 class Database:
@@ -437,6 +437,41 @@ class Database:
                     VALUES (22, strftime('%s','now') * 1000);
                 """
             )
+        if current < 23:
+            self.connection.executescript(
+                """
+                CREATE TABLE transmission_transactions_v23 (
+                    id INTEGER PRIMARY KEY,
+                    message_id TEXT NOT NULL REFERENCES messages(id),
+                    operation TEXT NOT NULL CHECK(operation IN ('direct', 'multipart', 'relay', 'store', 'group_broadcast')),
+                    target TEXT NOT NULL,
+                    expected_responder TEXT NOT NULL,
+                    path_json TEXT NOT NULL DEFAULT '[]',
+                    wire_hash TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL CHECK(status IN ('queued', 'tx_active', 'awaiting_ack', 'acknowledged', 'timed_out', 'unconfirmed')),
+                    created_at_ms INTEGER NOT NULL,
+                    submitted_at_ms INTEGER,
+                    tx_finished_at_ms INTEGER,
+                    response_timeout_ms INTEGER NOT NULL,
+                    ack_deadline_ms INTEGER NOT NULL,
+                    retry_number INTEGER NOT NULL DEFAULT 0
+                );
+                INSERT INTO transmission_transactions_v23
+                    SELECT id, message_id, operation, target, expected_responder,
+                           path_json, wire_hash, status, created_at_ms,
+                           submitted_at_ms, tx_finished_at_ms,
+                           response_timeout_ms, ack_deadline_ms, retry_number
+                    FROM transmission_transactions;
+                DROP TABLE transmission_transactions;
+                ALTER TABLE transmission_transactions_v23 RENAME TO transmission_transactions;
+                CREATE INDEX transmission_transactions_ack_idx
+                    ON transmission_transactions(expected_responder, status, ack_deadline_ms);
+                CREATE INDEX transmission_transactions_message_idx
+                    ON transmission_transactions(message_id, created_at_ms DESC);
+                INSERT INTO schema_migrations(version, applied_at_ms)
+                    VALUES (23, strftime('%s','now') * 1000);
+                """
+            )
         self.connection.commit()
 
     def record_observation(
@@ -603,7 +638,7 @@ class Database:
         allows a fast ACK or a daemon restart to reconcile the operation even
         if the parent message has temporarily returned to route discovery.
         """
-        if operation not in {"direct", "multipart", "relay", "store"}:
+        if operation not in {"direct", "multipart", "relay", "store", "group_broadcast"}:
             raise ValueError("invalid transmission operation")
         now = utc_now_ms()
         cursor = self.connection.execute(
