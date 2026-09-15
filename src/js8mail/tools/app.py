@@ -1159,6 +1159,8 @@ async def run(args: argparse.Namespace) -> None:
             "message_budgets": {},
             "tx_lock": asyncio.Lock(),
             "last_tx_at_ms": None,
+            "next_tx_not_before_ms": None,
+            "active_transaction_id": None,
             "auto_speed": args.auto_speed,
         },
     )
