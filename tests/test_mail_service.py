@@ -32,6 +32,24 @@ def test_cancelled_message_does_not_report_active_discovery(tmp_path: Path) -> N
     database.close()
 
 
+def test_cancel_is_idempotent_for_terminal_or_missing_messages(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("MM0ZFG", "test", "body")
+    service.cancel(message_id)
+    service.cancel(message_id)
+    service.cancel("stale-row")
+    assert database.get_message(message_id)["state"] == "cancelled"  # type: ignore[index]
+    database.close()
+
+
+def test_delete_is_idempotent_for_missing_messages(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    service.delete("stale-row")
+    database.close()
+
+
 def test_new_queued_message_reports_waiting_for_discovery(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)

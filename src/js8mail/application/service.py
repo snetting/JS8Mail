@@ -53,6 +53,20 @@ class MailService:
         return message_id
 
     def cancel(self, message_id: str) -> None:
+        message = self.database.get_message(message_id)
+        if message is None:
+            # The browser may have acted on a row removed by another refresh
+            # or operator action. Cancellation is intentionally idempotent.
+            return
+        state = MessageState(str(message["state"]))
+        if state in {
+            MessageState.STORED,
+            MessageState.DELIVERED,
+            MessageState.FAILED,
+            MessageState.EXPIRED,
+            MessageState.CANCELLED,
+        }:
+            return
         self.database.transition_message(message_id, MessageState.CANCELLED)
 
     def retry(self, message_id: str) -> None:
@@ -82,7 +96,12 @@ class MailService:
         self.database.record_attempt(message_id, "manual_retry", "route", "requested", "operator requested immediate retry")
 
     def delete(self, message_id: str) -> None:
-        self.database.delete_message(message_id)
+        try:
+            self.database.delete_message(message_id)
+        except KeyError:
+            # Removing an already-removed row is a successful end state from
+            # the operator's perspective, especially after a stale refresh.
+            return
 
     def plan_route(
         self,
