@@ -1203,6 +1203,7 @@ async def run(args: argparse.Namespace) -> None:
         "js8_activity_until_ms": 0,
         "tx_message_id": None,
         "incoming_directed_until_ms": 0,
+        "incoming_directed_completion_guard_until_ms": 0,
         "active_transaction_id": None,
         "speed_recommendation": None,
     }
@@ -1786,10 +1787,20 @@ async def run(args: argparse.Namespace) -> None:
                                 "deferred",
                                 f"local/API handoff deferred: {str(exc) or type(exc).__name__}",
                             )
+                            receiving_message = "receiving a directed message" in str(exc)
+                            retry_delay = 60_000
+                            if receiving_message:
+                                retry_delay = max(
+                                    5_000,
+                                    int(status.get("incoming_directed_until_ms", 0) or 0)
+                                    - utc_now_ms(),
+                                )
                             database.defer_message(
                                 str(message["id"]),
-                                60_000,
-                                "route known but JS8Call TX slot was still occupied",
+                                retry_delay,
+                                "route known but JS8Call is receiving directed mail"
+                                if receiving_message
+                                else "route known but JS8Call TX slot was still occupied",
                             )
                     continue
                 # A query-call reply can complete a multi-hop path without
@@ -2041,9 +2052,21 @@ async def run(args: argparse.Namespace) -> None:
                             # the next slot and truncate the incoming mail.
                             raw_directed = str(event.params.get("TEXT", event.value))
                             has_eot = bool(re.search(r"[♢◊]\s*$", raw_directed))
-                            status["incoming_directed_until_ms"] = utc_now_ms() + (
-                                5_000 if has_eot else 60_000
+                            now = utc_now_ms()
+                            # RX.ACTIVITY and RX.DIRECTED can be emitted for
+                            # the same frame in either task order. Once the
+                            # completed RX.DIRECTED event has been seen, do
+                            # not let the activity copy reopen the partial
+                            # message hold.
+                            completion_guard = int(
+                                status.get("incoming_directed_completion_guard_until_ms", 0) or 0
                             )
+                            if event.event_type != "RX.ACTIVITY" or completion_guard <= now:
+                                status["incoming_directed_until_ms"] = now + (
+                                    5_000 if has_eot else 60_000
+                                )
+                            if has_eot:
+                                status["incoming_directed_completion_guard_until_ms"] = now + 5_000
                     ack = parse_ack(frame.payload) if frame is not None else None
                     source = frame.source if frame is not None else event.params.get("FROM")
                     command = frame.command if frame is not None else ""
