@@ -1182,6 +1182,7 @@ async def run(args: argparse.Namespace) -> None:
     for group, description in DEFAULT_GROUPS:
         database.ensure_group(group, description, subscribed=group == "@JS8MAIL")
     database.repair_group_observations()
+    database.reconcile_forwarded_inbox_messages()
     configured_mode = database.get_configuration("enhanced_mode", "opportunistic")
     if configured_mode not in ENHANCED_MODES:
         configured_mode = "opportunistic"
@@ -2106,7 +2107,22 @@ async def run(args: argparse.Namespace) -> None:
                                 seed="",
                             )
                         elif activity_j8m_buffer:
-                            activity_j8m_buffer["parts"].append(activity_text)
+                            # Other stations may decode between message
+                            # fragments.  JS8Call's BITS field distinguishes
+                            # the short continuation payloads from most
+                            # control/heartbeat decodes; a new callsign-led
+                            # activity also starts a different stream.
+                            bits = event.params.get("BITS")
+                            new_activity = re.match(
+                                r"^\s*[A-Z0-9/]{1,16}\s*:", activity_text,
+                                re.IGNORECASE,
+                            )
+                            if new_activity is not None or (
+                                isinstance(bits, int) and bits not in {0, 4}
+                            ):
+                                activity_j8m_buffer.clear()
+                            else:
+                                activity_j8m_buffer["parts"].append(activity_text)
                         activity_j8m_last_ms = now_ms
                         assembled = "".join(activity_j8m_buffer.get("parts", ()))
                         source = str(activity_j8m_buffer.get("source", "")).upper()

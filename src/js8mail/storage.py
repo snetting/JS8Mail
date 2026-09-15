@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -1124,14 +1125,72 @@ class Database:
             "SELECT sender, message_id, body FROM inbox_messages "
             "WHERE complete = 0 ORDER BY updated_at_ms DESC"
         ).fetchall()
-        candidate = body.strip().rstrip("…").rstrip(".").strip()
+        def comparable(value: str) -> str:
+            value = re.sub(r"\[JS8MAIL/[^\]]+\]\s*", "", value, flags=re.IGNORECASE)
+            value = re.sub(r"(?:…{2,}|\.{3,})\s*\d*\s*$", "", value)
+            return " ".join(value.split()).strip().lower()
+
+        candidate = comparable(body)
         if not candidate:
             return None
         for item in rows:
-            fragment = str(item["body"]).strip().rstrip("…").rstrip(".").strip()
+            fragment = comparable(str(item["body"]))
             if fragment and (candidate.startswith(fragment) or fragment.startswith(candidate)):
                 return str(item["sender"]), str(item["message_id"])
         return None
+
+    def reconcile_forwarded_inbox_messages(self) -> int:
+        """Merge complete forwarded copies into matching origin partials."""
+        def comparable(value: str) -> str:
+            value = re.sub(r"\[JS8MAIL/[^\]]+\]\s*", "", value, flags=re.IGNORECASE)
+            value = re.sub(r"(?:…{2,}|\.{3,})\s*\d*\s*$", "", value)
+            return " ".join(value.split()).strip().lower()
+
+        partials = self.connection.execute(
+            "SELECT sender, message_id, body, path FROM inbox_messages WHERE complete = 0"
+        ).fetchall()
+        complete_rows = self.connection.execute(
+            "SELECT sender, message_id, body, path, protocol, delivery FROM inbox_messages WHERE complete = 1"
+        ).fetchall()
+        merged = 0
+        for complete in complete_rows:
+            complete_body = comparable(str(complete["body"]))
+            if not complete_body:
+                continue
+            match = next(
+                (
+                    partial for partial in partials
+                    if comparable(str(partial["body"]))
+                    and (
+                        complete_body.startswith(comparable(str(partial["body"])))
+                        or comparable(str(partial["body"])).startswith(complete_body)
+                    )
+                    and str(partial["sender"]).upper() != str(complete["sender"]).upper()
+                ),
+                None,
+            )
+            if match is None:
+                continue
+            sender = str(match["sender"]).upper()
+            path = tuple(item for item in str(complete["path"] or "").split("→") if item)
+            path = (sender,) + tuple(item for item in path if item.upper() != sender)
+            self.connection.execute(
+                "UPDATE inbox_messages SET body = ?, complete = 1, received_parts_json = ?, "
+                "path = ?, protocol = ?, delivery = ?, updated_at_ms = ? "
+                "WHERE sender = ? AND message_id = ?",
+                (
+                    complete["body"], "[1]", "→".join(path), complete["protocol"],
+                    "stored_collected" if len(path) > 1 else complete["delivery"],
+                    utc_now_ms(), sender, match["message_id"],
+                ),
+            )
+            self.connection.execute(
+                "DELETE FROM inbox_messages WHERE sender = ? AND message_id = ?",
+                (complete["sender"].upper(), complete["message_id"]),
+            )
+            merged += 1
+        self.connection.commit()
+        return merged
 
     def delete_inbox_message(self, sender: str, message_id: str) -> None:
         cursor = self.connection.execute(
