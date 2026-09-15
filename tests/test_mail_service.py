@@ -130,6 +130,16 @@ def test_recently_heard_does_not_count_as_a_directed_answer(tmp_path: Path) -> N
     database.close()
 
 
+def test_recently_heard_uses_activity_text_when_from_is_missing(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    database.record_observation(
+        NormalizedEvent("RX.ACTIVITY", "M0OUE: OH3SPN MSG", {"SNR": -8}, 1_000)
+    )
+    assert service.recent_heard_age_ms("M0OUE", now_ms=2_000, window_ms=10_000) == 1_000
+    database.close()
+
+
 def test_message_graph_omits_self_links(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)

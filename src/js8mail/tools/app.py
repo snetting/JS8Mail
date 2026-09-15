@@ -1990,9 +1990,15 @@ async def run(args: argparse.Namespace) -> None:
                     for group in extract_groups(event.value, *[str(value) for value in event.params.values()]):
                         database.observe_group(group, default_group_description(group))
                     frame = normalize_directed_event(event) if event.event_type.startswith("RX.DIRECTED") else None
-                    if frame is not None:
-                        local_call = str(status.get("callsign", "")).upper()
-                        if local_call and frame.destination in {local_call, "@ALLCALL"}:
+                    local_call = str(status.get("callsign", "")).upper()
+                    directed_to_local = frame is not None and frame.destination in {local_call, "@ALLCALL"}
+                    if frame is None and event.event_type == "RX.ACTIVITY" and local_call:
+                        activity_text = str(event.params.get("TEXT", event.value))
+                        directed_to_local = bool(
+                            re.match(r"^\s*[A-Z0-9/]{1,16}\s*:\s*", activity_text, re.IGNORECASE)
+                            and re.search(rf"\b{re.escape(local_call)}\b", activity_text, re.IGNORECASE)
+                        )
+                    if directed_to_local:
                             # JS8Call deliberately suppresses automatic
                             # replies while a directed message is arriving.
                             # JS8Mail must apply the same rule to its own

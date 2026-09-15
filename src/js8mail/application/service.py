@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 from typing import Any
 
@@ -446,7 +447,17 @@ class MailService:
         wanted = callsign.strip().upper()
         freshest: int | None = None
         for observation in self.database.recent_observations(500, band=band):
-            source = observation["params"].get("FROM")
+            params = observation["params"]
+            source = params.get("FROM") or params.get("CALL")
+            if not isinstance(source, str):
+                # Some JS8Call builds expose the first decoded directed frame
+                # only as RX.ACTIVITY text, e.g. ``M0OUE: OH3SPN MSG``.
+                match = re.match(
+                    r"^\s*([A-Z0-9/]{1,16})\s*:",
+                    str(observation["value"]),
+                    re.IGNORECASE,
+                )
+                source = match.group(1) if match else None
             # A remote QUERY CALL report says that somebody heard the target;
             # it is valuable route evidence, but it is not local hearing
             # evidence for a direct payload attempt.
