@@ -245,6 +245,16 @@ def test_default_and_observed_groups_are_catalogued(tmp_path: Path) -> None:
     database.close()
 
 
+def test_group_subscription_persists_and_can_be_removed(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.ensure_group("@JS8MAIL", "discussion and updates")
+    database.set_group_subscription("@JS8MAIL", True)
+    assert database.list_groups()[0]["subscribed"] == 1
+    database.set_group_subscription("@JS8MAIL", False)
+    assert database.list_groups()[0]["subscribed"] == 0
+    database.close()
+
+
 def test_unsubscribed_stale_groups_expire_but_catalog_groups_remain(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     database.ensure_group("@EMCOMM", "emergency communications")
