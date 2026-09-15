@@ -6,7 +6,12 @@ from js8mail.application.service import MailService
 from js8mail.radio_policy import AirtimeBudget
 from js8mail.routing import RoutePlan
 from js8mail.storage import Database
-from js8mail.tools.app import Handler, capability_outbound_ms, capability_response_window_ms
+from js8mail.tools.app import (
+    Handler,
+    capability_outbound_ms,
+    capability_response_window_ms,
+    route_evidence_settling_window_ms,
+)
 
 
 class FakeRadio:
@@ -29,6 +34,12 @@ def test_capability_timing_accounts_for_return_hops() -> None:
     assert direct == 45_000
     assert multi > direct
     assert outbound > 0
+
+
+def test_route_evidence_settling_window_is_bounded() -> None:
+    assert route_evidence_settling_window_ms(105_000, 0) == 70_000
+    assert route_evidence_settling_window_ms(45_000, 0) == 45_000
+    assert route_evidence_settling_window_ms(180_000, 8) == 30_000
 
 
 @pytest.mark.asyncio

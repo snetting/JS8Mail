@@ -113,6 +113,21 @@ def query_response_window_ms(action: str, speed: object) -> int:
     return min(QUERY_RESPONSE_MAX_MS, max(60_000, cycles * cycle_ms + 15_000))
 
 
+ROUTE_EVIDENCE_SETTLE_MAX_MS = 90_000
+ROUTE_EVIDENCE_SETTLE_GUARD_MS = 10_000
+
+
+def route_evidence_settling_window_ms(response_window_ms: int, speed: object) -> int:
+    """Allow one or two expected RF cycles for competing query replies."""
+    try:
+        speed_id = int(str(speed))
+    except (TypeError, ValueError):
+        speed_id = 0
+    cycle_ms = SPEED_AIRTIME_MS.get(speed_id, SPEED_AIRTIME_MS[0])
+    expected = 2 * cycle_ms + ROUTE_EVIDENCE_SETTLE_GUARD_MS
+    return min(response_window_ms, ROUTE_EVIDENCE_SETTLE_MAX_MS, max(30_000, expected))
+
+
 def delivery_response_window_ms(operation: str, path: tuple[str, ...], speed: object) -> int:
     """Bound the wait for a legacy ACK after the real TX has ended.
 
@@ -1071,6 +1086,8 @@ async def run(args: argparse.Namespace) -> None:
     retrieval_retry_delay_ms = 45_000
     capability_last_sent: dict[str, int] = {}
     recent_query_answers: dict[str, int] = {}
+    route_evidence_settle_until_ms: dict[str, int] = {}
+    route_evidence_settle_logged: set[str] = set()
     # A targeted QUERY CALL normally receives an answer within one or two
     # JS8Call cycles. Keep enough context for that response without blocking
     # discovery for several minutes; the fallback defer below is never shorter
@@ -1413,6 +1430,29 @@ async def run(args: argparse.Namespace) -> None:
                     destination,
                     band=str(status.get("band", "")),
                 )
+                message_id = str(message["id"])
+                settle_until = route_evidence_settle_until_ms.get(message_id)
+                if settle_until is not None and direct_age_ms is None:
+                    if now_wall_ms < settle_until:
+                        if message_id not in route_evidence_settle_logged:
+                            database.record_attempt(
+                                message_id,
+                                "route_evidence_settling",
+                                destination,
+                                "waiting",
+                                f"waiting {max(1, (settle_until - now_wall_ms) // 1000)}s for competing replies",
+                            )
+                            route_evidence_settle_logged.add(message_id)
+                        continue
+                    route_evidence_settle_until_ms.pop(message_id, None)
+                    route_evidence_settle_logged.discard(message_id)
+                    database.record_attempt(
+                        message_id,
+                        "route_evidence_settling",
+                        destination,
+                        "complete",
+                        "reply collection window ended; selecting the best available path",
+                    )
                 if (
                     message["state"] == MessageState.WAITING_ROUTE
                     and (direct_age_ms is not None or heard_age_ms is not None)
@@ -2045,6 +2085,20 @@ async def run(args: argparse.Namespace) -> None:
                                 pending_call_queries.remove(matched_query)
                             for message in database.list_messages(MessageState.WAITING_ROUTE):
                                 if str(message["destination"]).upper() == queried_destination.upper():
+                                    message_id = str(message["id"])
+                                    if message_id not in route_evidence_settle_until_ms:
+                                        settle_ms = route_evidence_settling_window_ms(
+                                            matched_query.response_window_ms,
+                                            status.get("speed", 0),
+                                        )
+                                        route_evidence_settle_until_ms[message_id] = now + settle_ms
+                                        database.record_attempt(
+                                            message_id,
+                                            "route_evidence_settling",
+                                            queried_destination,
+                                            "waiting",
+                                            f"collecting competing query replies for up to {settle_ms // 1000}s",
+                                        )
                                     evidence_detail = (
                                         f"confirmed reachability to {queried_destination}"
                                         if snr is None
@@ -2055,13 +2109,13 @@ async def run(args: argparse.Namespace) -> None:
                                     if late_response:
                                         evidence_detail += "; delayed query response"
                                     database.record_attempt(
-                                        str(message["id"]),
+                                        message_id,
                                         "route_evidence",
                                         source.upper(),
                                         "received",
                                         evidence_detail,
                                     )
-                                    database.wake_message_for_route(str(message["id"]))
+                                    database.wake_message_for_route(message_id)
                     # A direct SNR response is the answer to the inexpensive
                     # reachability probe. Do not wait for the full defer
                     # interval before using it, but still let the single RF
