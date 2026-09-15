@@ -39,6 +39,7 @@ from js8mail.protocol import (
     MessagePart,
     MultipartAccumulator,
     contains_js8mail_marker,
+    find_capability,
     format_capability,
     format_delivery_ack,
     format_human_data_part,
@@ -2171,20 +2172,37 @@ async def run(args: argparse.Namespace) -> None:
                                     "inbox.retrieval_failed",
                                     {"custodian": source.upper(), "js8call_message_id": available_id},
                                 )
-                    capability = parse_capability(frame.payload if frame is not None else "")
-                    if capability is not None and isinstance(source, str):
+                    capability_text = frame.payload if frame is not None else str(event.value)
+                    capability = (
+                        parse_capability(capability_text)
+                        if frame is not None
+                        else find_capability(capability_text)
+                    )
+                    capability_source = source
+                    if capability_source is None and event.event_type == "RX.ACTIVITY":
+                        source_match = re.match(r"^\s*([A-Z0-9/]{1,16})\s*:", capability_text, re.IGNORECASE)
+                        capability_source = source_match.group(1) if source_match is not None else None
+                    # Only a CAP addressed to this station gets a response.
+                    # CAPs overheard between other stations, including group
+                    # traffic, are useful graph intelligence but must remain
+                    # passive to avoid a broadcast response storm.
+                    capability_reply_allowed = (
+                        frame is not None
+                        and frame.destination == local_call
+                    )
+                    if capability is not None and isinstance(capability_source, str):
                         version, features = capability
                         capability_now = utc_now_ms()
                         database.upsert_peer_capabilities(
-                            source, version, features, capability_now + CAPABILITY_TTL_MS
+                            capability_source, version, features, capability_now + CAPABILITY_TTL_MS
                         )
                         for pending_message in database.list_messages(MessageState.WAITING_ROUTE):
-                            if str(pending_message["destination"]).upper() == source.upper():
+                            if str(pending_message["destination"]).upper() == capability_source.upper():
                                 database.wake_message_for_route(str(pending_message["id"]))
                         # CAP is a request/response hint, not an endlessly
                         # echoed heartbeat. One reply per peer per hour is
                         # enough to establish capability and prevents loops.
-                        last_capability = capability_last_sent.get(source.upper(), 0)
+                        last_capability = capability_last_sent.get(capability_source.upper(), 0)
                         if capability_now - last_capability < 60 * 60 * 1000:
                             capability = None
                         else:
@@ -2193,17 +2211,17 @@ async def run(args: argparse.Namespace) -> None:
                             # must remain retryable rather than suppressing
                             # the peer's only capability response for an hour.
                             pass
-                    if capability is not None and isinstance(source, str):
+                    if capability is not None and isinstance(capability_source, str) and capability_reply_allowed:
                         try:
-                            await controller.send_rf(f"{source} {format_capability(features)}")
-                            capability_last_sent[source.upper()] = utc_now_ms()
+                            await controller.send_rf(f"{capability_source} {format_capability(features)}")
+                            capability_last_sent[capability_source.upper()] = utc_now_ms()
                             database.audit(
                                 "peer.capability_ack_submitted",
-                                {"peer": source.upper(), "version": version},
+                                {"peer": capability_source.upper(), "version": version},
                             )
                         except (ConnectionError, RuntimeError):
-                            pending_capability_advertisements[source.upper()] = utc_now_ms() + 30_000
-                            database.audit("peer.capability_ack_failed", {"peer": source.upper()})
+                            pending_capability_advertisements[capability_source.upper()] = utc_now_ms() + 30_000
+                            database.audit("peer.capability_ack_failed", {"peer": capability_source.upper()})
                     # A group-directed MSG is useful alert traffic even when
                     # no JS8Mail peer is present. Preserve it in the separate
                     # group-alert inbox; @ALLCALL is deliberately excluded

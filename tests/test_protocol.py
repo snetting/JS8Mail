@@ -13,6 +13,7 @@ from js8mail.domain import NormalizedEvent
 from js8mail.protocol import (
     MultipartError,
     contains_js8mail_marker,
+    find_capability,
     format_capability,
     format_delivery_ack,
     parse_ack,
@@ -32,6 +33,9 @@ def test_capability_exchange_is_canonical_and_marker_is_only_a_hint() -> None:
     assert parse_capability("j8m1 cap 1 mp,e2e") == (1, ("MP", "E2E"))
     assert contains_js8mail_marker("N0CALL MSG [JS8Mail/0.0.4] hello")
     assert not contains_js8mail_marker("N0CALL MSG JS8Mail hello")
+    assert find_capability("M0OUE: OH3SPN J8M1 CAP 1 E2E,MP,PA ♢") == (
+        1, ("E2E", "MP", "PA")
+    )
 
 
 def test_decode_rejects_malformed_and_oversized_frames() -> None:

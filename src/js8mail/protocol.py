@@ -18,6 +18,10 @@ CAPABILITY_PROTOCOL_VERSION = 1
 CAPABILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
 CAPABILITY_FEATURES = frozenset({"E2E", "MP", "PA", "RR"})
 JS8MAIL_MARKER_RE = re.compile(r"\[JS8MAIL/\d+\.\d+\.\d+\]", re.IGNORECASE)
+CAPABILITY_FRAME_RE = re.compile(
+    r"\bJ8M1\s+CAP\s+\d+\s+[A-Z][A-Z0-9]*(?:,[A-Z][A-Z0-9]*)*",
+    re.IGNORECASE,
+)
 _MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _STATION_RE = re.compile(r"^[A-Z0-9/]{1,16}$")
 _ADDRESS_RE = re.compile(r"^@?[A-Z0-9/]{1,16}$")
@@ -56,6 +60,12 @@ def parse_capability(text: str) -> tuple[int, tuple[str, ...]] | None:
     ):
         return None
     return version, capabilities
+
+
+def find_capability(text: str) -> tuple[int, tuple[str, ...]] | None:
+    """Find a CAP frame embedded in an overheard JS8Call activity line."""
+    match = CAPABILITY_FRAME_RE.search(text)
+    return parse_capability(match.group(0)) if match is not None else None
 
 
 def contains_js8mail_marker(text: str) -> bool:
