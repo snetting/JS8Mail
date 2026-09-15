@@ -70,6 +70,11 @@ AUTOMATED_RX_WINDOW_MS = 60 * 1000
 QUERY_RESPONSE_MAX_MS = 3 * 60 * 1000
 LATE_QUERY_CONTEXT_MS = 15 * 60 * 1000
 CAPABILITY_MAX_RESPONSE_MS = 5 * 60 * 1000
+# Historical graph evidence is useful for choosing which route to investigate,
+# but it is not sufficient justification for submitting a long relay payload.
+# Require a fresh answer from the first hop before spending that airtime.
+ROUTE_HOP_PROBE_FRESH_MS = 10 * 60 * 1000
+ROUTE_HOP_PROBE_COOLDOWN_MS = 5 * 60 * 1000
 # A message may use a bounded burst, then continue in later rolling windows.
 # The total is intentionally larger than the three-day default message TTL;
 # the station-wide budget remains the ultimate safety ceiling.
@@ -909,6 +914,90 @@ class Handler(BaseHTTPRequestHandler):
             increment_retry=not probe_busy,
         )
 
+    async def ensure_route_first_hop_reachable(
+        self, message_id: str, path: tuple[str, ...]
+    ) -> bool:
+        """Hold a stale route behind a cheap probe to its first RF hop.
+
+        A temporal route can remain useful as a candidate after its evidence
+        has aged, but submitting the complete message immediately can consume
+        several minutes of airtime before we learn that the first relay has
+        disappeared.  A direct SNR answer from the first hop is the small,
+        current reachability test that permits the payload to proceed.
+        """
+        if len(path) < 2:
+            return False
+        first_hop = path[1].upper()
+        local_call = str(self.status.get("callsign", "")).upper()
+        band = str(self.status.get("band", ""))
+        answered_age = self.service.recent_answered_age_ms(
+            first_hop, local_call, band=band, window_ms=ROUTE_HOP_PROBE_FRESH_MS
+        )
+        if answered_age is not None:
+            return True
+
+        attempts = self.service.database.list_attempts(message_id)
+        recent_probe = next(
+            (
+                attempt
+                for attempt in reversed(attempts)
+                if attempt["action"] == "route_probe"
+                and str(attempt["target"]).upper() == first_hop
+                and attempt["status"] in {"submitted", "deferred"}
+            ),
+            None,
+        )
+        now = utc_now_ms()
+        if recent_probe is not None:
+            probe_age = max(0, now - int(recent_probe["created_at_ms"]))
+            if probe_age < ROUTE_HOP_PROBE_COOLDOWN_MS:
+                self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+                self.service.database.defer_message(
+                    message_id,
+                    min(60_000, ROUTE_HOP_PROBE_COOLDOWN_MS - probe_age),
+                    f"waiting for {first_hop} SNR response; full route payload held",
+                    increment_retry=False,
+                )
+                return False
+
+        probe = snr_query(first_hop)
+        self.service.database.record_attempt(
+            message_id,
+            "route_probe",
+            first_hop,
+            "started",
+            f"stale first hop before payload; path {'→'.join(path)}",
+        )
+        try:
+            await self.send_rf(probe, message_id)
+        except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
+            self.service.database.record_attempt(
+                message_id, "route_probe", first_hop, "deferred", type(exc).__name__
+            )
+            self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+            self.service.database.defer_message(
+                message_id,
+                30_000,
+                "first-hop SNR probe deferred; full route payload held",
+                increment_retry=False,
+            )
+            return False
+        self.service.database.record_attempt(
+            message_id,
+            "route_probe",
+            first_hop,
+            "submitted",
+            "waiting for direct reachability response before full payload",
+        )
+        self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
+        self.service.database.defer_message(
+            message_id,
+            query_response_window_ms("candidate_query_call", self.status.get("speed", 0)),
+            f"waiting for {first_hop} SNR response before full route payload",
+            increment_retry=False,
+        )
+        return False
+
     def log_message(self, format: str, *args: object) -> None:
         return
 
@@ -1620,7 +1709,7 @@ async def run(args: argparse.Namespace) -> None:
                         attempted_paths=database.attempted_message_paths(str(message["id"])),
                         band=str(status.get("band", "")),
                     )
-                    if len(plan.path) >= 3:
+                    if len(plan.path) >= 2:
                         database.record_attempt(
                             str(message["id"]),
                             "route",
@@ -1628,6 +1717,10 @@ async def run(args: argparse.Namespace) -> None:
                             "selected",
                             plan.explanation,
                         )
+                        if not await controller.ensure_route_first_hop_reachable(
+                            str(message["id"]), plan.path
+                        ):
+                            continue
                         try:
                             await controller.transmit(str(message["id"]), plan)
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -2279,15 +2372,25 @@ async def run(args: argparse.Namespace) -> None:
                         and frame.destination == local_call
                     ):
                         for message in database.list_messages(MessageState.WAITING_ROUTE):
-                            if str(message["destination"]).upper() == source.upper():
+                            message_id = str(message["id"])
+                            route_probe_targets = {
+                                str(attempt["target"]).upper()
+                                for attempt in database.list_attempts(message_id)
+                                if attempt["action"] == "route_probe"
+                                and attempt["status"] in {"started", "submitted"}
+                            }
+                            if (
+                                str(message["destination"]).upper() == source.upper()
+                                or source.upper() in route_probe_targets
+                            ):
                                 database.record_attempt(
-                                    str(message["id"]),
+                                    message_id,
                                     "route_evidence",
                                     source.upper(),
                                     "received",
-                                    "direct reachability response",
+                                    "direct reachability response; stale route probe satisfied",
                                 )
-                                database.wake_message_for_route(str(message["id"]))
+                                database.wake_message_for_route(message_id)
                     legacy_ack = parse_legacy_ack(frame) if frame is not None else None
                     if isinstance(source, str) and legacy_ack is not None:
                         ack_responder, ack_path = legacy_ack

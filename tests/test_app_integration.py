@@ -83,6 +83,46 @@ async def test_selected_multi_hop_plan_reaches_fake_radio(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_stale_multi_hop_route_probes_first_hop_before_payload(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("N3IDR", "route", "long payload")
+    radio = FakeRadio()
+    handler = object.__new__(Handler)
+    handler.service = service
+    handler.client = radio
+    handler.status = {
+        "callsign": "OH3SPN",
+        "tx_mode": "automatic",
+        "paused": False,
+        "speed": 0,
+        "band": "20m",
+        "js8_activity_until_ms": 0,
+    }
+    handler.announced_destinations = set()
+    handler.airtime_budget = AirtimeBudget()
+    handler.message_budgets = {}
+    handler.tx_lock = asyncio.Lock()
+    handler.last_tx_at_ms = None
+    handler.next_tx_not_before_ms = None
+    handler.auto_speed = False
+
+    allowed = await handler.ensure_route_first_hop_reachable(
+        message_id, ("OH3SPN", "IZ1KJG", "N3IDR")
+    )
+
+    assert allowed is False
+    assert radio.sent == ["IZ1KJG SNR?"]
+    assert any(
+        attempt["action"] == "route_probe" and attempt["status"] == "submitted"
+        for attempt in database.list_attempts(message_id)
+    )
+    database.close()
+
+
+@pytest.mark.asyncio
 async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
