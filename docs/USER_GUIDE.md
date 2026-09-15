@@ -8,7 +8,7 @@ JS8Mail adds a durable mailbox, evidence collection, route selection, custody
 tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
-This document describes the current `0.0.5` implementation. It is useful and
+This document describes the current `0.0.6` implementation. It is useful and
 radio-capable, but still early and experimental. In particular, a route score
 is evidence-based advice, not a guarantee that a station is listening now.
 Always operate within your licence, local band plan, power limits, and the
@@ -522,8 +522,10 @@ reconcile the original message.
 
 ## JS8Mail enhanced peers
 
-The first message to an unknown station remains ordinary readable JS8Call text
-plus a separate capability advertisement when airtime permits:
+For an unknown station, the wire choice follows the selected sending mode.
+Standard and Opportunistic begin with ordinary readable JS8Call text;
+Required begins with a separate capability advertisement and falls back to
+ordinary delivery if the response window expires:
 
 ```text
 J8M1 CAP 1 E2E,MP,PA
@@ -568,6 +570,32 @@ The sender retransmits only the missing part(s), through the known return path
 when possible, and otherwise invokes ordinary route discovery. The incomplete
 preview remains visible because partial emergency information is better than a
 hidden message.
+
+### Receive-frame reassembly and interleaving
+
+JS8Call normally exposes a complete directed message through `RX.DIRECTED`.
+Some builds also expose the short pieces through `RX.ACTIVITY` before, or
+instead of, that complete event. JS8Mail records those observations and uses
+the documented `BITS` flags when it has them: bit 0 (`BITS & 1`) marks the
+first frame and bit 1 (`BITS & 2`) marks the last frame. Other bits are
+ignored, so values such as 5 and 6 still mean first and last respectively.
+
+The assembler keeps more than one pending stream and matches continuations by
+the available band, dial, offset, speed, and timing context. A new
+callsign-prefixed activity line, heartbeat, or unrelated directed exchange
+does not clear an existing stream. If two streams could accept the same
+continuation, or an observed timestamp arrives out of order, JS8Mail marks
+the result ambiguous and leaves it partial instead of silently joining the
+wrong text. Standard JS8Call activity has no universal application sequence
+number, so the UI cannot honestly name an exact missing standard part; it
+shows the received prefix/body as Partial until an authoritative complete
+`RX.DIRECTED` event or a safe final activity frame arrives.
+
+For older builds that do not provide `BITS`, a trailing JS8Call continuation
+marker is used only as a lower-confidence legacy completion hint. It is not
+treated as proof equivalent to `RX.DIRECTED`. Enhanced `J8M1` messages remain
+part-numbered and use their selective part ACK/resend mechanism, which is the
+reliable way to identify a specific missing part.
 
 ## Custody and store-and-forward
 
@@ -658,7 +686,7 @@ is opt-in, and acknowledgements must be designated or suppressed to avoid an
 ACK storm.
 
 Outgoing group broadcasts are ordinary JS8Call group messages. JS8Mail adds
-the visible `[JS8Mail/0.0.5]` marker to every group broadcast so other clients
+the visible `[JS8Mail/0.0.6]` marker to every group broadcast so other clients
 can recognise JS8Mail-originated traffic while listening. This marker is not
 `J8M1 CAP`, so it does not request a response from every station hearing the
 group. Group broadcasts are reported as submitted with no ACK expected; they
@@ -703,7 +731,8 @@ pytest -q
 ```
 
 The deterministic simulations cover three-hop multipart delivery, one missing
-part and selective resend, duplicate-safe reassembly, and group ACK policy.
+part and selective resend, duplicate-safe reassembly, group ACK policy, and
+activity-frame cases including out-of-order and interleaved decodes.
 The API probe is receive-only:
 
 ```sh

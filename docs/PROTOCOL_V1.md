@@ -1,6 +1,6 @@
 # JS8Mail enhanced envelope protocol v1
 
-Status: version 1 specification for the early `JS8Mail/0.0.5` implementation.
+Status: version 1 specification for the early `JS8Mail/0.0.6` implementation.
 
 This is the normative v1 wire specification, not an assertion that every
 JS8Call build exposes every transport feature. The adapter must capability
@@ -72,6 +72,19 @@ destination is supplied by the surrounding JS8Call
 directed or relay address; the stable `MID` is the correlation key. This keeps
 an enhanced record passable through an ordinary JS8Call relay while leaving
 the message body readable to an operator who sees it.
+
+### Activity-frame reconstruction
+
+`RX.DIRECTED` is authoritative when available. An adapter that receives only
+`RX.ACTIVITY` may reconstruct a local directed message using JS8Call's
+`BITS` field: `BITS & 1` is the first frame and `BITS & 2` is the last frame.
+The remaining bits are reserved or build-specific and must not be interpreted
+as an exact frame number. Because standard activity has no application
+sequence number, an implementation must retain a partial preview and refuse
+to complete it when continuations are ambiguous or arrive out of order.
+Unrelated callsign-prefixed activity may be interleaved without cancelling a
+pending stream. A no-`BITS` legacy continuation marker may be accepted only as
+lower-confidence compatibility evidence.
 
 Receivers persist parts by `(sender, MID, PART)`, ignore duplicates, and expose
 an incomplete preview with explicit missing-part markers. Once all parts are

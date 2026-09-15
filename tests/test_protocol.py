@@ -31,7 +31,7 @@ def test_decode_valid_event() -> None:
 def test_capability_exchange_is_canonical_and_marker_is_only_a_hint() -> None:
     assert format_capability(("mp", "E2E", "mp")) == "J8M1 CAP 1 MP,E2E"
     assert parse_capability("j8m1 cap 1 mp,e2e") == (1, ("MP", "E2E"))
-    assert contains_js8mail_marker("N0CALL MSG [JS8Mail/0.0.5] hello")
+    assert contains_js8mail_marker("N0CALL MSG [JS8Mail/0.0.6] hello")
     assert not contains_js8mail_marker("N0CALL MSG JS8Mail hello")
     assert find_capability("M0OUE: OH3SPN J8M1 CAP 1 E2E,MP,PA ♢") == (
         1, ("E2E", "MP", "PA")

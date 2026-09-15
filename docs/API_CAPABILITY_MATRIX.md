@@ -1,6 +1,6 @@
 # JS8Call API capability matrix
 
-This matrix describes the adapter boundary used by the current `0.0.5`
+This matrix describes the adapter boundary used by the current `0.0.6`
 daemon. `Runtime` is intentionally `unknown` where behaviour depends on the
 installed JS8Call build; a capability must not be inferred solely from an
 application version string. The live installation used during development has
@@ -20,6 +20,7 @@ claim for every JS8Call release.
 | Station grid/info/status | `STATION.GET_GRID`, `STATION.GET_INFO`, `STATION.GET_STATUS` | documented | present | unknown | startup read-only probe |
 | Version | `STATION.VERSION` | unknown | absent in inspected source | unknown | probe if available |
 | Receive activity | `RX.ACTIVITY` | documented | emitted | unknown | passive capture |
+| Activity frame boundaries | `RX.ACTIVITY.params.BITS` (`&1` first, `&2` last) | runtime-dependent | present in improved API change | unknown | conservative multi-stream reassembly; unknown bits ignored |
 | Directed receive | `RX.DIRECTED` | documented | emitted | unknown | passive capture and parser input |
 | Heard stations | `RX.GET_CALL_ACTIVITY` | documented | present | unknown | bounded snapshot |
 | Band activity | `RX.GET_BAND_ACTIVITY` | documented | present | unknown | busy-channel evidence |

@@ -56,6 +56,7 @@ from js8mail.protocol import (
     parse_resend_request,
     split_human_message,
 )
+from js8mail.reassembly import ActivityAssembler, ActivityFragment
 from js8mail.radio_policy import (
     SPEED_AIRTIME_MS,
     AdaptiveSpeedPolicy,
@@ -202,10 +203,10 @@ def _recent_outbound_transaction(
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>JS8Mail</title><style>
-body{font:15px system-ui;max-width:1250px;margin:2em auto;padding:0 1em;background:#f5f7f9;color:#18222d}.topbar{position:sticky;top:0;z-index:10;background:#f5f7f9;padding:.35em 0 .5em}
+body{font:15px system-ui;max-width:1250px;margin:2em auto;padding:0 1em;background:#f5f7f9;color:#18222d}.topbar{position:sticky;top:0;z-index:10;background:#f5f7f9;padding:.35em 0 .5em}.topline{display:flex;justify-content:space-between;align-items:center;gap:1em}.topline h1{margin:.2em 0}.version-button{white-space:nowrap;background:#334155;font-size:12px}
  .workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:1em;align-items:stretch}.workspace section{margin:0;min-width:0}.workspace>section{min-height:260px}.inbox-panel{max-height:360px;overflow:auto}.live-panel{min-height:300px}.live-panel svg{width:100%;min-height:280px;background:#fbfcfd;border-radius:6px}.stations-panel{grid-column:2;grid-row:2 / span 2}.groups-panel{grid-column:1}#messages th:nth-child(2),#messages td:nth-child(2){width:8em}#messages th:nth-child(4),#messages td:nth-child(4){width:17em;white-space:nowrap}@media(max-width:800px){.workspace{display:block}.workspace>section{margin:1em 0}.stations-panel{grid-column:auto;grid-row:auto}#messages th:nth-child(4),#messages td:nth-child(4){width:auto;white-space:normal}}
 section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em;margin:1em 0}input,textarea,select{box-sizing:border-box;width:100%;padding:.5em;margin:.25em 0 .7em}textarea{height:110px}button{background:#1769aa;color:#fff;border:0;border-radius:5px;padding:.5em .8em;margin:.2em;cursor:pointer}.danger{background:#a33}.pill{display:inline-block;padding:.3em .6em;border-radius:1em;background:#e8edf2;margin:.2em}.ok{background:#d8f3dc}.warn{background:#fff1c2}.state-pill{display:inline-block;padding:.3em .6em;border-radius:1em;margin:.2em;font-weight:600;white-space:nowrap}.state-in-progress{background:#dbeafe;color:#174ea6}.state-complete{background:#d8f3dc;color:#176b35}.state-complete-plus{background:#b7f0d0;color:#075c38}.state-failed{background:#ffd9d9;color:#8b1e1e}.state-cancelled,.state-expired{background:#e8edf2;color:#53606d}#status .pill:nth-child(3){display:none}.mono{font:12px monospace;white-space:pre-wrap;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}svg{display:block;max-width:100%;height:auto}td,th{text-align:left;border-bottom:1px solid #e4e9ee;padding:.5em;vertical-align:top;overflow-wrap:anywhere}#messages th:nth-child(4),#messages td:nth-child(4){width:18em;white-space:normal}.outbox-actions{display:flex;flex-wrap:wrap;gap:.3em;align-items:flex-start}.outbox-actions button{margin:0;padding:.4em .55em;white-space:nowrap}details summary{cursor:pointer;padding:.25em 0}details summary::marker{color:#1769aa}
-</style><div class=topbar><h1>JS8Mail</h1><p>Resilient radio mail for reliable offline comms · by <a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN</a> <button onclick="useStation('OH3SPN')">Compose to OH3SPN</button></p><section><div id=status>Loading…</div><div id=radio-leds class=leds><span id=led-rx class='led on-rx'>RX</span><span id=led-dcd class='led'>DCD</span><span id=led-tx class='led'>TX</span><span id=led-err class='led'>ERR</span><span id=led-js8 class='led'>JS8</span></div></section></div><style>.leds{display:inline-flex;gap:.3em;margin-left:.5em;vertical-align:middle}.led{padding:.25em .5em;border-radius:1em;background:#e8edf2;color:#53606d;font-size:12px;font-weight:600}.led.on-rx{background:#d8f3dc;color:#176b35}.led.on-tx{background:#ffd9d9;color:#8b1e1e}.led.on-dcd{background:#fff1c2;color:#785500}.led.on-err{background:#8b1e1e;color:white}#status .pill:nth-child(3){display:none}</style>
+</style><div class=topbar><div class=topline><h1>JS8Mail</h1><button class=version-button onclick="showVersionInfo()">v0.0.6 · Updates</button></div><p>Resilient radio mail for reliable offline comms · by <a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN</a> <button onclick="useStation('OH3SPN')">Compose to OH3SPN</button></p><section><div id=status>Loading…</div><div id=radio-leds class=leds><span id=led-rx class='led on-rx'>RX</span><span id=led-dcd class='led'>DCD</span><span id=led-tx class='led'>TX</span><span id=led-err class='led'>ERR</span><span id=led-js8 class='led'>JS8</span></div></section></div><style>.leds{display:inline-flex;gap:.3em;margin-left:.5em;vertical-align:middle}.led{padding:.25em .5em;border-radius:1em;background:#e8edf2;color:#53606d;font-size:12px;font-weight:600}.led.on-rx{background:#d8f3dc;color:#176b35}.led.on-tx{background:#ffd9d9;color:#8b1e1e}.led.on-dcd{background:#fff1c2;color:#785500}.led.on-err{background:#8b1e1e;color:white}#status .pill:nth-child(3){display:none}</style>
 <section class=system-panel><h2>System sending mode</h2><p><label>Default JS8M sending mode <select name=enhanced_mode id=default-enhanced-mode title='Default for new messages'><option value=opportunistic>Opportunistic (recommended)</option><option value=standard>Standard JS8Call</option><option value=required>Required JS8M</option></select></label></p><small>This is the default for new directed messages. Standard uses ordinary JS8Call immediately; Opportunistic uses JS8M for known capable stations and otherwise uses ordinary mail; Required waits for a JS8M capability response. Group broadcasts always use Standard.</small></section>
 <div class=workspace><section class=compose-panel><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select>Message mode<select name=enhanced_mode title='Override the default for this message'><option value=''>Use system default</option><option value=standard>Standard JS8Call</option><option value=opportunistic>Opportunistic</option><option value=required>Required JS8M</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section class=live-panel><h2>Live RF Activity <small id=live-graph-meta></small></h2><div id=live-graph><p>Waiting for active-band observations.</p></div></section>
@@ -218,6 +219,7 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 <script>
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
+function showVersionInfo(){let modal=document.getElementById('version-modal');if(!modal){modal=document.createElement('div');modal.id='version-modal';modal.innerHTML='<div class="modal-card" role="dialog" aria-modal="true"><button class="danger modal-close" onclick="closeVersionInfo()">Close</button><h2>JS8Mail v0.0.6</h2><p>Recent improvements in this release:</p><ul><li>Reassembles long standard and JS8Mail messages from JS8Call activity frames.</li><li>Uses JS8Call first/last frame flags and keeps partial messages visible when a section is missing.</li><li>Separates interleaved receive streams and refuses ambiguous or out-of-order completion.</li><li>Improves live RF evidence rendering and forwarded-message origin handling.</li></ul><p><small>Early development release · experimental RF software.</small></p></div>';document.body.appendChild(modal)}modal.style.display='flex'}function closeVersionInfo(){let modal=document.getElementById('version-modal');if(modal)modal.style.display='none'}
 const confidenceName={new:'New · waiting for discovery',uncertain:'No delivery evidence',discovery_in_progress:'Discovery in progress',submitted_to_js8call:'Queued in JS8Call · awaiting TX',awaiting_delivery_ack:'TX submitted · awaiting delivery ACK',awaiting_custodian_ack:'Store offer submitted · awaiting custodian ACK',delivery_uncertain:'Delivery unconfirmed · retry pending',stored_at_custodian:'Delivered to custodian',radio_acknowledged:'Hop ACK · Standard',delivered_to_js8mail:'Delivered to JS8Mail client',broadcast_submitted:'Broadcast complete · no ACK expected',cancelled:'Cancelled',delivery_failed:'Delivery failed',expired:'Expired'};
 function statePill(x){if(x.tx_active)return `<span class='state-pill state-failed'>In progress · TX</span>`;if(x.confidence==='delivered_to_js8mail')return `<span class='state-pill state-complete-plus'>Complete+</span>`;if(x.state==='delivered')return `<span class='state-pill state-complete'>Complete</span>`;if(x.state==='stored')return `<span class='state-pill state-complete'>Stored</span>`;if(['failed','expired','cancelled'].includes(x.state))return `<span class='state-pill state-${esc(x.state)}'>${esc(x.state[0].toUpperCase()+x.state.slice(1))}</span>`;if(x.state==='queued'&&!(x.attempts||[]).length)return `<span class='state-pill state-in-progress'>New</span>`;if(['in_progress','waiting_route','queued'].includes(x.state))return `<span class='state-pill state-in-progress'>In progress</span>`;return `<span class='state-pill'>${esc(x.state)}</span>`}
 function relativeAge(seconds){seconds=Math.max(0,Number(seconds)||0);if(seconds<60)return `${Math.round(seconds)}s ago`;if(seconds<600)return `${Math.floor(seconds/60)}m ${Math.floor(seconds%60)}s ago`;if(seconds<3600)return `${Math.floor(seconds/60)}m ago`;if(seconds<86400)return `${Math.floor(seconds/3600)}h ago`;return `${Math.floor(seconds/86400)}d ago`}function evidenceLabel(value){return value==='direct'?'Direct':value==='reported_target'?'Remote':value==='remote_report'?'Reported':value}
@@ -279,7 +281,7 @@ destinationInput?.addEventListener('input',updateDestinationCapability);
 enhancedModeInput?.addEventListener('change',updateDestinationCapability);
 function showInboxMessage(item){let modal=document.getElementById('message-modal');if(!modal){modal=document.createElement('div');modal.id='message-modal';modal.innerHTML='<div class="modal-card" role="dialog" aria-modal="true"><button class="danger modal-close" onclick="closeInboxMessage()">Close</button><div id="message-modal-content"></div></div>';document.body.appendChild(modal)}let delivery={direct:'Direct',forwarded:'Forwarded',stored_collected:'Stored → collected',group_broadcast:'Group broadcast'}[item.delivery]||'Direct';document.getElementById('message-modal-content').innerHTML=`<h2>${esc(item.subject||'(no subject)')}</h2><p><b>From:</b> ${esc(item.sender)} · <b>Status:</b> ${item.complete?'Complete':'Partial · '+item.received_parts.length+'/'+item.total_parts+' parts'} · <b>Protocol:</b> ${item.protocol==='js8m'?'JS8Mail':'Standard'}</p><p><b>Delivery:</b> ${esc(delivery)}<br><b>Path:</b> ${esc(item.path||item.sender||'Unknown')}</p><div class=message-full>${esc(item.body)}</div><p><small>Received ${esc(new Date(item.updated_at_ms).toLocaleString())}</small></p><button onclick='replyToInboxMessage(inboxItems[${window.inboxItems?.indexOf(item)??-1}])'>Reply</button>`;modal.style.display='flex'}function closeInboxMessage(){let modal=document.getElementById('message-modal');if(modal)modal.style.display='none'}function replyToInboxMessage(item){if(!item)return;closeInboxMessage();let destination=document.querySelector('#compose input[name=destination]'),subject=document.querySelector('#compose input[name=subject]'),body=document.querySelector('#compose textarea[name=body]');destination.value=item.sender;subject.value=item.subject?('Re: '+item.subject).slice(0,120):'';body.focus();document.querySelector('.compose-panel')?.scrollIntoView({behavior:'smooth',block:'start'})}
 const inboxRender=renderInbox;renderInbox=items=>{document.getElementById('inbox').innerHTML=items.length?'<table><tr><th>From</th><th>Status</th><th>Message</th><th>Action</th></tr>'+items.map((x,i)=>`<tr><td><b>${esc(x.sender)}</b></td><td><span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts}</span><br><span class='pill ${x.protocol==='js8m'?'enhanced':''}'>${x.protocol==='js8m'?'JS8Mail':'Standard'}</span></td><td><div class=message-preview>${esc(x.body)}</div></td><td><button onclick='showInboxMessage(inboxItems[${i}])'>Open</button><button class=danger onclick='deleteInboxMessage(inboxItems[${i}])'>Delete</button></td></tr>`).join('')+'</table>':'<p>No received messages.</p>';window.inboxItems=items};
-let modalStyle=document.createElement('style');modalStyle.textContent='#message-modal{display:none;position:fixed;inset:0;background:#18222d88;z-index:20;align-items:center;justify-content:center;padding:1em}.modal-card{background:white;border-radius:10px;box-shadow:0 8px 30px #18222d66;max-width:720px;width:min(720px,100%);max-height:85vh;overflow:auto;padding:1.2em}.modal-close{float:right}.message-preview{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}.message-full{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #d9e0e7;border-radius:6px;padding:1em;background:#f7f9fb}.timeline-time{color:#64748b;font-variant-numeric:tabular-nums}.pill.good,.pill.enhanced{background:#b7f0d0;color:#075c38}.pill.bad{background:#ffd9d9;color:#8b1e1e}';document.head.appendChild(modalStyle);
+let modalStyle=document.createElement('style');modalStyle.textContent='#message-modal,#version-modal{display:none;position:fixed;inset:0;background:#18222d88;z-index:20;align-items:center;justify-content:center;padding:1em}.modal-card{background:white;border-radius:10px;box-shadow:0 8px 30px #18222d66;max-width:720px;width:min(720px,100%);max-height:85vh;overflow:auto;padding:1.2em}.modal-close{float:right}.message-preview{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}.message-full{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #d9e0e7;border-radius:6px;padding:1em;background:#f7f9fb}.timeline-time{color:#64748b;font-variant-numeric:tabular-nums}.pill.good,.pill.enhanced{background:#b7f0d0;color:#075c38}.pill.bad{background:#ffd9d9;color:#8b1e1e}';document.head.appendChild(modalStyle);
 let outboxPreviewStyle=document.createElement('style');outboxPreviewStyle.textContent='#messages td:nth-child(3){height:5.5em;max-height:5.5em;overflow:hidden;line-height:1.25}#messages td:nth-child(3) .message-preview{max-height:4.5em}.confidence-stored_at_custodian,.confidence-delivered_to_js8mail{background:#b7f0d0;color:#075c38}.confidence-awaiting_delivery_ack,.confidence-awaiting_custodian_ack{background:#fff1c2;color:#7a4b00}.confidence-delivery_uncertain{background:#ffd9d9;color:#8b1e1e}.confidence-radio_acknowledged{background:#dbeafe;color:#174ea6}';document.head.appendChild(outboxPreviewStyle);
 let groupSubscriptionStyle=document.createElement('style');groupSubscriptionStyle.textContent='.group-subscribed{background:#f0fdf4}.group-unsubscribed{background:#fff}.group-subscription{font-size:.82em;white-space:nowrap}.group-subscription.subscribed{background:#bbf7d0;color:#166534}.group-subscription.unsubscribed{background:#e5e7eb;color:#4b5563}';document.head.appendChild(groupSubscriptionStyle);
 function styleOutboxConfidence(){document.querySelectorAll('#messages details summary .pill').forEach(p=>{let text=p.textContent||'',key=text.startsWith('Delivered to custodian')?'stored_at_custodian':text.startsWith('Delivered to JS8Mail')?'delivered_to_js8mail':text.startsWith('Store offer submitted')?'awaiting_custodian_ack':text.startsWith('TX submitted')?'awaiting_delivery_ack':text.startsWith('Delivery unconfirmed')?'delivery_uncertain':text.startsWith('Hop ACK')?'radio_acknowledged':'';if(key)p.classList.add('confidence-'+key)})}new MutationObserver(styleOutboxConfidence).observe(document.getElementById('messages'),{childList:true,subtree:true});
@@ -2072,121 +2074,87 @@ async def run(args: argparse.Namespace) -> None:
                 database.audit("js8call.connected", {"host": args.host, "port": args.port})
                 delay = 1.0
 
-                # Some JS8Call builds expose a long directed decode only as a
-                # sequence of RX.ACTIVITY fragments.  The first fragment has
-                # the human-readable envelope (``FROM: TO MSG``), while the
-                # following fragments contain the payload.  RX.ACTIVITY is
-                # intentionally short, so waiting for RX.DIRECTED alone can
-                # lose a perfectly complete J8M1 message.  Keep a small,
-                # connection-local assembler for enhanced data frames.  It is
-                # deliberately conservative: only a locally addressed MSG is
-                # assembled, and enhanced data is promoted to a synthetic
-                # directed event only after a continuation terminator.
-                activity_j8m_buffer: dict[str, Any] = {}
-                activity_j8m_last_ms = 0
+                # RX.ACTIVITY is a short display stream.  It may contain a
+                # long directed message split across several events, while
+                # unrelated QSOs arrive between those events.  Keep multiple
+                # conservative streams; RX.DIRECTED remains authoritative.
+                activity_assembler = ActivityAssembler()
 
                 async def handle(event: NormalizedEvent) -> None:
-                    nonlocal activity_j8m_last_ms
                     apply_radio_context(dict(event.params))
                     if event.event_type == "RX.ACTIVITY":
-                        activity_text = str(event.value)
+                        bits = event.params.get("BITS")
+                        try:
+                            bits = int(bits) if bits is not None else None
+                        except (TypeError, ValueError):
+                            bits = None
+                        def numeric_param(name: str) -> int | None:
+                            value = event.params.get(name)
+                            try:
+                                return int(value) if value is not None else None
+                            except (TypeError, ValueError):
+                                return None
                         now_ms = utc_now_ms()
-                        if now_ms - activity_j8m_last_ms > 90_000:
-                            activity_j8m_buffer.clear()
-                        start = re.match(
-                            r"^\s*([A-Z0-9/]{1,16})\s*:\s*([A-Z0-9/]{1,16})\s+MSG\s*$",
-                            activity_text,
-                            re.IGNORECASE,
+                        fragment = ActivityFragment(
+                            str(event.value), bits, event.observed_at_ms, now_ms,
+                            str(status.get("band", "")),
+                            numeric_param("DIAL_FREQUENCY") or status.get("dial_frequency"),
+                            numeric_param("OFFSET"), numeric_param("SPEED"),
                         )
-                        if start is not None:
-                            activity_j8m_buffer.clear()
-                            activity_j8m_buffer.update(
-                                source=start.group(1).upper(),
-                                destination=start.group(2).upper(),
-                                parts=[activity_text],
-                                seed="",
-                            )
-                        elif activity_j8m_buffer:
-                            # Other stations may decode between message
-                            # fragments.  JS8Call's BITS field distinguishes
-                            # the short continuation payloads from most
-                            # control/heartbeat decodes; a new callsign-led
-                            # activity also starts a different stream.
-                            bits = event.params.get("BITS")
-                            new_activity = re.match(
-                                r"^\s*[A-Z0-9/]{1,16}\s*:", activity_text,
-                                re.IGNORECASE,
-                            )
-                            if new_activity is not None or (
-                                isinstance(bits, int) and bits not in {0, 4}
-                            ):
-                                activity_j8m_buffer.clear()
-                            else:
-                                activity_j8m_buffer["parts"].append(activity_text)
-                        activity_j8m_last_ms = now_ms
-                        assembled = "".join(activity_j8m_buffer.get("parts", ()))
-                        source = str(activity_j8m_buffer.get("source", "")).upper()
-                        destination = str(activity_j8m_buffer.get("destination", "")).upper()
-                        locally_addressed = (
-                            source
-                            and destination == str(status.get("callsign", "")).upper()
+                        assemblies = activity_assembler.feed(
+                            fragment, local_destination=str(status.get("callsign", "")),
                         )
-                        enhanced_activity = "J8M1 D " in assembled.upper()
-                        if locally_addressed and assembled and not enhanced_activity:
-                            standard_body = re.sub(
+                        for assembly in assemblies:
+                            source = assembly.source.upper()
+                            destination = assembly.destination.upper()
+                            assembled = assembly.text
+                            body = re.sub(
                                 r"^\s*[A-Z0-9/]{1,16}\s*:\s*[A-Z0-9/]{1,16}\s+MSG\s*",
-                                "",
-                                assembled,
-                                count=1,
-                                flags=re.IGNORECASE,
+                                "", assembled, count=1, flags=re.IGNORECASE,
                             )
-                            standard_body = re.sub(r"(?:…{2,}|\.{3,})\s*$", "", standard_body).strip()
-                            if standard_body:
-                                if not activity_j8m_buffer.get("seed"):
-                                    activity_j8m_buffer["seed"] = standard_body[:96]
-                                partial_id = "legacy-partial-" + hashlib.sha256(
-                                    f"{source}\n{destination}\n{activity_j8m_buffer['seed']}".encode()
-                                ).hexdigest()[:16]
+                            body = ActivityAssembler.clean_text(body)
+                            if body and not assembly.complete:
+                                # Reuse a matching partial already persisted
+                                # by an earlier connection. This makes a
+                                # daemon restart mid-message safe: the
+                                # continued activity updates one inbox item
+                                # instead of creating a second copy.
+                                partial_id = database.find_partial_inbox(source, body)
+                                if partial_id is None:
+                                    partial_id = "legacy-partial-" + hashlib.sha256(
+                                        f"{source}\n{destination}\n{body[:96]}".encode()
+                                    ).hexdigest()[:16]
                                 database.upsert_inbox_message(
-                                    source,
-                                    partial_id,
-                                    standard_body,
-                                    1,
-                                    (),
-                                    False,
-                                    (source,),
-                                    protocol="standard",
+                                    source, partial_id, body, 1, (), False, (source,),
+                                    protocol="js8m" if "J8M1 D " in assembled.upper() else "standard",
                                     delivery="direct",
                                 )
-                        if (
-                            source
-                            and locally_addressed
-                            and enhanced_activity
-                            and re.search(r"(?:…{2,}|\.{3,})\s*$", assembled)
-                        ):
-                            # The trailing ellipsis is JS8Call's continuation
-                            # indicator, not part of the J8M1 payload.
-                            complete_text = re.sub(r"(?:…{2,}|\.{3,})\s*$", "", assembled).rstrip()
-                            synthetic_params = dict(event.params)
-                            synthetic_params.update(
-                                {
-                                    "FROM": source,
-                                    "TO": destination,
-                                    "CMD": "MSG",
-                                    "TEXT": complete_text,
-                                }
-                            )
-                            event = NormalizedEvent(
-                                "RX.DIRECTED",
-                                complete_text,
-                                synthetic_params,
-                                event.observed_at_ms,
-                            )
-                            database.audit(
-                                "radio.activity_reassembled",
-                                {"source": source, "destination": destination, "protocol": "js8m"},
-                            )
-                            activity_j8m_buffer.clear()
+                                if assembly.ambiguous or assembly.gap_suspected:
+                                    database.audit(
+                                        "radio.activity_reassembly_uncertain",
+                                        {"source": source, "destination": destination,
+                                         "stream_id": assembly.stream_id,
+                                         "ambiguous": assembly.ambiguous,
+                                         "gap_suspected": assembly.gap_suspected},
+                                    )
+                            if assembly.complete and not assembly.ambiguous:
+                                complete_text = ActivityAssembler.clean_text(assembled)
+                                synthetic_params = dict(event.params)
+                                synthetic_params.update({
+                                    "FROM": source, "TO": destination, "CMD": "MSG",
+                                    "TEXT": complete_text, "PARTIAL": False,
+                                })
+                                event = NormalizedEvent(
+                                    "RX.DIRECTED", complete_text, synthetic_params,
+                                    event.observed_at_ms,
+                                )
+                                database.audit(
+                                    "radio.activity_reassembled",
+                                    {"source": source, "destination": destination,
+                                     "protocol": "js8m" if "J8M1 D " in assembled.upper() else "standard",
+                                     "confidence": assembly.confidence},
+                                )
+                                break
                     # RIG.PTT is the authoritative live TX/RX transition. A
                     # TX.FRAME event proves a frame was produced, but may be
                     # followed by a delayed or missing UI refresh; using it
