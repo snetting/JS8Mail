@@ -466,7 +466,7 @@ The outbox deliberately distinguishes these states:
 | --- | --- |
 | Submitted to JS8Call | Text reached the local JS8Call API. |
 | Frames observed | JS8Call produced a TX frame; remote decoding is unproven. |
-| Radio acknowledged / hop ACK | An addressed station acknowledged a hop; end-to-end delivery is unproven. |
+| Hop ACK · Standard | An addressed station acknowledged a standard JS8Call hop; JS8Mail end-to-end delivery is unproven. |
 | Stored at custodian | A custodian acknowledged a store operation; recipient retrieval is still pending. This stops automatic re-offering; the operator can retain it or start a fresh retry deliberately. |
 | Delivered / Complete | An ordinary/known delivery conclusion supported by local evidence. |
 | Complete+ | A JS8Mail destination sent an end-to-end delivery receipt. |
