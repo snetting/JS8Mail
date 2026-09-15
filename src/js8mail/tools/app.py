@@ -761,7 +761,9 @@ class Handler(BaseHTTPRequestHandler):
             self.service.database.mark_transmission_unconfirmed(transaction_id)
             if self.active_transaction_id == transaction_id:
                 self.active_transaction_id = None
-            self.service.database.record_attempt(message_id, action, target, "failed", type(exc).__name__)
+            self.service.database.record_attempt(
+                message_id, action, target, "failed", str(exc) or type(exc).__name__
+            )
             raise
         except Exception as exc:
             self.service.database.mark_transmission_unconfirmed(transaction_id)
@@ -899,6 +901,38 @@ class Handler(BaseHTTPRequestHandler):
             # Group traffic is explicitly operator-addressed and must not be
             # preceded by a group-wide SNR? probe or capability fan-out.
             await self.transmit(message_id)
+            return
+        local_call = str(self.status.get("callsign", "")).upper()
+        band = str(self.status.get("band", ""))
+        fresh_answered = self.service.recent_answered_age_ms(
+            destination, local_call, band=band, window_ms=ROUTE_HOP_PROBE_FRESH_MS
+        )
+        fresh_heard = self.service.recent_heard_age_ms(
+            destination, band=band, window_ms=ROUTE_HOP_PROBE_FRESH_MS
+        )
+        if fresh_answered is not None or fresh_heard is not None:
+            age_ms = fresh_answered if fresh_answered is not None else fresh_heard
+            assert age_ms is not None
+            self.service.database.record_attempt(
+                message_id,
+                "route_evidence",
+                destination,
+                "received",
+                f"fresh direct RF evidence ({age_ms // 1000}s ago); skipping SNR probe",
+            )
+            try:
+                await self.transmit(message_id)
+            except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
+                detail = str(exc) or type(exc).__name__
+                self.service.database.record_attempt(
+                    message_id, "direct", destination, "deferred",
+                    f"direct handoff deferred: {detail}",
+                )
+                self.service.database.defer_message(
+                    message_id, 60_000,
+                    f"fresh RF evidence retained; waiting to transmit: {detail}",
+                    increment_retry=False,
+                )
             return
         # Even when stale direct or indirect evidence exists, the first action
         # for a newly queued destination is the small direct SNR probe.  This
@@ -1574,7 +1608,8 @@ async def run(args: argparse.Namespace) -> None:
                         await controller.prepare(str(message["id"]))
                     except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
                         database.record_attempt(
-                            str(message["id"]), "prepare", destination, "deferred", type(exc).__name__
+                            str(message["id"]), "prepare", destination, "deferred",
+                            str(exc) or type(exc).__name__,
                         )
                     continue
                 if message["state"] == MessageState.IN_PROGRESS:
@@ -1749,7 +1784,7 @@ async def run(args: argparse.Namespace) -> None:
                                 "direct",
                                 destination,
                                 "deferred",
-                                f"local/API handoff deferred: {type(exc).__name__}",
+                                f"local/API handoff deferred: {str(exc) or type(exc).__name__}",
                             )
                             database.defer_message(
                                 str(message["id"]),
