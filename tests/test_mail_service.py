@@ -1,5 +1,5 @@
-from pathlib import Path
 import time
+from pathlib import Path
 
 import pytest
 
@@ -109,6 +109,24 @@ def test_live_activity_graph_requires_recent_evidence_in_both_directions(tmp_pat
     )
     graph = service.live_activity_graph("20m")
     assert graph["edges"][0]["kind"] == "reciprocal"
+    database.close()
+
+
+def test_station_views_marks_live_js8m_capability(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    now = int(time.time() * 1000)
+    database.record_observation(
+        NormalizedEvent("RX.ACTIVITY", "F4VLF CQ", {"FROM": "F4VLF"}, now - 1_000),
+        band="20m",
+    )
+    database.upsert_peer_capabilities("F4VLF", 1, ("E2E", "MP"), now + 60_000)
+
+    assert service.is_js8m_capable("f4vlf") is True
+    assert service.is_js8m_capable("N0CALL") is False
+    station = service.station_views(band="20m")[0]
+    assert station["callsign"] == "F4VLF"
+    assert station["js8m"] is True
     database.close()
 
 

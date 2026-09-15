@@ -86,6 +86,34 @@ class DirectedFrame:
     final: bool = True
 
 
+def parse_legacy_ack(frame: DirectedFrame) -> tuple[str, tuple[str, ...]] | None:
+    """Return the station that accepted a legacy JS8Call message.
+
+    A direct ACK is exposed as ``CMD=ACK``.  A relayed final ACK is exposed by
+    JS8Call as a ``CMD=>`` frame whose text contains ``ACK *DE* DEST``; the
+    API's ``FROM`` field is then the relay that carried the response, not the
+    station that accepted the message.  Only the explicit ``*DE*`` destination
+    is trusted for a relayed ACK, so an intermediate hop cannot accidentally
+    complete an origin-side message.
+    """
+    if frame.command == "ACK":
+        return frame.source.upper(), (frame.source.upper(),)
+    if frame.command != ">":
+        return None
+    text = f"{frame.wire_text} {frame.payload}".upper()
+    match = re.search(r"\bACK\s+\*DE\*\s*([A-Z0-9/]{1,16})\b", text)
+    if match is None:
+        return None
+    destination = match.group(1)
+    path_text = text.split("ACK", 1)[0]
+    path = tuple(
+        token.strip()
+        for token in path_text.split(">")
+        if re.fullmatch(r"[A-Z0-9/]{1,16}", token.strip())
+    )
+    return destination, path + (destination,)
+
+
 _EOT_RE = re.compile(r"\s*[♢◊]\s*$")
 def _clean_directed_text(value: str) -> str:
     value = value.strip()

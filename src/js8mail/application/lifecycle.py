@@ -12,6 +12,7 @@ class MessageState(StrEnum):
     WAITING_APPROVAL = "waiting_approval"
     WAITING_OPPORTUNITY = "waiting_opportunity"
     IN_PROGRESS = "in_progress"
+    STORED = "stored"
     DELIVERED = "delivered"
     FAILED = "failed"
     EXPIRED = "expired"
@@ -19,7 +20,13 @@ class MessageState(StrEnum):
 
 
 TERMINAL_STATES = frozenset(
-    {MessageState.DELIVERED, MessageState.FAILED, MessageState.EXPIRED, MessageState.CANCELLED}
+    {
+        MessageState.STORED,
+        MessageState.DELIVERED,
+        MessageState.FAILED,
+        MessageState.EXPIRED,
+        MessageState.CANCELLED,
+    }
 )
 
 
@@ -32,6 +39,8 @@ def can_transition(current: MessageState, target: MessageState) -> bool:
         MessageState.DRAFT: {MessageState.QUEUED, MessageState.CANCELLED},
         MessageState.QUEUED: {
             MessageState.WAITING_ROUTE,
+            MessageState.STORED,
+            MessageState.DELIVERED,
             MessageState.CANCELLED,
             MessageState.EXPIRED,
         },
@@ -39,6 +48,8 @@ def can_transition(current: MessageState, target: MessageState) -> bool:
             MessageState.WAITING_APPROVAL,
             MessageState.WAITING_OPPORTUNITY,
             MessageState.IN_PROGRESS,
+            MessageState.STORED,
+            MessageState.DELIVERED,
             MessageState.FAILED,
             MessageState.EXPIRED,
             MessageState.CANCELLED,
@@ -46,17 +57,22 @@ def can_transition(current: MessageState, target: MessageState) -> bool:
         MessageState.WAITING_APPROVAL: {
             MessageState.WAITING_OPPORTUNITY,
             MessageState.IN_PROGRESS,
+            MessageState.STORED,
+            MessageState.DELIVERED,
             MessageState.CANCELLED,
             MessageState.EXPIRED,
         },
         MessageState.WAITING_OPPORTUNITY: {
             MessageState.IN_PROGRESS,
+            MessageState.STORED,
+            MessageState.DELIVERED,
             MessageState.FAILED,
             MessageState.EXPIRED,
             MessageState.CANCELLED,
         },
         MessageState.IN_PROGRESS: {
             MessageState.WAITING_ROUTE,
+            MessageState.STORED,
             MessageState.DELIVERED,
             MessageState.FAILED,
             MessageState.EXPIRED,

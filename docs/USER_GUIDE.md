@@ -427,7 +427,7 @@ The outbox deliberately distinguishes these states:
 | Submitted to JS8Call | Text reached the local JS8Call API. |
 | Frames observed | JS8Call produced a TX frame; remote decoding is unproven. |
 | Radio acknowledged / hop ACK | An addressed station acknowledged a hop; end-to-end delivery is unproven. |
-| Stored at custodian | A custodian acknowledged a store operation; recipient retrieval is still pending. |
+| Stored at custodian | A custodian acknowledged a store operation; recipient retrieval is still pending. This stops automatic re-offering until explicitly retried. |
 | Delivered / Complete | An ordinary/known delivery conclusion supported by local evidence. |
 | Complete+ | A JS8Mail destination sent an end-to-end delivery receipt. |
 | Read | Only available for an explicitly enabled read receipt. |
@@ -461,6 +461,24 @@ When the complete response arrives it reconciles the same item to Complete;
 it does not create a duplicate. This recovery is necessarily less expressive
 than JS8M part acknowledgements because a legacy station does not know the
 JS8Mail part bitmap.
+
+### Legacy ACK timing and relay semantics
+
+JS8Call's ordinary `ACK` is expected for both a direct `MSG` and a successful
+`MSG TO:` store offer. JS8Call also returns a final-destination ACK through a
+reverse relay path for a relayed message. JS8Mail waits for the actual
+TX-to-RX transition before starting the response deadline and scales that
+deadline with relay hop count. A late ACK is still correlated with the durable
+transmission that produced it, even if the message has returned to discovery.
+
+If a store ACK is received, the outbox becomes **Stored · ACK**: this proves
+custodian acceptance only, not recipient collection. If the deadline expires
+without an ACK, the result is explicitly storage-unconfirmed and the message
+waits before considering another custodian; it is never immediately offered to
+every candidate. A relayed ACK is parsed using its explicit final-destination
+marker (`*DE*`), so an ACK from a carrying relay cannot be mistaken for
+end-to-end delivery. A later destination or JS8Mail receipt can still
+reconcile the original message.
 
 ## JS8Mail enhanced peers
 

@@ -11,7 +11,7 @@ from typing import Any
 from js8mail.bands import context_from_params
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 
 class Database:
@@ -410,6 +410,33 @@ class Database:
                 "INSERT INTO schema_migrations(version, applied_at_ms) "
                 "VALUES (21, strftime('%s','now') * 1000)"
             )
+        if current < 22:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS transmission_transactions (
+                    id INTEGER PRIMARY KEY,
+                    message_id TEXT NOT NULL REFERENCES messages(id),
+                    operation TEXT NOT NULL CHECK(operation IN ('direct', 'multipart', 'relay', 'store')),
+                    target TEXT NOT NULL,
+                    expected_responder TEXT NOT NULL,
+                    path_json TEXT NOT NULL DEFAULT '[]',
+                    wire_hash TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL CHECK(status IN ('queued', 'tx_active', 'awaiting_ack', 'acknowledged', 'timed_out', 'unconfirmed')),
+                    created_at_ms INTEGER NOT NULL,
+                    submitted_at_ms INTEGER,
+                    tx_finished_at_ms INTEGER,
+                    response_timeout_ms INTEGER NOT NULL,
+                    ack_deadline_ms INTEGER NOT NULL,
+                    retry_number INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS transmission_transactions_ack_idx
+                    ON transmission_transactions(expected_responder, status, ack_deadline_ms);
+                CREATE INDEX IF NOT EXISTS transmission_transactions_message_idx
+                    ON transmission_transactions(message_id, created_at_ms DESC);
+                INSERT INTO schema_migrations(version, applied_at_ms)
+                    VALUES (22, strftime('%s','now') * 1000);
+                """
+            )
         self.connection.commit()
 
     def record_observation(
@@ -557,6 +584,151 @@ class Database:
             (message_id, used_ms, utc_now_ms()),
         )
         self.connection.commit()
+
+    def begin_transmission_transaction(
+        self,
+        message_id: str,
+        operation: str,
+        target: str,
+        expected_responder: str,
+        path: tuple[str, ...],
+        wire_hash: str,
+        estimated_tx_ms: int,
+        response_timeout_ms: int,
+        retry_number: int = 0,
+    ) -> int:
+        """Create an ACK-correlatable RF transaction before API submission.
+
+        The row is deliberately durable before handing text to JS8Call. This
+        allows a fast ACK or a daemon restart to reconcile the operation even
+        if the parent message has temporarily returned to route discovery.
+        """
+        if operation not in {"direct", "multipart", "relay", "store"}:
+            raise ValueError("invalid transmission operation")
+        now = utc_now_ms()
+        cursor = self.connection.execute(
+            "INSERT INTO transmission_transactions "
+            "(message_id, operation, target, expected_responder, path_json, wire_hash, status, "
+            "created_at_ms, response_timeout_ms, ack_deadline_ms, retry_number) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+            (
+                message_id,
+                operation,
+                target.upper(),
+                expected_responder.upper(),
+                json.dumps(path),
+                wire_hash,
+                now,
+                max(1_000, int(response_timeout_ms)),
+                now + max(1_000, int(estimated_tx_ms)) + max(1_000, int(response_timeout_ms)),
+                max(0, int(retry_number)),
+            ),
+        )
+        self.connection.commit()
+        if cursor.lastrowid is None:
+            raise RuntimeError("SQLite did not return a transmission transaction id")
+        return int(cursor.lastrowid)
+
+    def mark_transmission_submitted(self, transaction_id: int) -> None:
+        now = utc_now_ms()
+        self.connection.execute(
+            "UPDATE transmission_transactions SET status='awaiting_ack', submitted_at_ms=? "
+            "WHERE id=? AND status IN ('queued', 'tx_active')",
+            (now, transaction_id),
+        )
+        self.connection.commit()
+
+    def mark_transmission_active(self, message_id: str) -> None:
+        self.connection.execute(
+            "UPDATE transmission_transactions SET status='tx_active' "
+            "WHERE message_id=? AND status='awaiting_ack' AND tx_finished_at_ms IS NULL",
+            (message_id,),
+        )
+        self.connection.commit()
+
+    def mark_transmission_active_by_id(self, transaction_id: int) -> None:
+        self.connection.execute(
+            "UPDATE transmission_transactions SET status='tx_active' "
+            "WHERE id=? AND status IN ('queued','awaiting_ack')",
+            (transaction_id,),
+        )
+        self.connection.commit()
+
+    def finish_transmission_for_message(self, message_id: str) -> None:
+        """Anchor the response deadline to the actual TX->RX transition."""
+        now = utc_now_ms()
+        self.connection.execute(
+            "UPDATE transmission_transactions SET status='awaiting_ack', tx_finished_at_ms=?, "
+            "ack_deadline_ms=? + response_timeout_ms "
+            "WHERE id=(SELECT id FROM transmission_transactions WHERE message_id=? "
+            "AND status IN ('queued','tx_active','awaiting_ack') AND tx_finished_at_ms IS NULL "
+            "ORDER BY created_at_ms DESC LIMIT 1)",
+            (now, now, message_id),
+        )
+        self.connection.commit()
+
+    def finish_transmission(self, transaction_id: int) -> None:
+        """Anchor one transaction's ACK deadline to the actual TX end."""
+        now = utc_now_ms()
+        self.connection.execute(
+            "UPDATE transmission_transactions SET status='awaiting_ack', "
+            "tx_finished_at_ms=?, ack_deadline_ms=? + response_timeout_ms "
+            "WHERE id=? AND status IN ('queued','tx_active','awaiting_ack')",
+            (now, now, transaction_id),
+        )
+        self.connection.commit()
+
+    def pending_transmission_for_ack(
+        self, source: str, now_ms: int, max_age_ms: int = 15 * 60 * 1000
+    ) -> list[dict[str, Any]]:
+        cutoff = now_ms - max(1_000, max_age_ms)
+        rows = self.connection.execute(
+            "SELECT * FROM transmission_transactions WHERE expected_responder=? "
+            "AND submitted_at_ms IS NOT NULL "
+            "AND (status IN ('queued','tx_active','awaiting_ack') "
+            "OR (status='timed_out' AND submitted_at_ms IS NOT NULL)) "
+            "AND created_at_ms >= ? ORDER BY created_at_ms DESC",
+            (source.upper(), cutoff),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def acknowledge_transmission(self, transaction_id: int) -> None:
+        self.connection.execute(
+            "UPDATE transmission_transactions SET status='acknowledged' WHERE id=?",
+            (transaction_id,),
+        )
+        self.connection.commit()
+
+    def mark_transmission_unconfirmed(self, transaction_id: int) -> None:
+        self.connection.execute(
+            "UPDATE transmission_transactions SET status='unconfirmed' "
+            "WHERE id=? AND status IN ('queued','tx_active','awaiting_ack','timed_out')",
+            (transaction_id,),
+        )
+        self.connection.commit()
+
+    def expire_transmission_transactions(self, now_ms: int | None = None) -> list[dict[str, Any]]:
+        now = utc_now_ms() if now_ms is None else int(now_ms)
+        rows = self.connection.execute(
+            "SELECT * FROM transmission_transactions WHERE status IN "
+            "('queued','tx_active','awaiting_ack') AND ack_deadline_ms <= ?",
+            (now,),
+        ).fetchall()
+        if rows:
+            self.connection.execute(
+                "UPDATE transmission_transactions SET status='timed_out' WHERE status IN "
+                "('queued','tx_active','awaiting_ack') AND ack_deadline_ms <= ?",
+                (now,),
+            )
+            self.connection.commit()
+        return [dict(row) for row in rows]
+
+    def list_transmission_transactions(self, message_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM transmission_transactions WHERE message_id=? ORDER BY created_at_ms",
+            (message_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def temporal_link_views(self, limit: int = 500) -> list[dict[str, Any]]:
         rows = self.connection.execute(
@@ -1001,6 +1173,7 @@ class Database:
                 "custody",
                 "message_paths",
                 "message_airtime",
+                "transmission_transactions",
             ):
                 self.connection.execute(f"DELETE FROM {table} WHERE message_id = ?", (message_id,))
             self.connection.execute("DELETE FROM messages WHERE id = ?", (message_id,))

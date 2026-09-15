@@ -7,6 +7,7 @@ from js8mail.adapters.js8call.protocol import (
     encode_read_only_request,
     encode_speed_request,
     normalize_directed_event,
+    parse_legacy_ack,
 )
 from js8mail.domain import NormalizedEvent
 from js8mail.protocol import (
@@ -98,3 +99,40 @@ def test_normalize_envelope_after_js8call_msg_wrapper() -> None:
     frame = normalize_directed_event(event)
     assert frame is not None
     assert frame.payload == "J8M1 D abc 1/2 readable"
+
+
+def test_parse_direct_and_relayed_legacy_ack() -> None:
+    direct = normalize_directed_event(
+        NormalizedEvent(
+            "RX.DIRECTED", "OH3SPN ACK", {"FROM": "MM0ZFG", "TO": "OH3SPN", "CMD": " ACK"}, 1
+        )
+    )
+    assert direct is not None
+    assert parse_legacy_ack(direct) == ("MM0ZFG", ("MM0ZFG",))
+
+    relayed = normalize_directed_event(
+        NormalizedEvent(
+            "RX.DIRECTED",
+            "OH3SPN> ACK *DE* MM0ZFG",
+            {
+                "FROM": "IZ1KJG",
+                "TO": "OH3SPN",
+                "CMD": ">",
+                "TEXT": "OH3SPN> ACK *DE* MM0ZFG",
+            },
+            1,
+        )
+    )
+    assert relayed is not None
+    assert parse_legacy_ack(relayed) == ("MM0ZFG", ("OH3SPN", "MM0ZFG"))
+
+    # An ordinary relayed text is not an ACK and must not complete mail.
+    assert parse_legacy_ack(
+        normalize_directed_event(
+            NormalizedEvent(
+                "RX.DIRECTED", "OH3SPN> MM0ZFG>J8M1 CAP 1 E2E", {
+                    "FROM": "IZ1KJG", "TO": "OH3SPN", "CMD": ">"
+                }, 1
+            )
+        )
+    ) is None

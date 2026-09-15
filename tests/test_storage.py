@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from js8mail.domain import NormalizedEvent
+from js8mail.domain import NormalizedEvent, utc_now_ms
 from js8mail.storage import Database
 
 
@@ -133,6 +133,26 @@ def test_custody_status_is_durable_and_distinct_from_delivery(tmp_path: Path) ->
     database.close()
     reopened = Database(path)
     assert reopened.list_custody("m1")[0]["status"] == "accepted"
+    reopened.close()
+
+
+def test_transmission_ack_correlation_survives_route_state_and_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "mail.sqlite3"
+    database = Database(path)
+    database.enqueue_message("m1", "DEST", "body")
+    transaction_id = database.begin_transmission_transaction(
+        "m1", "store", "CUST", "CUST", ("ORIGIN", "CUST"), "hash", 30_000, 60_000
+    )
+    database.mark_transmission_submitted(transaction_id)
+    database.transition_message("m1", "waiting_route")
+    database.close()
+
+    reopened = Database(path)
+    matches = reopened.pending_transmission_for_ack("cust", utc_now_ms())
+    assert len(matches) == 1
+    assert matches[0]["message_id"] == "m1"
+    reopened.acknowledge_transmission(transaction_id)
+    assert reopened.list_transmission_transactions("m1")[0]["status"] == "acknowledged"
     reopened.close()
 
 

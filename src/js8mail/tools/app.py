@@ -16,7 +16,7 @@ from typing import Any, cast
 from urllib.parse import parse_qs, unquote, urlparse
 
 from js8mail.adapters.js8call.client import Js8CallClient
-from js8mail.adapters.js8call.protocol import normalize_directed_event
+from js8mail.adapters.js8call.protocol import normalize_directed_event, parse_legacy_ack
 from js8mail.application.lifecycle import MessageState
 from js8mail.application.service import ENHANCED_MODES, MailService
 from js8mail.bands import band_from_frequency_hz, context_from_params
@@ -113,38 +113,49 @@ def query_response_window_ms(action: str, speed: object) -> int:
     return min(QUERY_RESPONSE_MAX_MS, max(60_000, cycles * cycle_ms + 15_000))
 
 
+def delivery_response_window_ms(operation: str, path: tuple[str, ...], speed: object) -> int:
+    """Bound the wait for a legacy ACK after the real TX has ended.
+
+    Direct and custodian ACKs normally arrive in the next one or two cycles.
+    A relayed final ACK has to cross the reverse path, so the allowance grows
+    with hop count but remains bounded.  This is deliberately a response
+    deadline, not an airtime estimate; the latter is stored separately.
+    """
+    try:
+        speed_id = int(str(speed))
+    except (TypeError, ValueError):
+        speed_id = 0
+    cycle_ms = SPEED_AIRTIME_MS.get(speed_id, SPEED_AIRTIME_MS[0])
+    hops = max(1, len(path) - 1)
+    if operation == "relay":
+        return min(10 * 60 * 1000, max(60_000, (hops + 1) * cycle_ms + 30_000))
+    return min(3 * 60 * 1000, max(45_000, 2 * cycle_ms + 15_000))
+
+
 def _recent_outbound_transaction(
     database: Database, source: str, now_ms: int
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """Find one unambiguous legacy transaction for a plain JS8Call ACK."""
-    source = source.strip().upper()
-    candidates: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
-    delivery_actions = {"direct", "multipart", "relay", "store"}
-    for message in database.list_messages(MessageState.IN_PROGRESS):
-        destination = str(message["destination"]).upper()
-        for attempt in reversed(database.list_attempts(str(message["id"]))):
-            if attempt["status"] != "submitted":
-                continue
-            action = str(attempt["action"])
-            if action not in delivery_actions:
-                continue
-            target = str(attempt["target"]).upper()
-            if action == "store":
-                matches = target == source
-            elif action in {"direct", "multipart"}:
-                matches = destination == source or target == source
-            elif action == "relay":
-                # A relay ACK may be emitted by either the first hop or the
-                # final destination. Never let an unrelated ACK claim a mail.
-                matches = target == source or destination == source
-            else:
-                matches = False
-            if matches and now_ms - int(attempt["created_at_ms"]) <= DIRECT_RESPONSE_DEADLINE_MS:
-                candidates.append((int(attempt["created_at_ms"]), message, attempt))
-                break
-    if len(candidates) != 1:
+    """Find one durable, unambiguous legacy transaction for an ACK.
+
+    The parent message may already be waiting for a later route, and a late
+    ACK may arrive after the first deadline.  Matching the durable transaction
+    rather than message state preserves both cases.  If two live operations
+    target the same responder, refuse to guess.
+    """
+    candidates = database.pending_transmission_for_ack(source, now_ms)
+    live = [item for item in candidates if item["status"] in {"queued", "tx_active", "awaiting_ack"}]
+    if len(live) > 1:
         return None
-    return candidates[0][1:]
+    chosen = live or candidates
+    if not chosen:
+        return None
+    if len(chosen) > 1 and int(chosen[0]["created_at_ms"]) == int(chosen[1]["created_at_ms"]):
+        return None
+    transaction = max(chosen, key=lambda item: int(item["created_at_ms"]))
+    message = database.get_message(str(transaction["message_id"]))
+    if message is None:
+        return None
+    return message, transaction
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>JS8Mail</title><style>
@@ -175,7 +186,7 @@ showGraph=async id=>{await baseShowGraph(id);try{let s=await api('/api/status'),
 function curveLiveGraphEdges(svg){return}
 function markLiveGraphNodes(){let svg=document.querySelector('#live-graph svg');if(!svg)return;let links=[...svg.querySelectorAll('line')];svg.querySelectorAll('circle').forEach(circle=>{let x=Number(circle.getAttribute('cx')),y=Number(circle.getAttribute('cy')),kinds=links.filter(line=>[ ['x1','y1'],['x2','y2'] ].some(([px,py])=>Number(line.getAttribute(px))===x&&Number(line.getAttribute(py))===y)).map(line=>line.getAttribute('stroke')),kind=kinds.includes('#00a83b')?'confirmed':kinds.includes('#c77800')?'attempted':'observed',colors={confirmed:['#17823b','#d8f3dc'],attempted:['#c77800','#fff1c2'],observed:['#78909c','#e8edf2']},color=colors[kind];circle.setAttribute('stroke',color[0]);circle.setAttribute('stroke-width',kind==='observed'?'2':'4');circle.setAttribute('fill',color[1])})}new MutationObserver(markLiveGraphNodes).observe(document.getElementById('live-graph'),{childList:true,subtree:true});
 function useStation(call){document.querySelector('#compose input[name=destination]').value=call;document.querySelector('#compose input[name=destination]').focus();document.querySelector('.compose-panel')?.scrollIntoView({behavior:'smooth',block:'start'})}
-let stationCache=[];function renderStations(){let q=document.getElementById('station-search').value.trim().toUpperCase();let s=stationCache.filter(x=>!q||x.callsign.includes(q)||x.evidence.join(' ').toUpperCase().includes(q));document.getElementById('stations').innerHTML=s.length?'<table><tr><th>Callsign</th><th>Age</th><th>SNR</th><th>Evidence</th><th>Action</th></tr>'+s.map(x=>`<tr><td><b>${esc(x.callsign)}</b></td><td>${esc(relativeAge(x.age_seconds))}</td><td>${x.snr==null?'—':esc(x.snr)+' dB'}</td><td>${esc(x.evidence.map(evidenceLabel).join(', '))}</td><td><button onclick="useStation('${esc(x.callsign)}')">Compose</button></td></tr>`).join('')+'</table>':'<p>No matching station evidence.</p>'}async function refreshStations(){stationCache=await api('/api/stations');renderStations()}
+let stationCache=[];function renderStations(){let q=document.getElementById('station-search').value.trim().toUpperCase();let s=stationCache.filter(x=>!q||x.callsign.includes(q)||x.evidence.join(' ').toUpperCase().includes(q));document.getElementById('stations').innerHTML=s.length?'<table><tr><th>Callsign</th><th>Age</th><th>SNR</th><th title="JS8Mail capability" style="width:3em;text-align:center">JS8M</th><th>Evidence</th><th>Action</th></tr>'+s.map(x=>`<tr><td><b>${esc(x.callsign)}</b></td><td>${esc(relativeAge(x.age_seconds))}</td><td>${x.snr==null?'—':esc(x.snr)+' dB'}</td><td title="${x.js8m?'JS8Mail capable':'Not identified as JS8Mail capable'}" style="text-align:center;color:#16a34a;font-size:1.15em">${x.js8m?'●':''}</td><td>${esc(x.evidence.map(evidenceLabel).join(', '))}</td><td><button onclick="useStation('${esc(x.callsign)}')">Compose</button></td></tr>`).join('')+'</table>':'<p>No matching station evidence.</p>'}async function refreshStations(){stationCache=await api('/api/stations');renderStations()}
 function renderInbox(items){document.getElementById('inbox').innerHTML=items.length?'<table><tr><th>From</th><th>Status</th><th>Message</th><th>Updated</th></tr>'+items.map(x=>`<tr><td><b>${esc(x.sender)}</b></td><td><span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts+' parts'}</span></td><td class=mono>${esc(x.body)}</td><td>${esc(new Date(x.updated_at_ms).toLocaleString())}<br>${esc(x.path||'')}</td></tr>`).join('')+'</table>':'<p>No received messages.</p>'}
 async function refresh(){let s=await api('/api/status'),statusHtml=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class='pill ${s.paused?'warn':'ok'}'>RF: ${s.paused?'paused':'active'}</span><span class=pill>Port: ${s.port}</span><button onclick="togglePause()">${s.paused?'Resume RF':'Pause RF'}</button>`;let defaultMode=document.getElementById('default-enhanced-mode');if(defaultMode&&defaultMode.value!==s.enhanced_mode)defaultMode.value=s.enhanced_mode||'opportunistic';let statusEl=document.getElementById('status');if(statusEl.dataset.rendered!==statusHtml){statusEl.innerHTML=statusHtml;statusEl.dataset.rendered=statusHtml}let m=await api('/api/messages');let openIds=[...document.querySelectorAll('#messages details[open]')].map(d=>d.dataset.id);document.getElementById('messages').innerHTML=m.length?'<table><tr><th>Message</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><details data-id='${esc(x.id)}' ${openIds.includes(x.id)?'open':''}><summary>${statePill(x)} · <span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?` · retry ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (#${x.retry_count})`:''}</summary><div class=mono>${(x.attempts||[]).map(a=>`<span class=timeline-time>${new Date(a.created_at_ms).toLocaleTimeString()}</span> ${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}`).join('<br>')||'No attempts recorded.'}</div></details></td><td>${esc(x.destination)}</td><td><b>${esc(x.subject||'(no subject)')}</b><br>${esc(x.body)}</td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route','in_progress'].includes(x.state)?`<button onclick="act('${x.id}','retry-now')">Retry now</button>`:''}${['queued','waiting_route','in_progress'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled','expired','delivered'].includes(x.state)?`<button class=danger onclick="act('${x.id}','delete')">Remove</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
 const EMERGENCY_GROUPS=['@EMCOMM','@ARES','@RACES','@RAYNET','@NTS','@SKYWARN','@WX','@AMRRON'];function useGroup(group){document.querySelector('#compose input[name=destination]').value=group;document.querySelector('#compose input[name=destination]').focus()}function renderGroups(items){let groups=items.filter(x=>EMERGENCY_GROUPS.includes(x.name));document.getElementById('groups').innerHTML=groups.length?'<table><tr><th>Group</th><th>Purpose</th><th>Seen</th><th>Action</th></tr>'+groups.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.description||'emergency group')}</td><td>${x.seen_count?esc(relativeAge((Date.now()-x.last_seen_at_ms)/1000)):'not yet observed'}</td><td><button onclick="useGroup('${esc(x.name)}')">Compose</button><button onclick="actGroup('${esc(x.name)}','${x.subscribed?'unsubscribe':'subscribe'}')">${x.subscribed?'Unsubscribe':'Subscribe'}</button></td></tr>`).join('')+'</table>':'<p>No emergency groups recorded.</p>'}function renderAlerts(items){let alerts=items.filter(x=>x.group_name);document.getElementById('alerts').innerHTML=alerts.length?alerts.map(x=>`<article><b>${esc(x.group_name)} · ${esc(x.sender)}</b> <span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts}</span><div class=mono>${esc(x.body)}</div><small>${esc(new Date(x.updated_at_ms).toLocaleString())} · ${esc(x.path||'')}</small></article>`).join(''):'<p>No group alerts received.</p>'}
@@ -190,6 +201,32 @@ document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let
 document.getElementById('default-enhanced-mode').onchange=async e=>{try{await api('/api/settings/enhanced-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:e.target.value})});document.getElementById('result').textContent='Default JS8M mode saved'}catch(err){document.getElementById('result').textContent=err}}
 document.addEventListener('submit',e=>{if(e.target.id==='compose')setTimeout(()=>document.getElementById('messages')?.closest('section')?.scrollIntoView({behavior:'smooth',block:'start'}),700)},true);
 document.getElementById('station-search').oninput=renderStations;
+const destinationInput=document.querySelector('#compose input[name="destination"]');
+const enhancedModeInput=document.querySelector('#compose select[name="enhanced_mode"]');
+const destinationCapability=document.createElement('small');
+destinationCapability.id='destination-capability';
+destinationCapability.style.display='block';
+destinationInput?.after(destinationCapability);
+let capabilityLookup=0;
+async function updateDestinationCapability(){
+  let callsign=destinationInput?.value.trim().toUpperCase()||'';
+  let lookup=++capabilityLookup;
+  destinationCapability.textContent='';
+  if(!callsign||callsign.startsWith('@'))return;
+  try{
+    let result=await api('/api/capability?callsign='+encodeURIComponent(callsign));
+    if(lookup!==capabilityLookup||!result.js8m)return;
+    destinationCapability.innerHTML=' <span style="color:#16a34a;font-weight:600">● JS8M capable</span> · Opportunistic mode recommended';
+    if(enhancedModeInput?.value!=='opportunistic'){
+      let button=document.createElement('button');
+      button.type='button'; button.textContent='Use Opportunistic';
+      button.onclick=()=>{enhancedModeInput.value='opportunistic';updateDestinationCapability()};
+      destinationCapability.append(' ',button);
+    }
+  }catch(_error){if(lookup===capabilityLookup)destinationCapability.textContent=''}
+}
+destinationInput?.addEventListener('input',updateDestinationCapability);
+enhancedModeInput?.addEventListener('change',updateDestinationCapability);
 function showInboxMessage(item){let modal=document.getElementById('message-modal');if(!modal){modal=document.createElement('div');modal.id='message-modal';modal.innerHTML='<div class="modal-card" role="dialog" aria-modal="true"><button class="danger modal-close" onclick="closeInboxMessage()">Close</button><div id="message-modal-content"></div></div>';document.body.appendChild(modal)}let delivery={direct:'Direct',forwarded:'Forwarded',stored_collected:'Stored → collected',group_broadcast:'Group broadcast'}[item.delivery]||'Direct';document.getElementById('message-modal-content').innerHTML=`<h2>${esc(item.subject||'(no subject)')}</h2><p><b>From:</b> ${esc(item.sender)} · <b>Status:</b> ${item.complete?'Complete':'Partial · '+item.received_parts.length+'/'+item.total_parts+' parts'} · <b>Protocol:</b> ${item.protocol==='js8m'?'JS8Mail':'Standard'}</p><p><b>Delivery:</b> ${esc(delivery)}<br><b>Path:</b> ${esc(item.path||item.sender||'Unknown')}</p><div class=message-full>${esc(item.body)}</div><p><small>Received ${esc(new Date(item.updated_at_ms).toLocaleString())}</small></p><button onclick='replyToInboxMessage(inboxItems[${window.inboxItems?.indexOf(item)??-1}])'>Reply</button>`;modal.style.display='flex'}function closeInboxMessage(){let modal=document.getElementById('message-modal');if(modal)modal.style.display='none'}function replyToInboxMessage(item){if(!item)return;closeInboxMessage();let destination=document.querySelector('#compose input[name=destination]'),subject=document.querySelector('#compose input[name=subject]'),body=document.querySelector('#compose textarea[name=body]');destination.value=item.sender;subject.value=item.subject?('Re: '+item.subject).slice(0,120):'';body.focus();document.querySelector('.compose-panel')?.scrollIntoView({behavior:'smooth',block:'start'})}
 const inboxRender=renderInbox;renderInbox=items=>{document.getElementById('inbox').innerHTML=items.length?'<table><tr><th>From</th><th>Status</th><th>Message</th><th>Action</th></tr>'+items.map((x,i)=>`<tr><td><b>${esc(x.sender)}</b></td><td><span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts}</span><br><span class='pill ${x.protocol==='js8m'?'enhanced':''}'>${x.protocol==='js8m'?'JS8Mail':'Standard'}</span></td><td><div class=message-preview>${esc(x.body)}</div></td><td><button onclick='showInboxMessage(inboxItems[${i}])'>Open</button><button class=danger onclick='deleteInboxMessage(inboxItems[${i}])'>Delete</button></td></tr>`).join('')+'</table>':'<p>No received messages.</p>';window.inboxItems=items};
 let modalStyle=document.createElement('style');modalStyle.textContent='#message-modal{display:none;position:fixed;inset:0;background:#18222d88;z-index:20;align-items:center;justify-content:center;padding:1em}.modal-card{background:white;border-radius:10px;box-shadow:0 8px 30px #18222d66;max-width:720px;width:min(720px,100%);max-height:85vh;overflow:auto;padding:1.2em}.modal-close{float:right}.message-preview{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}.message-full{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #d9e0e7;border-radius:6px;padding:1em;background:#f7f9fb}.timeline-time{color:#64748b;font-variant-numeric:tabular-nums}.pill.good,.pill.enhanced{background:#b7f0d0;color:#075c38}.pill.bad{background:#ffd9d9;color:#8b1e1e}';document.head.appendChild(modalStyle);
@@ -226,6 +263,7 @@ class Handler(BaseHTTPRequestHandler):
     tx_lock: asyncio.Lock
     last_tx_at_ms: int | None
     next_tx_not_before_ms: int | None
+    active_transaction_id: int | None
     auto_speed: bool
 
     def finish(self) -> None:
@@ -325,6 +363,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/stations":
             band = parse_qs(urlparse(self.path).query).get("band", [""])[0] or str(self.status.get("band", ""))
             self.reply(200, self.service.station_views(band=band))
+        elif path == "/api/capability":
+            callsign = parse_qs(urlparse(self.path).query).get("callsign", [""])[0]
+            if not callsign.strip():
+                self.reply(400, {"error": "callsign is required"})
+            else:
+                self.reply(200, {"callsign": callsign.strip().upper(), "js8m": self.service.is_js8m_capable(callsign)})
         elif path == "/api/route":
             query = parse_qs(urlparse(self.path).query)
             origin = query.get("origin", [""])[0]
@@ -624,6 +668,22 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
+            speed = int(self.status.get("speed", 0))
+        except (TypeError, ValueError):
+            speed = 0
+        transaction_id = self.service.database.begin_transmission_transaction(
+            message_id,
+            action,
+            target,
+            destination,
+            tuple(path),
+            hashlib.sha256("\n".join(wire_texts).encode("utf-8")).hexdigest(),
+            sum(estimate_airtime_ms(text, speed if speed in SPEED_AIRTIME_MS else 0) for text in wire_texts),
+            delivery_response_window_ms(action, tuple(path), speed),
+            int(message.get("retry_count", 0)),
+        )
+        self.active_transaction_id = transaction_id
+        try:
             if target and not target.startswith("@"):
                 await self._maybe_adapt_speed(target)
             for part in enhanced_parts:
@@ -634,9 +694,15 @@ class Handler(BaseHTTPRequestHandler):
             for text in wire_texts:
                 await Handler.send_rf(self, text, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
+            self.service.database.mark_transmission_unconfirmed(transaction_id)
+            if self.active_transaction_id == transaction_id:
+                self.active_transaction_id = None
             self.service.database.record_attempt(message_id, action, target, "failed", type(exc).__name__)
             raise
         except Exception as exc:
+            self.service.database.mark_transmission_unconfirmed(transaction_id)
+            if self.active_transaction_id == transaction_id:
+                self.active_transaction_id = None
             self.service.database.record_attempt(
                 message_id,
                 action,
@@ -655,6 +721,7 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             raise
+        self.service.database.mark_transmission_submitted(transaction_id)
         self.service.database.record_attempt(
             message_id, action, target, "submitted", "queued in JS8Call for next TX cycle"
         )
@@ -712,12 +779,39 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
+            speed = int(self.status.get("speed", 0))
+        except (TypeError, ValueError):
+            speed = 0
+        transaction_id = self.service.database.begin_transmission_transaction(
+            message_id,
+            "store",
+            custodian,
+            custodian,
+            (origin, custodian.upper()) if origin else (custodian.upper(),),
+            hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            estimate_airtime_ms(text, speed if speed in SPEED_AIRTIME_MS else 0),
+            delivery_response_window_ms("store", (origin, custodian.upper()) if origin else (custodian.upper(),), speed),
+            int(message.get("retry_count", 0)),
+        )
+        self.active_transaction_id = transaction_id
+        try:
             await self._maybe_adapt_speed(custodian)
             await Handler.send_rf(self, text, message_id)
         except (ConnectionError, OSError, RuntimeError) as exc:
+            self.service.database.mark_transmission_unconfirmed(transaction_id)
+            if self.active_transaction_id == transaction_id:
+                self.active_transaction_id = None
             self.service.database.record_attempt(message_id, "store", custodian, "failed", type(exc).__name__)
             self.service.database.upsert_custody(message_id, custodian, "failed", type(exc).__name__)
             raise
+        except Exception as exc:
+            self.service.database.mark_transmission_unconfirmed(transaction_id)
+            if self.active_transaction_id == transaction_id:
+                self.active_transaction_id = None
+            self.service.database.record_attempt(message_id, "store", custodian, "failed", type(exc).__name__)
+            self.service.database.upsert_custody(message_id, custodian, "failed", type(exc).__name__)
+            raise
+        self.service.database.mark_transmission_submitted(transaction_id)
         self.service.database.record_attempt(
             message_id, "store", custodian, "submitted", "queued in JS8Call for next TX cycle"
         )
@@ -914,6 +1008,7 @@ async def run(args: argparse.Namespace) -> None:
         "dcd_until_ms": 0,
         "js8_activity_until_ms": 0,
         "tx_message_id": None,
+        "active_transaction_id": None,
         "speed_recommendation": None,
     }
     handler: type[Handler] = type(
@@ -947,6 +1042,7 @@ async def run(args: argparse.Namespace) -> None:
     controller.tx_lock = asyncio.Lock()
     controller.last_tx_at_ms = None
     controller.next_tx_not_before_ms = None
+    controller.active_transaction_id = None
     controller.auto_speed = args.auto_speed
     server = ThreadingHTTPServer((args.ui_host, args.ui_port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1122,6 +1218,61 @@ async def run(args: argparse.Namespace) -> None:
                     "@ALLCALL",
                     scheduler=inbox_scheduler,
                 )
+            # Resolve one durable RF transaction at a time.  The parent
+            # message is deliberately not used as the ACK correlation key:
+            # it may have been moved back to route discovery after a timeout,
+            # while the radio can still deliver a late ACK for the exact
+            # transmission.
+            for transaction in database.expire_transmission_transactions(now_wall_ms):
+                message = database.get_message(str(transaction["message_id"]))
+                if message is None or message["state"] in {
+                    MessageState.STORED,
+                    MessageState.DELIVERED,
+                    MessageState.FAILED,
+                    MessageState.EXPIRED,
+                    MessageState.CANCELLED,
+                }:
+                    continue
+                message_id = str(message["id"])
+                operation = str(transaction["operation"])
+                if operation == "store":
+                    custodian = str(transaction["expected_responder"])
+                    database.record_attempt(
+                        message_id,
+                        "store_timeout",
+                        custodian,
+                        "uncertain",
+                        "no custodian ACK before response deadline; storage is unconfirmed",
+                    )
+                    database.upsert_custody(
+                        message_id,
+                        custodian,
+                        "failed",
+                        "no legacy JS8Call store ACK; message may still be stored",
+                    )
+                    if message["state"] == MessageState.IN_PROGRESS:
+                        database.transition_message(message_id, MessageState.WAITING_ROUTE)
+                    database.defer_message(
+                        message_id,
+                        15 * 60 * 1000,
+                        "custodian ACK absent; waiting before another store offer",
+                        increment_retry=False,
+                    )
+                else:
+                    database.record_attempt(
+                        message_id,
+                        "delivery_timeout",
+                        str(transaction["target"]),
+                        "uncertain",
+                        "no ACK before the operation response deadline",
+                    )
+                    if message["state"] == MessageState.IN_PROGRESS:
+                        database.transition_message(message_id, MessageState.WAITING_ROUTE)
+                    database.defer_message(
+                        message_id,
+                        2 * 60 * 1000,
+                        "delivery ACK absent; route discovery will try another opportunity",
+                    )
             for message in database.list_messages():
                 if message["state"] not in {
                     MessageState.QUEUED,
@@ -1148,6 +1299,31 @@ async def run(args: argparse.Namespace) -> None:
                             str(message["id"]), "prepare", destination, "deferred", type(exc).__name__
                         )
                     continue
+                if message["state"] == MessageState.IN_PROGRESS:
+                    transactions = database.list_transmission_transactions(str(message["id"]))
+                    active_transactions = [
+                        item for item in transactions
+                        if item["status"] in {"queued", "tx_active", "awaiting_ack"}
+                    ]
+                    if active_transactions:
+                        # A new message or a discovery tick must never fill a
+                        # receive window belonging to this transaction.
+                        continue
+                    if not any(item["status"] == "acknowledged" for item in transactions):
+                        database.record_attempt(
+                            str(message["id"]),
+                            "reconcile",
+                            str(message["destination"]),
+                            "deferred",
+                            "previous RF transaction ended without a durable ACK; returning to discovery",
+                        )
+                        database.transition_message(str(message["id"]), MessageState.WAITING_ROUTE)
+                        database.defer_message(
+                            str(message["id"]),
+                            2 * 60 * 1000,
+                            "previous transaction ended; retrying after a receive window",
+                        )
+                        continue
                 direct_expired = False
                 if message["state"] == MessageState.IN_PROGRESS:
                     attempts = database.list_attempts(str(message["id"]))
@@ -1329,7 +1505,19 @@ async def run(args: argparse.Namespace) -> None:
                         for item in database.list_custody(str(message["id"]))
                         if item["status"] in {"offered", "accepted", "retrieval_pending", "forwarded"}
                     }
-                    if candidate_custodian is not None and candidate_custodian.upper() not in active_custody:
+                    custody_history = {
+                        str(item["custodian"]).upper()
+                        for item in database.list_custody(str(message["id"]))
+                    }
+                    # Legacy custodians do not provide a portable end-to-end
+                    # receipt. Limit the number of distinct offers and never
+                    # offer a second custodian while an earlier one is still
+                    # pending or accepted.
+                    if (
+                        candidate_custodian is not None
+                        and candidate_custodian.upper() not in active_custody
+                        and len(custody_history) < 3
+                    ):
                         try:
                             await controller.transmit_store(str(message["id"]), candidate_custodian)
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -1455,7 +1643,13 @@ async def run(args: argparse.Namespace) -> None:
                         ptt = event.params.get("PTT")
                         previous_activity = status.get("radio_activity")
                         status["radio_activity"] = "TX" if ptt is True or str(event.value).lower() == "on" else "RX"
+                        active_transaction_id = controller.active_transaction_id
+                        if status["radio_activity"] == "TX" and active_transaction_id is not None:
+                            database.mark_transmission_active_by_id(active_transaction_id)
                         if status["radio_activity"] == "RX":
+                            if active_transaction_id is not None and previous_activity == "TX":
+                                database.finish_transmission(active_transaction_id)
+                                controller.active_transaction_id = None
                             status["tx_message_id"] = None
                             if previous_activity == "TX":
                                 # The real TX end is stronger evidence than
@@ -1789,9 +1983,9 @@ async def run(args: argparse.Namespace) -> None:
                             # rather than risk assigning a duplicate to a
                             # different outstanding @ALLCALL query.
                             answer_key = f"{source.upper()}:{matched_query.destination if matched_query else ''}"
-                            for key, answered_at in list(recent_query_answers.items()):
+                            for answer_key_old, answered_at in list(recent_query_answers.items()):
                                 if now - answered_at >= query_context_window_ms:
-                                    recent_query_answers.pop(key, None)
+                                    recent_query_answers.pop(answer_key_old, None)
                             if now - recent_query_answers.get(answer_key, 0) < 30_000:
                                 matched_query = None
                             else:
@@ -1896,11 +2090,14 @@ async def run(args: argparse.Namespace) -> None:
                                     "direct reachability response",
                                 )
                                 database.wake_message_for_route(str(message["id"]))
-                    if isinstance(source, str) and frame is not None and frame.command == "ACK":
-                        matched = _recent_outbound_transaction(database, source, utc_now_ms())
+                    legacy_ack = parse_legacy_ack(frame) if frame is not None else None
+                    if isinstance(source, str) and legacy_ack is not None:
+                        ack_responder, ack_path = legacy_ack
+                        matched = _recent_outbound_transaction(database, ack_responder, utc_now_ms())
                         if matched is not None:
-                            message, attempt = matched
+                            message, transaction = matched
                             message_id = str(message["id"])
+                            database.acknowledge_transmission(int(transaction["id"]))
                             enhanced_message = bool(
                                 database.list_message_parts(
                                     message_id,
@@ -1908,27 +2105,41 @@ async def run(args: argparse.Namespace) -> None:
                                     peer=str(message["destination"]),
                                 )
                             )
-                            if attempt["action"] == "store":
+                            operation = str(transaction["operation"])
+                            if operation == "store":
                                 database.upsert_custody(
-                                    message_id, source, "accepted", "standard JS8Call store ACK"
+                                    message_id, ack_responder, "accepted", "standard JS8Call store ACK"
                                 )
                                 database.record_attempt(
-                                    message_id, "custody_ack", source, "received",
-                                    "stored for later retrieval; end-to-end delivery unproven",
+                                    message_id, "custody_ack", ack_responder, "received",
+                                    "stored at custodian; recipient retrieval and delivery remain unproven",
                                 )
+                                if message["state"] not in {
+                                    MessageState.STORED, MessageState.DELIVERED,
+                                    MessageState.FAILED, MessageState.EXPIRED,
+                                    MessageState.CANCELLED,
+                                }:
+                                    database.transition_message(message_id, MessageState.STORED)
                             else:
                                 destination = str(message["destination"]).upper()
                                 detail = (
                                     "standard JS8Call ACK; complete MSG accepted by destination inbox"
-                                    if source.upper() == destination
-                                    else "standard JS8Call ACK; relay hop acknowledged, delivery unproven"
+                                    if ack_responder == destination
+                                    else "standard JS8Call final ACK returned through relay path"
                                 )
+                                if len(ack_path) > 1:
+                                    detail += f" via {'→'.join(ack_path)}"
                                 database.record_attempt(
-                                    message_id, "standard_ack", source, "received", detail
+                                    message_id, "standard_ack", ack_responder, "received", detail
                                 )
                             if (
-                                source.upper() == destination
-                                and message["state"] == MessageState.IN_PROGRESS
+                                operation != "store"
+                                and ack_responder == destination
+                                and message["state"] not in {
+                                    MessageState.STORED, MessageState.DELIVERED,
+                                    MessageState.FAILED, MessageState.EXPIRED,
+                                    MessageState.CANCELLED,
+                                }
                                 and not enhanced_message
                             ):
                                 database.transition_message(message_id, MessageState.DELIVERED)
@@ -1941,7 +2152,7 @@ async def run(args: argparse.Namespace) -> None:
                                     ack_snr = event.params.get("SNR")
                                     database.record_link_outcome(
                                         origin,
-                                        source,
+                                        ack_responder,
                                         speed if speed in SPEED_AIRTIME_MS else 0,
                                         float(ack_snr) if isinstance(ack_snr, (int, float)) else None,
                                         True,
@@ -2000,7 +2211,13 @@ async def run(args: argparse.Namespace) -> None:
                                                 message_id, "custodian_forwarded", custodian,
                                                 "confirmed", detail,
                                             )
-                                    if receipt_message["state"] == MessageState.IN_PROGRESS:
+                                    if receipt_message["state"] not in {
+                                        MessageState.STORED,
+                                        MessageState.DELIVERED,
+                                        MessageState.FAILED,
+                                        MessageState.EXPIRED,
+                                        MessageState.CANCELLED,
+                                    }:
                                         database.transition_message(message_id, MessageState.DELIVERED)
                             else:
                                 part_ack = parse_part_ack(frame.payload if frame is not None else "")

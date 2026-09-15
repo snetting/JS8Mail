@@ -158,6 +158,7 @@ class MailService:
             view = dict(message)
             view["attempts"] = self.database.list_attempts(str(message["id"]))
             view["custody"] = self.database.list_custody(str(message["id"]))
+            view["transmissions"] = self.database.list_transmission_transactions(str(message["id"]))
             attempts = view["attempts"]
             state = str(message["state"])
             if state == "cancelled":
@@ -166,6 +167,8 @@ class MailService:
                 view["confidence"] = "delivery_failed"
             elif state == "expired":
                 view["confidence"] = "expired"
+            elif state == "stored":
+                view["confidence"] = "stored_at_custodian"
             elif any(
                 attempt["action"] == "delivery_ack" and attempt["status"] == "received"
                 for attempt in attempts
@@ -319,7 +322,13 @@ class MailService:
                 call = source.upper()
                 item = stations.setdefault(
                     call,
-                    {"callsign": call, "last_seen_ms": observed, "snr": None, "evidence": set()},
+                    {
+                        "callsign": call,
+                        "last_seen_ms": observed,
+                        "snr": None,
+                        "evidence": set(),
+                        "js8m": False,
+                    },
                 )
                 if observed >= int(item["last_seen_ms"]):
                     item["last_seen_ms"] = observed
@@ -332,7 +341,13 @@ class MailService:
                 call = target.upper()
                 item = stations.setdefault(
                     call,
-                    {"callsign": call, "last_seen_ms": observed, "snr": None, "evidence": set()},
+                    {
+                        "callsign": call,
+                        "last_seen_ms": observed,
+                        "snr": None,
+                        "evidence": set(),
+                        "js8m": False,
+                    },
                 )
                 if observed >= int(item["last_seen_ms"]):
                     item["last_seen_ms"] = observed
@@ -344,6 +359,7 @@ class MailService:
         result: list[dict[str, Any]] = []
         for item in stations.values():
             item["age_seconds"] = max(0, (now - int(item["last_seen_ms"])) // 1000)
+            item["js8m"] = self.database.peer_capabilities(str(item["callsign"])) is not None
             item["evidence"] = sorted(item["evidence"])
             result.append(item)
         result.sort(key=lambda item: (int(item["age_seconds"]), str(item["callsign"])))
@@ -354,6 +370,10 @@ class MailService:
         band: str | None = None,
     ) -> bool:
         return self.recent_heard_age_ms(callsign, now_ms, window_ms, band) is not None
+
+    def is_js8m_capable(self, callsign: str) -> bool:
+        """Return whether a peer has a currently valid JS8Mail capability record."""
+        return self.database.peer_capabilities(callsign.strip()) is not None
 
     def recent_heard_age_ms(
         self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000,
