@@ -1113,6 +1113,26 @@ class Database:
                 return str(item["message_id"])
         return None
 
+    def find_partial_inbox_any_sender(self, body: str) -> tuple[str, str] | None:
+        """Find a matching partial legacy message regardless of immediate hop.
+
+        A standard JS8Call stored message may arrive first as a partial direct
+        decode and later as a complete copy from a custodian.  The immediate
+        sender then differs even though the human message is the same.
+        """
+        rows = self.connection.execute(
+            "SELECT sender, message_id, body FROM inbox_messages "
+            "WHERE complete = 0 ORDER BY updated_at_ms DESC"
+        ).fetchall()
+        candidate = body.strip().rstrip("…").rstrip(".").strip()
+        if not candidate:
+            return None
+        for item in rows:
+            fragment = str(item["body"]).strip().rstrip("…").rstrip(".").strip()
+            if fragment and (candidate.startswith(fragment) or fragment.startswith(candidate)):
+                return str(item["sender"]), str(item["message_id"])
+        return None
+
     def delete_inbox_message(self, sender: str, message_id: str) -> None:
         cursor = self.connection.execute(
             "DELETE FROM inbox_messages WHERE sender = ? AND message_id = ?",

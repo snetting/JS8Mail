@@ -2476,6 +2476,13 @@ async def run(args: argparse.Namespace) -> None:
                             or bool(re.search(r"(?:…|\.{3,})\s*$", message_text))
                         )
                         partial_id = database.find_partial_inbox(source, message_text)
+                        partial_match = None
+                        if partial_id is None and not partial:
+                            partial_match = database.find_partial_inbox_any_sender(message_text)
+                            if partial_match is not None:
+                                partial_sender, partial_id = partial_match
+                                if partial_sender.upper() != source.upper():
+                                    original_sender = partial_sender
                         legacy_id = partial_id or (
                             "legacy-partial-" + hashlib.sha256(
                                 f"{original_sender.upper()}\n{message_text.rstrip('… .')}".encode()
@@ -2485,6 +2492,16 @@ async def run(args: argparse.Namespace) -> None:
                                 f"{original_sender.upper()}\n{message_text}".encode()
                             ).hexdigest()[:16]
                         )
+                        inbox_path = tuple(str(event.params.get("PATH", source)).split(">"))
+                        if partial_match is not None and partial_match[0].upper() != source.upper():
+                            immediate_path = tuple(
+                                item.strip().upper()
+                                for item in inbox_path
+                                if item.strip()
+                            )
+                            inbox_path = (partial_match[0].upper(),) + tuple(
+                                item for item in immediate_path if item != partial_match[0].upper()
+                            )
                         database.upsert_inbox_message(
                             original_sender,
                             legacy_id,
@@ -2492,7 +2509,7 @@ async def run(args: argparse.Namespace) -> None:
                             1,
                             () if partial else (1,),
                             not partial,
-                            tuple(str(event.params.get("PATH", source)).split(">")),
+                            inbox_path,
                             frame.stored_recipient if command == "MSG TO:" else "",
                             delivery="stored_collected" if collected else "direct",
                         )
