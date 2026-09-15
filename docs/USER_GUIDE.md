@@ -614,7 +614,7 @@ Failed rather than retrying forever. These are local policy blocks, not
 evidence that the radio is busy, and they do not prevent other messages from
 being considered when their own budgets permit.
 
-## Groups and emergency bulletins
+## Groups and emergency alerts
 
 JS8Mail uses existing JS8Call group addressing. The UI keeps a conservative
 catalogue including `@JS8MAIL` (discussion and updates), `@EMCOMM`, `@ARES`, `@RACES`, `@RAYNET`, `@NTS`, `@JS8NET`,

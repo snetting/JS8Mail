@@ -207,7 +207,7 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 <section class=live-panel><h2>Live RF Activity <small id=live-graph-meta></small></h2><div id=live-graph><p>Waiting for active-band observations.</p></div></section>
 <section class=inbox-panel><h2>Inbox</h2><div id=inbox>Loading…</div></section>
 <section class=stations-panel><h2>Recently heard stations</h2><input id=station-search type=search placeholder='Filter callsigns or evidence'><div id=stations>Loading…</div></section>
-<section class=groups-panel><h2>Emergency groups and alerts</h2><p>Compose to an emergency group or review received broadcasts. Automatic forwarding remains opt-in.</p><div id=groups>Loading…</div><h3>Group alert inbox</h3><div id=alerts>Loading…</div></section></div>
+<section class=groups-panel><h2>Groups and emergency alerts</h2><p>Compose to a group or review received broadcasts. Automatic forwarding remains opt-in.</p><div id=groups>Loading…</div><h3>Group alert inbox</h3><div id=alerts>Loading…</div></section></div>
 <section><h2>Outbox</h2><div id=control-events></div><div id=messages>Loading…</div></section>
 <section><h2>Message route graph</h2><div id=graph-result>Select Graph on a message to inspect its evidence and attempts.</div></section>
 <section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
