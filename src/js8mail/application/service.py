@@ -202,45 +202,48 @@ class MailService:
             ):
                 view["confidence"] = "radio_acknowledged"
             else:
-                operations = [
-                    attempt
-                    for attempt in attempts
-                    if attempt["action"] in {"direct", "multipart", "relay", "store"}
-                ]
-                latest_operation = max(
-                    operations,
-                    key=lambda attempt: (int(attempt["created_at_ms"]), int(attempt["id"])),
-                    default=None,
-                )
                 latest_attempt = max(
                     attempts,
                     key=lambda attempt: (int(attempt["created_at_ms"]), int(attempt["id"])),
                     default=None,
                 )
-                if latest_operation is not None and latest_attempt is not None:
-                    if latest_attempt["status"] == "submitted" and latest_attempt["action"] in {
-                        "direct", "multipart", "relay", "store"
-                    }:
+                if latest_attempt is not None:
+                    action = str(latest_attempt["action"])
+                    status = str(latest_attempt["status"])
+                    delivery_actions = {"direct", "multipart", "relay", "store"}
+                    discovery_actions = {
+                        "snr_probe",
+                        "route_probe",
+                        "hearing_query",
+                        "allcall_query_call",
+                        "candidate_query_call",
+                        "route_evidence",
+                        "route_evidence_settling",
+                        "manual_retry",
+                        "reconcile",
+                        "capability_wait",
+                        "capability_timeout",
+                    }
+                    detail = str(latest_attempt.get("detail") or "").lower()
+                    discovery_defer = action == "defer" and any(
+                        word in detail for word in ("route", "query", "probe", "discovery", "listening")
+                    )
+                    if status == "submitted" and action in delivery_actions:
                         view["confidence"] = (
                             "awaiting_custodian_ack"
-                            if latest_attempt["action"] == "store"
+                            if action == "store"
                             else "awaiting_delivery_ack"
                         )
-                    elif latest_attempt["action"] in {
+                    elif action in {
                         "delivery_timeout", "store_timeout", "relay_forward_timeout"
-                    } or latest_attempt["status"] in {"uncertain", "deferred"}:
+                    } or (status in {"uncertain", "deferred"} and not discovery_defer):
                         view["confidence"] = "delivery_uncertain"
-                    elif latest_operation["status"] == "submitted":
-                        view["confidence"] = "submitted_to_js8call"
+                    elif action in discovery_actions or action == "defer" or discovery_defer:
+                        view["confidence"] = "discovery_in_progress"
+                    elif action in delivery_actions:
+                        view["confidence"] = "delivery_uncertain"
                     else:
-                        view["confidence"] = "delivery_uncertain"
-                elif any(
-                    attempt["action"] in {
-                        "snr_probe", "hearing_query", "allcall_query_call", "candidate_query_call"
-                    }
-                    for attempt in attempts
-                ):
-                    view["confidence"] = "discovery_in_progress"
+                        view["confidence"] = "uncertain"
                 elif state == MessageState.QUEUED:
                     view["confidence"] = "new"
                 else:

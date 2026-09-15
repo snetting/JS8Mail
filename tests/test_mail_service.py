@@ -70,6 +70,17 @@ def test_message_confidence_describes_latest_unconfirmed_operation(tmp_path: Pat
     database.close()
 
 
+def test_new_discovery_attempt_overrides_older_payload_submission(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("SP2ST", "Testing", "Testing path discovery")
+    database.record_attempt(message_id, "relay", "MM0ZFG", "submitted", "queued")
+    database.record_attempt(message_id, "snr_probe", "SP2ST", "submitted", "waiting for RF evidence")
+    database.record_attempt(message_id, "defer", "route", "waiting", "listening for probe response")
+    assert service.message_views()[0]["confidence"] == "discovery_in_progress"
+    database.close()
+
+
 def test_compose_validates_bounds(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
