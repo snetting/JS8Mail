@@ -61,10 +61,14 @@ recommended first-start command is:
 ```
 
 On first run, `js8mail` creates or repairs `.venv`, asks before installing the
-runtime package, checks the JS8Call API, and then starts the daemon. It uses
-automatic RF handoff by default. Open <http://127.0.0.1:8765> when the launcher
-prints the URL. If JS8Call is not running or the API is disabled, this is a
-warning with setup guidance; JS8Mail still starts and retries its connection.
+runtime package, checks the JS8Call API, and then starts the daemon in the
+background. It uses automatic RF handoff by default and prints a prominent URL
+banner. Open <http://127.0.0.1:8765> when the launcher reports that JS8Mail is
+running. Daemon output is written to `.js8mail/js8mail.log` beside the launcher.
+If another JS8Mail daemon is already running, the launcher reports it and stops
+it before starting the new instance. If JS8Call is not running or the API is
+disabled, this is a warning with setup guidance; JS8Mail still starts and
+retries its connection.
 
 Useful launcher options are:
 
@@ -73,6 +77,7 @@ Useful launcher options are:
 ./js8mail --yes              # do not prompt for local installation
 ./js8mail --no-install       # fail rather than create/update .venv
 ./js8mail --tx-mode observe  # no RF submission; useful for initial testing
+./js8mail --foreground       # run in this terminal with live daemon output
 ```
 
 The launcher passes normal daemon options through, including `--host`, `--port`,
