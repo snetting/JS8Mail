@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 DEFAULT_GROUPS: tuple[tuple[str, str], ...] = (
+    ("@JS8MAIL", "discussion and updates"),
     ("@EMCOMM", "emergency comms"),
     ("@ARES", "emergency comms"),
     ("@RACES", "emergency comms"),

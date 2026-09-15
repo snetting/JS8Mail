@@ -617,7 +617,7 @@ being considered when their own budgets permit.
 ## Groups and emergency bulletins
 
 JS8Mail uses existing JS8Call group addressing. The UI keeps a conservative
-catalogue including `@EMCOMM`, `@ARES`, `@RACES`, `@RAYNET`, `@NTS`, `@JS8NET`,
+catalogue including `@JS8MAIL` (discussion and updates), `@EMCOMM`, `@ARES`, `@RACES`, `@RAYNET`, `@NTS`, `@JS8NET`,
 `@SKYWARN`, `@WX`, `@AMRRON`, and regional DX groups. Groups observed in RF
 traffic are catalogued locally and inactive observed groups are eventually
 expired; the built-in defaults remain available.
