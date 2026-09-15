@@ -311,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
     loop: asyncio.AbstractEventLoop
     status: dict[str, Any]
     announced_destinations: set[str]
+    capability_advertised_destinations: set[str]
     airtime_budget: AirtimeBudget
     message_budgets: dict[str, AirtimeBudget]
     tx_lock: asyncio.Lock
@@ -539,6 +540,10 @@ class Handler(BaseHTTPRequestHandler):
         message = self.service.database.get_message(message_id)
         if message is None:
             raise KeyError(message_id)
+        if not hasattr(self, "capability_advertised_destinations"):
+            # Keep lightweight unit-test handlers and older in-process
+            # controller instances compatible with the split state.
+            self.capability_advertised_destinations = set()
         if message["state"] not in {MessageState.QUEUED, MessageState.WAITING_ROUTE}:
             raise ValueError("message is not ready to send")
         destination = str(message["destination"])
@@ -659,7 +664,7 @@ class Handler(BaseHTTPRequestHandler):
             enhanced_mode == "required"
             and
             not destination.startswith("@")
-            and destination not in self.announced_destinations
+            and destination not in self.capability_advertised_destinations
             and self.service.database.peer_capabilities(destination) is None
         ):
             try:
@@ -682,6 +687,7 @@ class Handler(BaseHTTPRequestHandler):
                     f"JS8Mail capability advertisement; awaiting response for "
                     f"{capability_window_ms // 1000}s",
                 )
+                self.capability_advertised_destinations.add(destination)
                 self.announced_destinations.add(destination)
                 self.service.database.record_attempt(
                     message_id, "capability_wait", destination, "waiting",
@@ -1216,6 +1222,7 @@ async def run(args: argparse.Namespace) -> None:
             "loop": loop,
             "status": status,
             "announced_destinations": set(),
+            "capability_advertised_destinations": set(),
             "airtime_budget": airtime_budget,
             "message_budgets": {},
             "tx_lock": asyncio.Lock(),
@@ -1235,6 +1242,7 @@ async def run(args: argparse.Namespace) -> None:
     controller.loop = loop
     controller.status = status
     controller.announced_destinations = set()
+    controller.capability_advertised_destinations = set()
     controller.airtime_budget = airtime_budget
     controller.message_budgets = {}
     controller.tx_lock = asyncio.Lock()
@@ -1271,6 +1279,7 @@ async def run(args: argparse.Namespace) -> None:
     max_retrieval_retries = 3
     retrieval_retry_delay_ms = 45_000
     capability_last_sent: dict[str, int] = {}
+    pending_capability_advertisements: dict[str, int] = {}
     retrieval_capability_last_sent: dict[str, int] = {}
     recent_query_answers: dict[str, int] = {}
     route_evidence_settle_until_ms: dict[str, int] = {}
@@ -1505,6 +1514,28 @@ async def run(args: argparse.Namespace) -> None:
                     "@ALLCALL",
                     scheduler=inbox_scheduler,
                 )
+            # A visible [JS8MAIL/x.y.z] marker is only a suspicion, not proof
+            # of enhanced support. Queue a CAP advertisement rather than
+            # trying to send it from inside the RX event handler; JS8Call may
+            # still be finishing the received message at that moment.
+            for peer, due_at in list(pending_capability_advertisements.items()):
+                if now_wall_ms < due_at:
+                    continue
+                try:
+                    await controller.send_rf(f"{peer} {format_capability()}")
+                except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
+                    pending_capability_advertisements[peer] = now_wall_ms + 30_000
+                    database.audit(
+                        "peer.capability_advertisement_deferred",
+                        {"peer": peer, "reason": str(exc) or type(exc).__name__},
+                    )
+                else:
+                    pending_capability_advertisements.pop(peer, None)
+                    capability_last_sent[peer] = now_wall_ms
+                    database.audit(
+                        "peer.capability_advertisement_submitted",
+                        {"peer": peer, "reason": "JS8Mail marker handshake"},
+                    )
             # Resolve one durable RF transaction at a time.  The parent
             # message is deliberately not used as the ACK correlation key:
             # it may have been moved back to route discovery after a timeout,
@@ -2282,12 +2313,10 @@ async def run(args: argparse.Namespace) -> None:
                                 legacy_id,
                                 incoming_path,
                             )
-                        # A JS8Mail receiver can passively reveal its
-                        # capability after receiving ordinary directed mail.
-                        # This gives an Opportunistic sender a safe clue for
-                        # the next message without placing CAP before the
-                        # current message or competing with its ACK. Keep it
-                        # strictly rate-limited.
+                        # A visible marker is a useful suspicion that the
+                        # sender is JS8Mail, but it is not capability proof.
+                        # Queue the first half of the handshake and let the
+                        # scheduler wait for a safe RX/TX boundary.
                         capability_now = utc_now_ms()
                         capability_peer = source.upper()
                         if collected:
@@ -2295,23 +2324,20 @@ async def run(args: argparse.Namespace) -> None:
                             # capability toward the original sender. Do not
                             # also advertise only to the custodian.
                             capability_peer = local_call
+                        marker_seen = bool(
+                            re.search(r"\[JS8MAIL/\d+\.\d+\.\d+\]", message_text, re.IGNORECASE)
+                        )
                         if (
-                            capability_peer != local_call
+                            marker_seen
+                            and capability_peer != local_call
                             and capability_now - capability_last_sent.get(capability_peer, 0)
                             >= 60 * 60 * 1000
                         ):
-                            try:
-                                await controller.send_rf(f"{capability_peer} {format_capability()}")
-                                capability_last_sent[capability_peer] = capability_now
-                                database.audit(
-                                    "peer.capability_advertisement_submitted",
-                                    {"peer": capability_peer, "reason": "ordinary_message_received"},
-                                )
-                            except (ConnectionError, RuntimeError):
-                                database.audit(
-                                    "peer.capability_advertisement_deferred",
-                                    {"peer": capability_peer, "reason": "ordinary_message_received"},
-                                )
+                            pending_capability_advertisements[capability_peer] = capability_now
+                            database.audit(
+                                "peer.capability_handshake_suspected",
+                                {"peer": capability_peer, "reason": "JS8Mail marker received"},
+                            )
                         matching_retrievals = [
                             (key, state) for key, state in pending_retrievals.items()
                             if key[0] == source.upper()
