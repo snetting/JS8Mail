@@ -34,6 +34,7 @@ def test_capability_timing_accounts_for_return_hops() -> None:
 @pytest.mark.asyncio
 async def test_selected_multi_hop_plan_reaches_fake_radio(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
     message_id = service.compose("SP2ST", "route", "test path")
@@ -55,6 +56,7 @@ async def test_selected_multi_hop_plan_reaches_fake_radio(tmp_path, monkeypatch)
     handler.message_budgets = {}
     handler.tx_lock = asyncio.Lock()
     handler.last_tx_at_ms = None
+    handler.next_tx_not_before_ms = None
     handler.auto_speed = False
     plan = RoutePlan("relay", ("OH3SPN", "MM0ZFG", "SP2ST"), 0.7, 0.6, 2_000, "fresh path")
 
@@ -72,6 +74,7 @@ async def test_selected_multi_hop_plan_reaches_fake_radio(tmp_path, monkeypatch)
 @pytest.mark.asyncio
 async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
     message_id = service.compose(
@@ -94,6 +97,7 @@ async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tm
     handler.message_budgets = {}
     handler.tx_lock = asyncio.Lock()
     handler.last_tx_at_ms = None
+    handler.next_tx_not_before_ms = None
     handler.auto_speed = False
 
     await handler.transmit(message_id)
@@ -105,6 +109,7 @@ async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tm
         (message_id,),
     )
     database.connection.commit()
+    handler.next_tx_not_before_ms = 0
     await handler.transmit(message_id)
 
     assert radio.sent[-1] == "N0CALL MSG hello ordinary station"
@@ -115,6 +120,7 @@ async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tm
 @pytest.mark.asyncio
 async def test_opportunistic_unknown_peer_sends_plain_message_without_capability_probe(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
     message_id = service.compose(
@@ -137,6 +143,7 @@ async def test_opportunistic_unknown_peer_sends_plain_message_without_capability
     handler.message_budgets = {}
     handler.tx_lock = asyncio.Lock()
     handler.last_tx_at_ms = None
+    handler.next_tx_not_before_ms = None
     handler.auto_speed = False
 
     await handler.transmit(message_id)
@@ -152,6 +159,7 @@ async def test_opportunistic_unknown_peer_sends_plain_message_without_capability
 @pytest.mark.asyncio
 async def test_standard_mode_sends_plain_message_without_capability_probe(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
+    monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
     message_id = service.compose("N0CALL", "standard", "hello", enhanced_mode="standard")
@@ -169,6 +177,7 @@ async def test_standard_mode_sends_plain_message_without_capability_probe(tmp_pa
     handler.message_budgets = {}
     handler.tx_lock = asyncio.Lock()
     handler.last_tx_at_ms = None
+    handler.next_tx_not_before_ms = None
     handler.auto_speed = False
 
     await handler.transmit(message_id)

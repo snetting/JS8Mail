@@ -409,6 +409,15 @@ stack several automatic requests into the same JS8Call opportunity.
 The submission event means “JS8Call accepted text for its next opportunity.”
 It does not prove that the frame was decoded by anybody.
 
+The transmit arbiter does not immediately hand the next queued request to
+JS8Call. It waits for an observed TX→RX transition when available, then keeps
+a 60-second receive hold for ACKs, query answers, or other delayed evidence.
+When a TX-state event is unavailable, it uses the conservative estimated
+airtime plus the same receive hold before admitting another automated
+request. This protects the response window after restarting or unpausing with
+several queued messages. A new message remains queued while an existing
+transaction has priority.
+
 ## Route evidence and delivery states
 
 The outbox deliberately distinguishes these states:

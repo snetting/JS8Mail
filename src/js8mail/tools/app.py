@@ -66,6 +66,7 @@ from js8mail.storage import Database
 DIRECT_RESPONSE_DEADLINE_MS = 2 * 60 * 1000
 CAPABILITY_RESPONSE_DEADLINE_MS = 45 * 1000
 AUTOMATED_TX_GAP_MS = 30 * 1000
+AUTOMATED_RX_WINDOW_MS = 60 * 1000
 QUERY_RESPONSE_MAX_MS = 3 * 60 * 1000
 LATE_QUERY_CONTEXT_MS = 15 * 60 * 1000
 CAPABILITY_MAX_RESPONSE_MS = 5 * 60 * 1000
@@ -224,6 +225,7 @@ class Handler(BaseHTTPRequestHandler):
     message_budgets: dict[str, AirtimeBudget]
     tx_lock: asyncio.Lock
     last_tx_at_ms: int | None
+    next_tx_not_before_ms: int | None
     auto_speed: bool
 
     async def _maybe_adapt_speed(self, peer: str) -> None:
@@ -770,14 +772,24 @@ class Handler(BaseHTTPRequestHandler):
             await Handler._send_rf_serialized(self, text, message_id)
 
     async def _send_rf_serialized(self, text: str, message_id: str | None = None) -> None:
-        """Submit one frame after leaving a listening opportunity."""
+        """Submit one frame only after the prior TX and RX hold have cleared."""
         if self.status.get("paused"):
             raise RuntimeError("RF automation is paused")
         if self.status.get("tx_mode") != "automatic":
             raise RuntimeError("automatic RF transmission is disabled")
+        # If JS8Call exposes the live PTT state, never queue behind an active
+        # transmission. The timeout is deliberately bounded so a broken or
+        # stale status event cannot deadlock the daemon forever.
+        if self.status.get("radio_activity") == "TX":
+            deadline = asyncio.get_running_loop().time() + 180
+            while self.status.get("radio_activity") == "TX" and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.25)
         now = utc_now_ms()
+        not_before = self.next_tx_not_before_ms or 0
         if self.last_tx_at_ms is not None:
-            wait_ms = self.last_tx_at_ms + AUTOMATED_TX_GAP_MS - now
+            not_before = max(not_before, self.last_tx_at_ms + AUTOMATED_TX_GAP_MS)
+        if not_before > now:
+            wait_ms = not_before - now
             if wait_ms > 0:
                 self.service.database.audit(
                     "radio.tx_pacing_wait",
@@ -849,6 +861,11 @@ class Handler(BaseHTTPRequestHandler):
             self.status["tx_message_id"] = message_id
         await self.client.send_message(text)
         self.last_tx_at_ms = utc_now_ms()
+        # The API submission is not the end of RF transmission. Hold the next
+        # automated submission past the conservative airtime estimate and a
+        # receive window for ACKs/replies. A later RIG.PTT TX->RX event can
+        # extend this hold from the actual end of transmission.
+        self.next_tx_not_before_ms = self.last_tx_at_ms + airtime_ms + AUTOMATED_RX_WINDOW_MS
         self.service.database.audit(
             "radio.airtime_reserved", {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed}
         )
@@ -887,6 +904,7 @@ async def run(args: argparse.Namespace) -> None:
         "speed": "unknown",
         "enhanced_mode": configured_mode,
         "radio_activity": "RX",
+        "next_tx_not_before_ms": 0,
         "dcd_until_ms": 0,
         "js8_activity_until_ms": 0,
         "tx_message_id": None,
@@ -922,6 +940,7 @@ async def run(args: argparse.Namespace) -> None:
     controller.message_budgets = {}
     controller.tx_lock = asyncio.Lock()
     controller.last_tx_at_ms = None
+    controller.next_tx_not_before_ms = None
     controller.auto_speed = args.auto_speed
     server = ThreadingHTTPServer((args.ui_host, args.ui_port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1428,9 +1447,16 @@ async def run(args: argparse.Namespace) -> None:
                     # alone leaves the TX LED stuck on.
                     if event.event_type == "RIG.PTT":
                         ptt = event.params.get("PTT")
+                        previous_activity = status.get("radio_activity")
                         status["radio_activity"] = "TX" if ptt is True or str(event.value).lower() == "on" else "RX"
                         if status["radio_activity"] == "RX":
                             status["tx_message_id"] = None
+                            if previous_activity == "TX":
+                                # The real TX end is stronger evidence than
+                                # the API submission estimate. Keep a full
+                                # response window after it before another
+                                # automated request is admitted.
+                                controller.next_tx_not_before_ms = utc_now_ms() + AUTOMATED_RX_WINDOW_MS
                     elif event.event_type.startswith("TX"):
                         status["radio_activity"] = "TX"
                     # The documented TCP API does not currently expose a
