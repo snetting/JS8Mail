@@ -64,6 +64,7 @@ from js8mail.radio_policy import (
     SpeedEvidence,
     estimate_airtime_ms,
 )
+from js8mail.routing import RouteAction, RoutePlan
 from js8mail.storage import Database
 
 DIRECT_RESPONSE_DEADLINE_MS = 2 * 60 * 1000
@@ -1286,6 +1287,10 @@ async def run(args: argparse.Namespace) -> None:
     recent_query_answers: dict[str, int] = {}
     route_evidence_settle_until_ms: dict[str, int] = {}
     route_evidence_settle_logged: set[str] = set()
+    # Keep a selected route across local/API busy deferrals. A route is a
+    # useful decision, not a one-loop hint; it is discarded only after its
+    # evidence ages out or after a successful handoff.
+    selected_route_cache: dict[str, tuple[RoutePlan, int, str]] = {}
     # A targeted QUERY CALL normally receives an answer within one or two
     # JS8Call cycles. Keep enough context for that response without blocking
     # discovery for several minutes; the fallback defer below is never shorter
@@ -1760,6 +1765,17 @@ async def run(args: argparse.Namespace) -> None:
                     band=str(status.get("band", "")),
                 )
                 message_id = str(message["id"])
+                cached_route = selected_route_cache.get(message_id)
+                retained_plan: RoutePlan | None = None
+                if cached_route is not None:
+                    candidate_plan, selected_at_ms, selected_band = cached_route
+                    if (
+                        selected_band == str(status.get("band", ""))
+                        and now_wall_ms - selected_at_ms < ROUTE_HOP_PROBE_FRESH_MS
+                    ):
+                        retained_plan = candidate_plan
+                    else:
+                        selected_route_cache.pop(message_id, None)
                 settle_until = route_evidence_settle_until_ms.get(message_id)
                 if settle_until is not None and direct_age_ms is None:
                     if now_wall_ms < settle_until:
@@ -1786,6 +1802,7 @@ async def run(args: argparse.Namespace) -> None:
                     message["state"] == MessageState.WAITING_ROUTE
                     and (direct_age_ms is not None or heard_age_ms is not None)
                     and not direct_expired
+                    and retained_plan is None
                     and database.due_for_retry(str(message["id"]))
                 ):
                     if message["state"] == MessageState.WAITING_ROUTE:
@@ -1800,11 +1817,28 @@ async def run(args: argparse.Namespace) -> None:
                         database.record_attempt(
                             str(message["id"]), "route", destination, "available", route_detail
                         )
+                        origin = str(status.get("callsign", "")).upper()
+                        retained_plan = RoutePlan(
+                            RouteAction.DIRECT,
+                            (origin, destination),
+                            0.0,
+                            0.0,
+                            0,
+                            f"Retaining direct route while evidence remains fresh ({route_detail}).",
+                        )
+                        selected_route_cache[message_id] = (
+                            retained_plan,
+                            now_wall_ms,
+                            str(status.get("band", "")),
+                        )
                         try:
                             future = asyncio.create_task(
-                                controller.transmit(str(message["id"]))
+                                controller.transmit(str(message["id"]), retained_plan)
                             )
                             await future
+                            latest_attempt = database.list_attempts(message_id)[-1]
+                            if latest_attempt["action"] != "capability_wait":
+                                selected_route_cache.pop(message_id, None)
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                             if isinstance(exc, AirtimeBudgetExceeded) and exc.scope == "per-message-total":
                                 database.record_attempt(
@@ -1840,26 +1874,43 @@ async def run(args: argparse.Namespace) -> None:
                 # requiring the original destination to answer us directly.
                 # Use that fresh evidence as soon as the message is due.
                 if message["state"] == MessageState.WAITING_ROUTE and database.due_for_retry(str(message["id"])):
-                    plan = service.plan_route(
+                    plan = retained_plan or service.plan_route(
                         str(status.get("callsign", "")),
                         destination,
                         attempted_paths=database.attempted_message_paths(str(message["id"])),
                         band=str(status.get("band", "")),
                     )
                     if len(plan.path) >= 2:
-                        database.record_attempt(
-                            str(message["id"]),
-                            "route",
-                            destination,
-                            "selected",
-                            plan.explanation,
-                        )
+                        if retained_plan is None:
+                            database.record_attempt(
+                                str(message["id"]),
+                                "route",
+                                destination,
+                                "selected",
+                                plan.explanation,
+                            )
+                            selected_route_cache[message_id] = (
+                                plan,
+                                now_wall_ms,
+                                str(status.get("band", "")),
+                            )
+                        else:
+                            database.record_attempt(
+                                message_id,
+                                "route",
+                                destination,
+                                "retained",
+                                f"retained selected path while evidence remains fresh: {'→'.join(plan.path)}",
+                            )
                         if not await controller.ensure_route_first_hop_reachable(
                             str(message["id"]), plan.path
                         ):
                             continue
                         try:
                             await controller.transmit(str(message["id"]), plan)
+                            latest_attempt = database.list_attempts(message_id)[-1]
+                            if latest_attempt["action"] != "capability_wait":
+                                selected_route_cache.pop(message_id, None)
                         except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                             if isinstance(exc, AirtimeBudgetExceeded) and exc.scope == "per-message-total":
                                 database.record_attempt(
