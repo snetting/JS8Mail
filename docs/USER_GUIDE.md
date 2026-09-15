@@ -82,6 +82,11 @@ setup in the development section below and install `.[test]`.
 
 ### Windows desktop bundle
 
+Windows packaging is experimental and currently unvalidated on a physical
+Windows workstation. The bundle has not yet been tested end-to-end with
+Windows JS8Call, audio devices, or a radio, so it should not yet be treated as
+production or emergency-communications software.
+
 The repository also provides a portable Windows executable build. Download the
 `JS8Mail-windows-x64` artifact from a successful `Windows bundle` workflow run,
 place `JS8Mail.exe` in a writable directory, and double-click it. The bundle

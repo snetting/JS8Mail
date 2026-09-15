@@ -91,6 +91,8 @@ built with PyInstaller on Windows; users of that bundle do not need to install
 Python or manage a virtual environment. See [`builds/README.md`](builds/README.md)
 and the `Windows bundle` GitHub Actions workflow. The workflow produces a
 downloadable `JS8Mail.exe` artifact using the standard API and web UI ports.
+Windows packaging is experimental and not yet validated end-to-end with
+Windows JS8Call, audio devices, or a radio.
 
 For the complete operator guide—including JS8Call setup, TCP/API configuration,
 the end-to-end message lifecycle, path discovery, route scoring, custody,

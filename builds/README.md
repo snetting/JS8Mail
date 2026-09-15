@@ -6,6 +6,12 @@ not contain JS8Call, a modem, audio drivers, or a radio interface.
 
 ## Windows
 
+The Windows bundle is experimental and currently unvalidated on a physical
+Windows workstation. It has not yet been tested end-to-end with a Windows
+installation of JS8Call, its audio devices, or a radio. Treat it as a test
+build and report startup, API, UI, and shutdown problems before relying on it
+for operational or emergency traffic.
+
 The Windows build is a 64-bit PyInstaller bundle named `JS8Mail.exe`. It
 contains Python and the JS8Mail runtime, so a Windows operator does not need to
 install Python or create a virtual environment. Double-clicking it starts with
