@@ -2083,6 +2083,15 @@ async def run(args: argparse.Namespace) -> None:
                             # the next slot and truncate the incoming mail.
                             raw_directed = str(event.params.get("TEXT", event.value))
                             has_eot = bool(re.search(r"[♢◊]\s*$", raw_directed))
+                            # JS8Call can expose a partial directed decode with
+                            # both its continuation marker and the frame EOT
+                            # (for example ``…… ♢``).  The EOT alone therefore
+                            # is not proof that the incoming message is safe
+                            # to interrupt with an automated transmission.
+                            partial_marker = bool(
+                                re.search(r"(?:…|\.{3,})\s*[♢◊]?\s*$", raw_directed)
+                            )
+                            complete_directed = has_eot and not partial_marker
                             now = utc_now_ms()
                             # RX.ACTIVITY and RX.DIRECTED can be emitted for
                             # the same frame in either task order. Once the
@@ -2094,9 +2103,9 @@ async def run(args: argparse.Namespace) -> None:
                             )
                             if event.event_type != "RX.ACTIVITY" or completion_guard <= now:
                                 status["incoming_directed_until_ms"] = now + (
-                                    5_000 if has_eot else 60_000
+                                    5_000 if complete_directed else 60_000
                                 )
-                            if has_eot:
+                            if complete_directed:
                                 status["incoming_directed_completion_guard_until_ms"] = now + 5_000
                     ack = parse_ack(frame.payload) if frame is not None else None
                     source = frame.source if frame is not None else event.params.get("FROM")
