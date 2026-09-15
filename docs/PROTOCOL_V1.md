@@ -101,10 +101,14 @@ opt-in; they are not part of the automatic delivery receipt.
 ## Custody and legacy behavior
 
 Custody is an implementation-level state: offered, accepted, retrieval
-pending, forwarded, or failed. A standard JS8Call ACK proves only the addressed
-hop acknowledged the exchange. It never proves end-to-end delivery. A
-non-enhanced recipient receives ordinary `DEST MSG readable text` and JS8Mail
-reports no stronger result than the evidence supports.
+pending, forwarded, or failed. A standard ACK for a `MSG TO:` operation proves
+that the addressed custodian accepted the store operation, not that the
+recipient collected the message. For a direct ordinary `MSG`, an ACK from the
+final destination proves that JS8Call accepted the complete message into its
+inbox. For a relayed ordinary message, the final ACK may return through the
+reverse relay path. A non-enhanced recipient receives ordinary
+`DEST MSG readable text` and JS8Mail reports no stronger result than the
+evidence supports.
 
 Relays and custodians must preserve the `MID` and part metadata when forwarding
 enhanced messages. They must deduplicate repeated data and receipts, respect
@@ -135,6 +139,14 @@ When a final receipt names a known accepted custodian in its path, the sender
 reconciles that custodian as `forwarded` even though the receipt was transmitted
 by the final destination. A plain ACK for an enhanced part remains hop evidence;
 it cannot promote the message to ordinary `Complete` or enhanced `Complete+`.
+
+The origin stores a durable transmission transaction for every direct,
+multipart, relay, and store handoff. Its response deadline begins at the
+observed TX-to-RX transition when available, and relay deadlines include the
+number of reverse-path hops. A late ACK can therefore be reconciled after a
+message has returned to route discovery. If a custodian ACK deadline expires,
+the store is marked unconfirmed and automatic retry is deferred; JS8Mail does
+not immediately offer the same message to every candidate custodian.
 
 ## Compatibility and safety
 

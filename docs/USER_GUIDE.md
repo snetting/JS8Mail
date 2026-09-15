@@ -427,7 +427,7 @@ The outbox deliberately distinguishes these states:
 | Submitted to JS8Call | Text reached the local JS8Call API. |
 | Frames observed | JS8Call produced a TX frame; remote decoding is unproven. |
 | Radio acknowledged / hop ACK | An addressed station acknowledged a hop; end-to-end delivery is unproven. |
-| Stored at custodian | A custodian acknowledged a store operation; recipient retrieval is still pending. This stops automatic re-offering until explicitly retried. |
+| Stored at custodian | A custodian acknowledged a store operation; recipient retrieval is still pending. This stops automatic re-offering; the operator can retain it or start a fresh retry deliberately. |
 | Delivered / Complete | An ordinary/known delivery conclusion supported by local evidence. |
 | Complete+ | A JS8Mail destination sent an end-to-end delivery receipt. |
 | Read | Only available for an explicitly enabled read receipt. |
@@ -539,8 +539,11 @@ message until the destination can retrieve it. The local state distinguishes:
 with `failed` as a terminal negative outcome for that custodian.
 
 For a legacy recipient, JS8Mail can submit standard JS8Call store text and
-interpret the strongest standard ACK available as custody evidence. It must
-not call that end-to-end delivery. For a JS8Mail recipient, a custodian can
+interpret the custodian's standard ACK as custody evidence. It must not call
+that end-to-end delivery. For a direct ordinary `MSG`, an ACK from the final
+destination is stronger: it means JS8Call accepted the complete message into
+that destination's JS8Call inbox, and JS8Mail may show ordinary **Complete**.
+For a JS8Mail recipient, a custodian can
 preserve the message ID and part metadata, forward parts, and relay the final
 `J8M1 DELIVERED` receipt back toward the origin.
 
@@ -686,9 +689,14 @@ excluded from current graph rendering.
 
 ### A standard ACK says `ACK`
 
-That proves an addressed hop or store transaction according to context. It is
-not an end-to-end delivery receipt. Only a valid enhanced destination receipt
-can produce the strongest `Complete+` confidence.
+The meaning depends on the transaction. A direct final-destination ACK proves
+that JS8Call accepted the complete ordinary message into the destination's
+inbox and can produce ordinary **Complete**. A relay final ACK proves the same
+thing when it returns through the reverse path. A custodian ACK proves only
+that the `MSG TO:` store operation was accepted for later collection, so the
+outbox shows **Stored · ACK**, not Complete. A plain ACK for an enhanced
+multipart transfer remains hop evidence; only a valid `J8M1 DELIVERED` receipt
+can produce **Complete+**.
 
 ## Data, privacy, and recovery
 
