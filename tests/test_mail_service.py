@@ -32,6 +32,15 @@ def test_cancelled_message_does_not_report_active_discovery(tmp_path: Path) -> N
     database.close()
 
 
+def test_new_queued_message_reports_waiting_for_discovery(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    service.compose("VK5CZ", "Test", "Waiting")
+    view = service.message_views()[0]
+    assert view["confidence"] == "new"
+    database.close()
+
+
 def test_compose_validates_bounds(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)

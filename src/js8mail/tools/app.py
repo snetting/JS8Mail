@@ -12,7 +12,7 @@ import traceback
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from js8mail.adapters.js8call.client import Js8CallClient
@@ -175,8 +175,8 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 <script>
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
-const confidenceName={uncertain:'No delivery evidence',discovery_in_progress:'Discovery in progress',submitted_to_js8call:'Message submitted to JS8Call',stored_at_custodian:'Stored at custodian · recipient retrieval pending',radio_acknowledged:'Radio acknowledged (hop only)',delivered_to_js8mail:'Delivered to JS8Mail client',cancelled:'Cancelled',delivery_failed:'Delivery failed',expired:'Expired'};
-function statePill(x){if(x.tx_active)return `<span class='state-pill state-failed'>In progress · TX</span>`;if(x.confidence==='delivered_to_js8mail')return `<span class='state-pill state-complete-plus'>Complete+</span>`;if(x.state==='delivered')return `<span class='state-pill state-complete'>Complete</span>`;if(['failed','expired','cancelled'].includes(x.state))return `<span class='state-pill state-${esc(x.state)}'>${esc(x.state[0].toUpperCase()+x.state.slice(1))}</span>`;if(['in_progress','waiting_route','queued'].includes(x.state))return `<span class='state-pill state-in-progress'>In progress</span>`;return `<span class='state-pill'>${esc(x.state)}</span>`}
+const confidenceName={new:'New · waiting for discovery',uncertain:'No delivery evidence',discovery_in_progress:'Discovery in progress',submitted_to_js8call:'Message submitted to JS8Call',stored_at_custodian:'Stored at custodian · recipient retrieval pending',radio_acknowledged:'Radio acknowledged (hop only)',delivered_to_js8mail:'Delivered to JS8Mail client',cancelled:'Cancelled',delivery_failed:'Delivery failed',expired:'Expired'};
+function statePill(x){if(x.tx_active)return `<span class='state-pill state-failed'>In progress · TX</span>`;if(x.confidence==='delivered_to_js8mail')return `<span class='state-pill state-complete-plus'>Complete+</span>`;if(x.state==='delivered')return `<span class='state-pill state-complete'>Complete</span>`;if(['failed','expired','cancelled'].includes(x.state))return `<span class='state-pill state-${esc(x.state)}'>${esc(x.state[0].toUpperCase()+x.state.slice(1))}</span>`;if(x.state==='queued'&&!(x.attempts||[]).length)return `<span class='state-pill state-in-progress'>New</span>`;if(['in_progress','waiting_route','queued'].includes(x.state))return `<span class='state-pill state-in-progress'>In progress</span>`;return `<span class='state-pill'>${esc(x.state)}</span>`}
 function relativeAge(seconds){seconds=Math.max(0,Number(seconds)||0);if(seconds<60)return `${Math.round(seconds)}s ago`;if(seconds<600)return `${Math.floor(seconds/60)}m ${Math.floor(seconds%60)}s ago`;if(seconds<3600)return `${Math.floor(seconds/60)}m ago`;if(seconds<86400)return `${Math.floor(seconds/3600)}h ago`;return `${Math.floor(seconds/86400)}d ago`}function evidenceLabel(value){return value==='direct'?'Direct':value==='reported_target'?'Remote':value==='remote_report'?'Reported':value}
 async function showGraph(id){try{let s=await api('/api/status'),g=await api('/api/graph?message_id='+encodeURIComponent(id)+'&origin='+encodeURIComponent(s.callsign||''));let cols=Math.min(4,Math.max(1,g.nodes.length)),rows=Math.max(1,Math.ceil(g.nodes.length/cols)),w=Math.max(720,cols*250+120),h=rows*120+100,nodes=g.nodes,pos={};nodes.forEach((n,i)=>pos[n]={x:60+(i%cols)*250,y:70+Math.floor(i/cols)*120});let edges=g.edges.map(e=>{let a=pos[e.from],b=pos[e.to];return `<line x1=${a.x} y1=${a.y} x2=${b.x} y2=${b.y} stroke='${e.kind==='confirmed'?'#17823b':e.kind==='attempted'?'#c77800':'#78909c'}' stroke-width=3 marker-end='url(#arrow)'/><text x=${(a.x+b.x)/2} y=${(a.y+b.y)/2-6} font-size=12>${esc(e.kind)}${e.snr!=null?' '+esc(e.snr)+'dB':''}</text>`}).join('');let circles=nodes.map(n=>`<circle cx=${pos[n].x} cy=${pos[n].y} r=28 fill='${n===g.origin?'#1769aa':n===g.destination?'#a33':'#e8edf2'}' stroke='#18222d'/><text x=${pos[n].x} y=${pos[n].y+4} text-anchor=middle font-size=12 fill='${n===g.origin||n===g.destination?'white':'#18222d'}'>${esc(n)}</text>`).join('');document.getElementById('graph-result').innerHTML=`<p><b>${esc(g.origin)} → ${esc(g.destination)}</b> · green confirmed, orange attempted, grey observed</p><svg viewBox='0 0 ${w} ${h}' width='100%' height='auto' preserveAspectRatio='xMidYMin meet' role='img' aria-label='Message route graph'><defs><marker id=arrow markerWidth=8 markerHeight=8 refX=6 refY=3 orient=auto><path d='M0,0 L0,6 L7,3 z' fill='#555'/></marker></defs>${edges}${circles}</svg>`}catch(e){document.getElementById('graph-result').textContent=e}}
 const baseShowGraph=showGraph;showGraph=async id=>{await baseShowGraph(id);let svg=document.querySelector('#graph-result svg');if(!svg)return;svg.querySelectorAll('line').forEach((line,index)=>{let x1=Number(line.getAttribute('x1')),y1=Number(line.getAttribute('y1')),x2=Number(line.getAttribute('x2')),y2=Number(line.getAttribute('y2'));if(!Number.isFinite(x1)||!Number.isFinite(y1)||!Number.isFinite(x2)||!Number.isFinite(y2))return;let bend=(index%2?1:-1)*Math.min(28,Math.max(10,Math.hypot(x2-x1,y2-y1)/10)),mx=(x1+x2)/2,my=(y1+y2)/2,curve=document.createElementNS('http://www.w3.org/2000/svg','path');curve.setAttribute('d',`M${x1} ${y1} Q${mx-bend} ${my+bend} ${x2} ${y2}`);curve.setAttribute('stroke',line.getAttribute('stroke')||'#78909c');curve.setAttribute('stroke-width',line.getAttribute('stroke-width')||'3');curve.setAttribute('marker-end','url(#arrow)');curve.setAttribute('fill','none');line.replaceWith(curve)})};
@@ -1155,7 +1155,7 @@ async def run(args: argparse.Namespace) -> None:
                 # outstanding destination per directed station/@ALLCALL.
                 return False
         try:
-            await Handler.send_rf(cast(Handler, handler), text)
+            await controller.send_rf(text)
             database.audit(
                 "discovery.query_submitted",
                 {
@@ -1725,7 +1725,7 @@ async def run(args: argparse.Namespace) -> None:
                                             if len(request_path) >= 3
                                             else f"{source} {payload}"
                                         )
-                                        await Handler.send_rf(cast(Handler, handler), text, request_id)
+                                        await controller.send_rf(text, request_id)
                                 database.record_attempt(
                                     request_id, "part_resend", source, "submitted",
                                     f"served {len(missing)} requested part(s) through custody path",
@@ -1737,10 +1737,7 @@ async def run(args: argparse.Namespace) -> None:
                         retrieval_key = (source.upper(), available_id)
                         if retrieval_key not in pending_retrievals:
                             try:
-                                await Handler.send_rf(
-                                    cast(Handler, handler),
-                                    retrieve_message_query(source, available_id),
-                                )
+                                await controller.send_rf(retrieve_message_query(source, available_id))
                                 pending_retrievals[retrieval_key] = (utc_now_ms(), 1)
                                 database.audit(
                                     "inbox.retrieval_submitted",
@@ -1771,7 +1768,7 @@ async def run(args: argparse.Namespace) -> None:
                             capability_last_sent[source.upper()] = capability_now
                     if capability is not None and isinstance(source, str):
                         try:
-                            await Handler.send_rf(cast(Handler, handler), f"{source} {format_capability(features)}")
+                            await controller.send_rf(f"{source} {format_capability(features)}")
                             database.audit(
                                 "peer.capability_ack_submitted",
                                 {"peer": source.upper(), "version": version},
@@ -1883,10 +1880,7 @@ async def run(args: argparse.Namespace) -> None:
                             >= 60 * 60 * 1000
                         ):
                             try:
-                                await Handler.send_rf(
-                                    cast(Handler, handler),
-                                    f"{capability_peer} {format_capability()}",
-                                )
+                                await controller.send_rf(f"{capability_peer} {format_capability()}")
                                 capability_last_sent[capability_peer] = capability_now
                                 database.audit(
                                     "peer.capability_advertisement_submitted",
@@ -1916,10 +1910,7 @@ async def run(args: argparse.Namespace) -> None:
                                 ) -> None:
                                     await asyncio.sleep(retrieval_retry_delay_ms / 1000)
                                     try:
-                                        await Handler.send_rf(
-                                            cast(Handler, handler),
-                                            retrieve_message_query(custodian, stored_id),
-                                        )
+                                        await controller.send_rf(retrieve_message_query(custodian, stored_id))
                                         database.record_attempt(
                                             message_id, "inbox_retrieval", custodian, "submitted",
                                             f"re-requested JS8Call message {stored_id} after partial decode (attempt {attempt})",
@@ -2254,7 +2245,7 @@ async def run(args: argparse.Namespace) -> None:
                                                     if len(resend_path) >= 3
                                                     else f"{source} {resend_payload}"
                                                 )
-                                                await Handler.send_rf(cast(Handler, handler), resend_text, message_id)
+                                                await controller.send_rf(resend_text, message_id)
                                         database.record_attempt(
                                             message_id, "part_resend", source, "submitted", detail
                                         )
@@ -2341,15 +2332,17 @@ async def run(args: argparse.Namespace) -> None:
                                     delivery="forwarded" if len(route) >= 3 else "direct",
                                 )
                                 if accumulator.should_ack(utc_now_ms()):
-                                    await Handler.send_rf(
-                                        cast(Handler, handler),
-                                        reply_text(format_part_ack(receipt)),
-                                    )
+                                    await controller.send_rf(reply_text(format_part_ack(receipt)))
                                     database.audit("message.part_ack_submitted", {"message_id": part.message_id, "to": logical_sender})
                                 if receipt.complete:
-                                    await Handler.send_rf(
-                                        cast(Handler, handler),
-                                        reply_text(format_delivery_ack(part.message_id, utc_now_ms(), route or (local_call, logical_sender))),
+                                    await controller.send_rf(
+                                        reply_text(
+                                            format_delivery_ack(
+                                                part.message_id,
+                                                utc_now_ms(),
+                                                route or (local_call, logical_sender),
+                                            )
+                                        )
                                     )
                                     database.audit("message.delivered_ack_submitted", {"message_id": part.message_id, "to": logical_sender})
                             except (ValueError, RuntimeError, ConnectionError):

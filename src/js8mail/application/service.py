@@ -190,6 +190,8 @@ class MailService:
                 view["confidence"] = "submitted_to_js8call"
             elif any(attempt["action"] in {"snr_probe", "hearing_query", "allcall_query_call", "candidate_query_call"} for attempt in attempts):
                 view["confidence"] = "discovery_in_progress"
+            elif state == MessageState.QUEUED:
+                view["confidence"] = "new"
             else:
                 view["confidence"] = "uncertain"
             views.append(view)
