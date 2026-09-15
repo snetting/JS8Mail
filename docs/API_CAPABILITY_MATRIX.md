@@ -1,6 +1,6 @@
 # JS8Call API capability matrix
 
-This matrix describes the adapter boundary used by the current `0.0.4`
+This matrix describes the adapter boundary used by the current `0.0.5`
 daemon. `Runtime` is intentionally `unknown` where behaviour depends on the
 installed JS8Call build; a capability must not be inferred solely from an
 application version string. The live installation used during development has
