@@ -182,18 +182,50 @@ class MailService:
                 for attempt in attempts
             ):
                 view["confidence"] = "radio_acknowledged"
-            elif any(
-                attempt["action"] in {"direct", "relay", "store"}
-                and attempt["status"] == "submitted"
-                for attempt in attempts
-            ):
-                view["confidence"] = "submitted_to_js8call"
-            elif any(attempt["action"] in {"snr_probe", "hearing_query", "allcall_query_call", "candidate_query_call"} for attempt in attempts):
-                view["confidence"] = "discovery_in_progress"
-            elif state == MessageState.QUEUED:
-                view["confidence"] = "new"
             else:
-                view["confidence"] = "uncertain"
+                operations = [
+                    attempt
+                    for attempt in attempts
+                    if attempt["action"] in {"direct", "multipart", "relay", "store"}
+                ]
+                latest_operation = max(
+                    operations,
+                    key=lambda attempt: (int(attempt["created_at_ms"]), int(attempt["id"])),
+                    default=None,
+                )
+                latest_attempt = max(
+                    attempts,
+                    key=lambda attempt: (int(attempt["created_at_ms"]), int(attempt["id"])),
+                    default=None,
+                )
+                if latest_operation is not None and latest_attempt is not None:
+                    if latest_attempt["status"] == "submitted" and latest_attempt["action"] in {
+                        "direct", "multipart", "relay", "store"
+                    }:
+                        view["confidence"] = (
+                            "awaiting_custodian_ack"
+                            if latest_attempt["action"] == "store"
+                            else "awaiting_delivery_ack"
+                        )
+                    elif latest_attempt["action"] in {
+                        "delivery_timeout", "store_timeout", "relay_forward_timeout"
+                    } or latest_attempt["status"] in {"uncertain", "deferred"}:
+                        view["confidence"] = "delivery_uncertain"
+                    elif latest_operation["status"] == "submitted":
+                        view["confidence"] = "submitted_to_js8call"
+                    else:
+                        view["confidence"] = "delivery_uncertain"
+                elif any(
+                    attempt["action"] in {
+                        "snr_probe", "hearing_query", "allcall_query_call", "candidate_query_call"
+                    }
+                    for attempt in attempts
+                ):
+                    view["confidence"] = "discovery_in_progress"
+                elif state == MessageState.QUEUED:
+                    view["confidence"] = "new"
+                else:
+                    view["confidence"] = "uncertain"
             views.append(view)
         return views
 

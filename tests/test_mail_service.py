@@ -41,6 +41,17 @@ def test_new_queued_message_reports_waiting_for_discovery(tmp_path: Path) -> Non
     database.close()
 
 
+def test_message_confidence_describes_latest_unconfirmed_operation(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("VK5CZ", "Test", "Waiting")
+    database.record_attempt(message_id, "store", "F4LPU", "submitted", "queued")
+    assert service.message_views()[0]["confidence"] == "awaiting_custodian_ack"
+    database.record_attempt(message_id, "store_timeout", "F4LPU", "uncertain", "no ACK")
+    assert service.message_views()[0]["confidence"] == "delivery_uncertain"
+    database.close()
+
+
 def test_compose_validates_bounds(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
