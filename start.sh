@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv"
+cd "${SCRIPT_DIR}"
 
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
     echo "Creating JS8Mail virtual environment..."

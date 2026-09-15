@@ -43,6 +43,19 @@ class Database:
             self._thread_local.connection = connection
         return connection
 
+    def close_thread_connection(self) -> None:
+        """Close and forget the connection owned by the current thread."""
+        connection = getattr(self._thread_local, "connection", None)
+        if connection is None:
+            return
+        self._thread_local.connection = None
+        with self._connections_lock:
+            try:
+                self._connections.remove(connection)
+            except ValueError:
+                pass
+        connection.close()
+
     def close(self) -> None:
         with self._connections_lock:
             connections, self._connections = self._connections, []

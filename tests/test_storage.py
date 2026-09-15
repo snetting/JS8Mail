@@ -19,6 +19,15 @@ def test_observation_and_audit_survive_reopen(tmp_path: Path) -> None:
     reopened.close()
 
 
+def test_thread_connection_can_be_closed_and_reopened(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    first = database.connection
+    database.close_thread_connection()
+    second = database.connection
+    assert second is not first
+    database.close()
+
+
 def test_message_retry_is_durable_and_progressively_scheduled(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     database.enqueue_message("m1", "N0CALL", "hello")

@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 
 import pytest
 
@@ -87,6 +88,27 @@ def test_message_graph_omits_self_links(tmp_path: Path) -> None:
     database.record_attempt(message_id, "direct", "OH3SPN", "submitted", "self test")
     graph = service.message_graph(message_id, "OH3SPN")
     assert graph["edges"] == []
+    database.close()
+
+
+def test_live_activity_graph_requires_recent_evidence_in_both_directions(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    now = int(time.time() * 1000)
+    database.record_observation(
+        NormalizedEvent("RX.ACTIVITY", "F4VLF CQ", {"FROM": "F4VLF", "TO": "OH3SPN"}, now - 1_000),
+        band="20m",
+    )
+
+    graph = service.live_activity_graph("20m")
+    assert graph["edges"][0]["kind"] == "isolated_one_way"
+
+    database.record_observation(
+        NormalizedEvent("RX.ACTIVITY", "OH3SPN CQ", {"FROM": "OH3SPN", "TO": "F4VLF"}, now - 500),
+        band="20m",
+    )
+    graph = service.live_activity_graph("20m")
+    assert graph["edges"][0]["kind"] == "reciprocal"
     database.close()
 
 
