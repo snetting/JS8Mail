@@ -1181,6 +1181,7 @@ async def run(args: argparse.Namespace) -> None:
     service = MailService(database)
     for group, description in DEFAULT_GROUPS:
         database.ensure_group(group, description, subscribed=group == "@JS8MAIL")
+    database.repair_group_observations()
     configured_mode = database.get_configuration("enhanced_mode", "opportunistic")
     if configured_mode not in ENHANCED_MODES:
         configured_mode = "opportunistic"
@@ -2070,8 +2071,73 @@ async def run(args: argparse.Namespace) -> None:
                 database.audit("js8call.connected", {"host": args.host, "port": args.port})
                 delay = 1.0
 
+                # Some JS8Call builds expose a long directed decode only as a
+                # sequence of RX.ACTIVITY fragments.  The first fragment has
+                # the human-readable envelope (``FROM: TO MSG``), while the
+                # following fragments contain the payload.  RX.ACTIVITY is
+                # intentionally short, so waiting for RX.DIRECTED alone can
+                # lose a perfectly complete J8M1 message.  Keep a small,
+                # connection-local assembler for enhanced data frames.  It is
+                # deliberately conservative: only a locally addressed MSG
+                # containing J8M1 D is promoted to a synthetic directed event.
+                activity_j8m_buffer: dict[str, Any] = {}
+                activity_j8m_last_ms = 0
+
                 async def handle(event: NormalizedEvent) -> None:
+                    nonlocal activity_j8m_last_ms
                     apply_radio_context(dict(event.params))
+                    if event.event_type == "RX.ACTIVITY":
+                        activity_text = str(event.value)
+                        now_ms = utc_now_ms()
+                        if now_ms - activity_j8m_last_ms > 90_000:
+                            activity_j8m_buffer.clear()
+                        start = re.match(
+                            r"^\s*([A-Z0-9/]{1,16})\s*:\s*([A-Z0-9/]{1,16})\s+MSG\s*$",
+                            activity_text,
+                            re.IGNORECASE,
+                        )
+                        if start is not None:
+                            activity_j8m_buffer.clear()
+                            activity_j8m_buffer.update(
+                                source=start.group(1).upper(),
+                                destination=start.group(2).upper(),
+                                parts=[activity_text],
+                            )
+                        elif activity_j8m_buffer:
+                            activity_j8m_buffer["parts"].append(activity_text)
+                        activity_j8m_last_ms = now_ms
+                        assembled = "".join(activity_j8m_buffer.get("parts", ()))
+                        source = str(activity_j8m_buffer.get("source", "")).upper()
+                        destination = str(activity_j8m_buffer.get("destination", "")).upper()
+                        if (
+                            source
+                            and destination == str(status.get("callsign", "")).upper()
+                            and "J8M1 D " in assembled.upper()
+                            and re.search(r"(?:…{2,}|\.{3,})\s*$", assembled)
+                        ):
+                            # The trailing ellipsis is JS8Call's continuation
+                            # indicator, not part of the J8M1 payload.
+                            complete_text = re.sub(r"(?:…{2,}|\.{3,})\s*$", "", assembled).rstrip()
+                            synthetic_params = dict(event.params)
+                            synthetic_params.update(
+                                {
+                                    "FROM": source,
+                                    "TO": destination,
+                                    "CMD": "MSG",
+                                    "TEXT": complete_text,
+                                }
+                            )
+                            event = NormalizedEvent(
+                                "RX.DIRECTED",
+                                complete_text,
+                                synthetic_params,
+                                event.observed_at_ms,
+                            )
+                            database.audit(
+                                "radio.activity_reassembled",
+                                {"source": source, "destination": destination, "protocol": "js8m"},
+                            )
+                            activity_j8m_buffer.clear()
                     # RIG.PTT is the authoritative live TX/RX transition. A
                     # TX.FRAME event proves a frame was produced, but may be
                     # followed by a delayed or missing UI refresh; using it
@@ -2119,8 +2185,17 @@ async def run(args: argparse.Namespace) -> None:
                         band=str(status.get("band", "")),
                         dial_frequency=status.get("dial_frequency"),
                     )
-                    for group in extract_groups(event.value, *[str(value) for value in event.params.values()]):
-                        database.observe_group(group, default_group_description(group))
+                    # Only radio traffic is evidence that a group was heard.
+                    # STATION.STATUS contains JS8Call's locally selected group
+                    # and must not make an unobserved group look active.
+                    if event.event_type.startswith(("RX.", "TX.")):
+                        group_values = [event.value]
+                        for key in ("TEXT", "TO"):
+                            value = event.params.get(key)
+                            if isinstance(value, str):
+                                group_values.append(value)
+                        for group in extract_groups(*group_values):
+                            database.observe_group(group, default_group_description(group))
                     frame = normalize_directed_event(event) if event.event_type.startswith("RX.DIRECTED") else None
                     local_call = str(status.get("callsign", "")).upper()
                     directed_to_local = frame is not None and frame.destination in {local_call, "@ALLCALL"}

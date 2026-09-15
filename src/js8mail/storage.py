@@ -1161,6 +1161,36 @@ class Database:
         self.connection.commit()
         return int(cursor.rowcount)
 
+    def repair_group_observations(self) -> int:
+        """Remove observed flags created by non-radio JS8Call status events.
+
+        Older daemon versions scanned every API parameter, including
+        ``STATION.STATUS.SELECTED``.  That made merely selecting ``@EU`` (or
+        another group) look like a received RF group.  Rebuild the observed
+        state from RX/TX observations only; configured groups (seen_count=0)
+        are intentionally retained.
+        """
+        rows = self.connection.execute(
+            "SELECT name FROM groups WHERE seen_count > 0"
+        ).fetchall()
+        removed = 0
+        for row in rows:
+            name = str(row[0]).upper()
+            found = self.connection.execute(
+                "SELECT 1 FROM observations "
+                "WHERE (event_type LIKE 'RX.%' OR event_type LIKE 'TX.%') "
+                "AND (upper(value) LIKE ? OR upper(params_json) LIKE ?) LIMIT 1",
+                (f"%{name}%", f"%{name}%"),
+            ).fetchone()
+            if found is None:
+                cursor = self.connection.execute(
+                    "DELETE FROM groups WHERE name = ? AND subscribed = 0",
+                    (name,),
+                )
+                removed += int(cursor.rowcount)
+        self.connection.commit()
+        return removed
+
     def set_group_subscription(self, name: str, subscribed: bool) -> None:
         self.connection.execute(
             "UPDATE groups SET subscribed = ? WHERE name = ?", (int(subscribed), name.upper())
