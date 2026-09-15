@@ -66,8 +66,7 @@ automatic RF handoff by default. Open <http://127.0.0.1:8765> when the launcher
 prints the URL. If JS8Call is not running or the API is disabled, this is a
 warning with setup guidance; JS8Mail still starts and retries its connection.
 
-`start.sh` is a compatibility alias for the same guided launcher. Useful
-options are:
+Useful launcher options are:
 
 ```sh
 ./js8mail --check-only       # perform setup/API checks without starting
@@ -85,7 +84,7 @@ For live automatic handoff, simply omit `--tx-mode` (automatic is the
 default):
 
 ```sh
-./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765
+./js8mail --host 127.0.0.1 --port 2442 --ui-port 8765
 ```
 
 For a controlled speed experiment, add `--auto-speed`. Without that flag the
@@ -93,7 +92,7 @@ daemon records speed evidence and displays recommendations but leaves the
 JS8Call mode unchanged:
 
 ```sh
-./start.sh --host 127.0.0.1 --port 2442 --ui-port 8765 --auto-speed
+./js8mail --host 127.0.0.1 --port 2442 --ui-port 8765 --auto-speed
 ```
 
 The current command-line modes are:
@@ -139,7 +138,7 @@ server/API. The usual local endpoint is:
 - port: `2442`.
 
 Use the exact port shown by your installed JS8Call build; pass it to
-`start.sh --port`. Do not expose the API to an untrusted network interface.
+`js8mail --port`. Do not expose the API to an untrusted network interface.
 The API is a control surface for the radio, not an Internet service.
 
 The official API references are:
@@ -661,7 +660,7 @@ part and selective resend, duplicate-safe reassembly, and group ACK policy.
 The API probe is receive-only:
 
 ```sh
-./start.sh --host 127.0.0.1 --port 2442 --tx-mode observe
+./js8mail --host 127.0.0.1 --port 2442 --tx-mode observe
 ```
 
 For real RF testing, two stations are the meaningful minimum: one sender and

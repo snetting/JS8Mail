@@ -49,10 +49,8 @@ Useful launcher commands:
 ./js8mail --no-install       # never create or modify the local environment
 ```
 
-`start.sh` remains an equivalent compatibility entry point and accepts the
-same options. To make the command available from anywhere, optionally put a
-symlink to this checkout's `js8mail` script in a directory on your `PATH`, such
-as `~/bin`.
+To make the command available from anywhere, optionally put a symlink to this
+checkout's `js8mail` script in a directory on your `PATH`, such as `~/bin`.
 
 For development and tests, install the extra test dependencies explicitly:
 
