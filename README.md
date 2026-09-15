@@ -15,6 +15,12 @@ only those parts again. Duplicate parts and receipts are safely ignored. A
 standard JS8Call recipient still receives readable ordinary text; enhanced
 JS8Mail framing is used only after the peer capability exchange proves support.
 
+When an enhanced client later collects a message from a custodian, it can
+return a rate-limited JS8Mail capability and delivery-control notification
+toward the original sender using the recorded reverse path when available.
+These automatic exchanges are shown separately in the Outbox and are not
+themselves final delivery proof.
+
 The project is early development and experimental. Delivery status is therefore
 carefully qualified: submission to JS8Call, a hop acknowledgement, custodian
 storage, and end-to-end JS8Mail delivery are different facts. Routing is

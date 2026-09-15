@@ -563,6 +563,17 @@ For a JS8Mail recipient, a custodian can
 preserve the message ID and part metadata, forward parts, and relay the final
 `J8M1 DELIVERED` receipt back toward the origin.
 
+When a JS8Mail client collects a stored message, it also returns a directed,
+rate-limited capability declaration toward the original sender. It first uses
+the recorded reverse custody path when that path is available; otherwise it
+makes a direct capability/reachability attempt toward the original sender and
+allows normal route evidence to improve later attempts. The Outbox shows this
+as **JS8Mail discovery · delivery confirmation** under **Automatic delivery
+confirmations**. This is an automatic protocol control exchange, not a
+user-authored message and not, by itself, proof that the original sender has
+received the final message. A final enhanced delivery receipt remains the
+strongest confirmation.
+
 When a relay disappears, the intended safe behaviour is to re-plan from the
 last proven custodian rather than blindly retransmit from the origin. A
 standard unenhanced station cannot provide all of those guarantees, so the UI

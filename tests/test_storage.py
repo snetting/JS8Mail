@@ -85,6 +85,18 @@ def test_recent_audit_events_restore_query_context(tmp_path: Path) -> None:
     assert rows[-1]["payload"]["band"] == "20m"
 
 
+def test_recent_control_events_are_available_to_the_ui(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.audit(
+        "delivery.control",
+        {"label": "JS8Mail discovery", "target": "OH3SPN", "status": "submitted"},
+    )
+    events = database.recent_control_events()
+    assert events[0]["label"] == "JS8Mail discovery"
+    assert events[0]["target"] == "OH3SPN"
+    database.close()
+
+
 def test_airtime_accounting_survives_reopen(tmp_path: Path) -> None:
     path = tmp_path / "mail.sqlite3"
     database = Database(path)

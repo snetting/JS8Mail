@@ -113,6 +113,25 @@ def query_response_window_ms(action: str, speed: object) -> int:
     return min(QUERY_RESPONSE_MAX_MS, max(60_000, cycles * cycle_ms + 15_000))
 
 
+def reverse_custody_path(
+    local_call: str,
+    original_sender: str,
+    incoming_path: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Build a safe reverse path when the received path identifies the origin."""
+    local = local_call.strip().upper()
+    original = original_sender.strip().upper()
+    path = tuple(item.strip().upper() for item in incoming_path if item.strip())
+    if not local or not original or local not in path:
+        return ()
+    local_index = path.index(local)
+    forward_prefix = path[: local_index + 1]
+    if not forward_prefix or forward_prefix[0] != original:
+        return ()
+    reverse = (local, *reversed(forward_prefix[:-1]))
+    return reverse if len(reverse) >= 2 and reverse[-1] == original else ()
+
+
 ROUTE_EVIDENCE_SETTLE_MAX_MS = 90_000
 ROUTE_EVIDENCE_SETTLE_GUARD_MS = 10_000
 
@@ -184,7 +203,7 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 <section class=inbox-panel><h2>Inbox</h2><div id=inbox>Loading…</div></section>
 <section class=stations-panel><h2>Recently heard stations</h2><input id=station-search type=search placeholder='Filter callsigns or evidence'><div id=stations>Loading…</div></section>
 <section class=groups-panel><h2>Emergency groups and alerts</h2><p>Compose to an emergency group or review received broadcasts. Automatic forwarding remains opt-in.</p><div id=groups>Loading…</div><h3>Group alert inbox</h3><div id=alerts>Loading…</div></section></div>
-<section><h2>Outbox</h2><div id=messages>Loading…</div></section>
+<section><h2>Outbox</h2><div id=control-events></div><div id=messages>Loading…</div></section>
 <section><h2>Message route graph</h2><div id=graph-result>Select Graph on a message to inspect its evidence and attempts.</div></section>
 <section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
 <script>
@@ -203,6 +222,9 @@ function markLiveGraphNodes(){let svg=document.querySelector('#live-graph svg');
 function useStation(call){document.querySelector('#compose input[name=destination]').value=call;document.querySelector('#compose input[name=destination]').focus();document.querySelector('.compose-panel')?.scrollIntoView({behavior:'smooth',block:'start'})}
 let stationCache=[];function renderStations(){let q=document.getElementById('station-search').value.trim().toUpperCase();let s=stationCache.filter(x=>!q||x.callsign.includes(q)||x.evidence.join(' ').toUpperCase().includes(q));document.getElementById('stations').innerHTML=s.length?'<table style="table-layout:fixed;width:100%"><colgroup><col style="width:18%"><col style="width:18%"><col style="width:14%"><col style="width:18%"><col style="width:18%"><col style="width:14%"></colgroup><tr><th style="white-space:nowrap">Callsign</th><th style="white-space:nowrap">Age</th><th style="white-space:nowrap">SNR</th><th>Path</th><th style="white-space:nowrap">Action</th><th title="JS8Mail capability" style="white-space:nowrap;text-align:center">JS8M</th></tr>'+s.map(x=>`<tr><td style="white-space:nowrap"><b>${esc(x.callsign)}</b></td><td style="white-space:nowrap">${esc(relativeAge(x.age_seconds))}</td><td style="white-space:nowrap">${x.snr==null?'—':esc(x.snr)+' dB'}</td><td style="white-space:normal">${x.evidence.map(evidenceLabel).map(esc).join('<br>')}</td><td style="white-space:nowrap"><button style="white-space:nowrap" onclick="useStation('${esc(x.callsign)}')">Compose</button></td><td title="${x.js8m?'JS8Mail capable':'Not identified as JS8Mail capable'}" style="white-space:nowrap;text-align:center;padding-left:.5em;padding-right:.5em;color:#16a34a;font-size:1.15em">${x.js8m?'●':''}</td></tr>`).join('')+'</table>':'<p>No matching station evidence.</p>'}async function refreshStations(){stationCache=await api('/api/stations');renderStations()}
 function renderInbox(items){document.getElementById('inbox').innerHTML=items.length?'<table><tr><th>From</th><th>Status</th><th>Message</th><th>Updated</th></tr>'+items.map(x=>`<tr><td><b>${esc(x.sender)}</b></td><td><span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts+' parts'}</span></td><td class=mono>${esc(x.body)}</td><td>${esc(new Date(x.updated_at_ms).toLocaleString())}<br>${esc(x.path||'')}</td></tr>`).join('')+'</table>':'<p>No received messages.</p>'}
+function renderControlEvents(items){let el=document.getElementById('control-events');if(!el)return;el.innerHTML=items.length?`<details class='control-events'><summary>Automatic delivery confirmations (${items.length})</summary><div class=mono>${items.map(x=>`<div><span class='timeline-time'>${new Date(x.created_at_ms).toLocaleTimeString()}</span> <b>${esc(x.label||'Automatic delivery update')}</b> → ${esc(x.target||'unknown')}: <span class='pill ${x.status==='submitted'?'ok':x.status==='failed'?'bad':'warn'}'>${esc(x.status||'waiting')}</span><br>${esc(x.detail||'')}${x.path?`<br>Path: ${esc(x.path)}`:''}</div>`).join('')}</div></details>`:''}
+async function refreshControlEvents(){try{renderControlEvents(await api('/api/control-events'))}catch(_error){}}
+refreshControlEvents();setInterval(refreshControlEvents,3000);
 async function refresh(){let s=await api('/api/status'),statusHtml=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class='pill ${s.paused?'warn':'ok'}'>RF: ${s.paused?'paused':'active'}</span><span class=pill>Port: ${s.port}</span><button onclick="togglePause()">${s.paused?'Resume RF':'Pause RF'}</button>`;let defaultMode=document.getElementById('default-enhanced-mode');if(defaultMode&&defaultMode.value!==s.enhanced_mode)defaultMode.value=s.enhanced_mode||'opportunistic';let statusEl=document.getElementById('status');if(statusEl.dataset.rendered!==statusHtml){statusEl.innerHTML=statusHtml;statusEl.dataset.rendered=statusHtml}let m=await api('/api/messages');let openIds=[...document.querySelectorAll('#messages details[open]')].map(d=>d.dataset.id);document.getElementById('messages').innerHTML=m.length?'<table><tr><th>Message</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><details data-id='${esc(x.id)}' ${openIds.includes(x.id)?'open':''}><summary>${statePill(x)} · <span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?` · retry ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (#${x.retry_count})`:''}</summary><div class=mono>${(x.attempts||[]).map(a=>`<span class=timeline-time>${new Date(a.created_at_ms).toLocaleTimeString()}</span> ${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(a.detail):''}`).join('<br>')||'No attempts recorded.'}</div></details></td><td>${esc(x.destination)}</td><td><b>${esc(x.subject||'(no subject)')}</b><br>${esc(x.body)}</td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route','in_progress'].includes(x.state)?`<button onclick="act('${x.id}','retry-now')">Retry now</button>`:''}${['queued','waiting_route','in_progress'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled','expired','delivered'].includes(x.state)?`<button class=danger onclick="act('${x.id}','delete')">Remove</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
 const EMERGENCY_GROUPS=['@EMCOMM','@ARES','@RACES','@RAYNET','@NTS','@SKYWARN','@WX','@AMRRON'];function useGroup(group){document.querySelector('#compose input[name=destination]').value=group;document.querySelector('#compose input[name=destination]').focus()}function renderGroups(items){let groups=items.filter(x=>EMERGENCY_GROUPS.includes(x.name));document.getElementById('groups').innerHTML=groups.length?'<table><tr><th>Group</th><th>Purpose</th><th>Seen</th><th>Action</th></tr>'+groups.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.description||'emergency group')}</td><td>${x.seen_count?esc(relativeAge((Date.now()-x.last_seen_at_ms)/1000)):'not yet observed'}</td><td><button onclick="useGroup('${esc(x.name)}')">Compose</button><button onclick="actGroup('${esc(x.name)}','${x.subscribed?'unsubscribe':'subscribe'}')">${x.subscribed?'Unsubscribe':'Subscribe'}</button></td></tr>`).join('')+'</table>':'<p>No emergency groups recorded.</p>'}function renderAlerts(items){let alerts=items.filter(x=>x.group_name);document.getElementById('alerts').innerHTML=alerts.length?alerts.map(x=>`<article><b>${esc(x.group_name)} · ${esc(x.sender)}</b> <span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts}</span><div class=mono>${esc(x.body)}</div><small>${esc(new Date(x.updated_at_ms).toLocaleString())} · ${esc(x.path||'')}</small></article>`).join(''):'<p>No group alerts received.</p>'}
 const refreshMailbox=refresh;refresh=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);return refreshMailbox()};const updateRadioLeds=async()=>{let s=await api('/api/status'),activity=s.connected?(s.radio_activity||'RX'):'ERR';document.querySelectorAll('#radio-leds .led').forEach(x=>x.className='led');let led=document.getElementById('led-'+activity.toLowerCase());if(led)led.className='led on-'+activity.toLowerCase()};const refreshWithRadioState=refresh;refresh=async()=>{await refreshWithRadioState();await updateRadioLeds()};
@@ -363,6 +385,8 @@ class Handler(BaseHTTPRequestHandler):
             for view in views:
                 view["tx_active"] = bool(active_id and view.get("id") == active_id)
             self.reply(200, views)
+        elif path == "/api/control-events":
+            self.reply(200, self.service.database.recent_control_events())
         elif path == "/api/observations":
             self.reply(200, self.service.database.recent_observations(12))
         elif path == "/api/graph":
@@ -1087,6 +1111,7 @@ async def run(args: argparse.Namespace) -> None:
     max_retrieval_retries = 3
     retrieval_retry_delay_ms = 45_000
     capability_last_sent: dict[str, int] = {}
+    retrieval_capability_last_sent: dict[str, int] = {}
     recent_query_answers: dict[str, int] = {}
     route_evidence_settle_until_ms: dict[str, int] = {}
     route_evidence_settle_logged: set[str] = set()
@@ -1095,6 +1120,88 @@ async def run(args: argparse.Namespace) -> None:
     # discovery for several minutes; the fallback defer below is never shorter
     # than this window.
     query_context_window_ms = 90_000
+
+    async def return_capability_for_collected_message(
+        original_sender: str,
+        immediate_source: str,
+        message_id: str,
+        incoming_path: tuple[str, ...],
+    ) -> None:
+        """Return a CAP toward the original sender after custodian retrieval."""
+        local_call = str(status.get("callsign", "")).strip().upper()
+        original = original_sender.strip().upper()
+        source = immediate_source.strip().upper()
+        if not local_call or not original or original == local_call:
+            return
+        now = utc_now_ms()
+        if now - retrieval_capability_last_sent.get(original, 0) < 60 * 60 * 1000:
+            database.audit(
+                "delivery.control",
+                {
+                    "label": "JS8Mail discovery already reported",
+                    "target": original,
+                    "status": "suppressed",
+                    "detail": "Capability return is rate-limited to once per hour.",
+                    "message_id": message_id,
+                },
+            )
+            return
+        reverse_path = reverse_custody_path(local_call, original, incoming_path)
+        selected_path = reverse_path
+        if not selected_path:
+            plan = service.plan_route(local_call, original, band=str(status.get("band", "")))
+            if len(plan.path) >= 3:
+                selected_path = tuple(plan.path)
+        if len(selected_path) >= 3:
+            text = format_relay_text(selected_path, format_capability())
+        else:
+            selected_path = (local_call, original)
+            text = f"{original} {format_capability()}"
+        path_text = "→".join(selected_path)
+        detail = (
+            f"Message collected from {source}; returning JS8Mail capability toward "
+            f"the original sender."
+        )
+        if not reverse_path:
+            detail += " No recorded reverse path was available; this is a direct reachability attempt."
+        database.audit(
+            "delivery.control",
+            {
+                "label": "JS8Mail discovery · delivery confirmation",
+                "target": original,
+                "status": "started",
+                "detail": detail,
+                "path": path_text,
+                "message_id": message_id,
+            },
+        )
+        try:
+            await controller.send_rf(text)
+        except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
+            database.audit(
+                "delivery.control",
+                {
+                    "label": "JS8Mail discovery · delivery confirmation",
+                    "target": original,
+                    "status": "deferred",
+                    "detail": f"Waiting to return capability: {type(exc).__name__}.",
+                    "path": path_text,
+                    "message_id": message_id,
+                },
+            )
+            return
+        retrieval_capability_last_sent[original] = now
+        database.audit(
+            "delivery.control",
+            {
+                "label": "JS8Mail discovery · delivery confirmation",
+                "target": original,
+                "status": "submitted",
+                "detail": "Message was collected from a custodian; CAP queued for the original sender.",
+                "path": path_text,
+                "message_id": message_id,
+            },
+        )
 
     # A compact QUERY CALL response does not repeat the queried callsign.
     # Restore very recent contexts so a daemon restart between query and
@@ -1874,7 +1981,30 @@ async def run(args: argparse.Namespace) -> None:
                         if not message_text:
                             return
                         else:
+                            collected = any(key[0] == source.upper() for key in pending_retrievals)
                             original_sender = source
+                            if collected:
+                                # JS8Call's stored-message response normally
+                                # preserves the origin in its structured
+                                # fields or as an origin-prefixed MSG line.
+                                # Prefer that over the immediate custodian.
+                                for field in (
+                                    "ORIGINAL_SENDER",
+                                    "ORIGINAL_FROM",
+                                    "ORIGIN",
+                                ):
+                                    candidate = str(event.params.get(field, "")).strip().upper()
+                                    if re.fullmatch(r"[A-Z0-9/]{1,16}", candidate or ""):
+                                        original_sender = candidate
+                                        break
+                                leading_origin = re.match(
+                                    r"^([A-Z0-9/]{1,16})\s+MSG(?:\s+TO:\s*[^\s]+)?\s+(.*)$",
+                                    message_text,
+                                    re.IGNORECASE,
+                                )
+                                if leading_origin is not None:
+                                    original_sender = leading_origin.group(1).upper()
+                                    message_text = leading_origin.group(2).strip()
                             retrieved = re.search(
                                 r"\s+FROM\s+([A-Z0-9/]{1,16})\s*$",
                                 message_text,
@@ -1887,7 +2017,6 @@ async def run(args: argparse.Namespace) -> None:
                             not frame.final
                             or bool(re.search(r"(?:…|\.{3,})\s*$", message_text))
                         )
-                        collected = any(key[0] == source.upper() for key in pending_retrievals)
                         partial_id = database.find_partial_inbox(source, message_text)
                         legacy_id = partial_id or (
                             "legacy-partial-" + hashlib.sha256(
@@ -1909,6 +2038,18 @@ async def run(args: argparse.Namespace) -> None:
                             frame.stored_recipient if command == "MSG TO:" else "",
                             delivery="stored_collected" if collected else "direct",
                         )
+                        if collected and original_sender.upper() != local_call:
+                            incoming_path = tuple(
+                                item.upper()
+                                for item in str(event.params.get("PATH", source)).split(">")
+                                if item.strip()
+                            )
+                            await return_capability_for_collected_message(
+                                original_sender,
+                                source,
+                                legacy_id,
+                                incoming_path,
+                            )
                         # A JS8Mail receiver can passively reveal its
                         # capability after receiving ordinary directed mail.
                         # This gives an Opportunistic sender a safe clue for
@@ -1917,6 +2058,11 @@ async def run(args: argparse.Namespace) -> None:
                         # strictly rate-limited.
                         capability_now = utc_now_ms()
                         capability_peer = source.upper()
+                        if collected:
+                            # The collected-message branch above returns the
+                            # capability toward the original sender. Do not
+                            # also advertise only to the custodian.
+                            capability_peer = local_call
                         if (
                             capability_peer != local_call
                             and capability_now - capability_last_sent.get(capability_peer, 0)

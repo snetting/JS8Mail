@@ -776,6 +776,20 @@ class Database:
             for row in rows
         ]
 
+    def recent_control_events(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent automatic delivery-control activity for the UI."""
+        rows = self.connection.execute(
+            "SELECT payload_json, created_at_ms FROM audit_events "
+            "WHERE event_type = 'delivery.control' ORDER BY created_at_ms DESC LIMIT ?",
+            (max(1, min(limit, 200)),),
+        ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = json.loads(row["payload_json"])
+            item["created_at_ms"] = int(row["created_at_ms"])
+            result.append(item)
+        return result
+
     def enqueue_message(
         self,
         message_id: str,
