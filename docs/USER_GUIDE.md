@@ -629,7 +629,7 @@ is opt-in, and acknowledgements must be designated or suppressed to avoid an
 ACK storm.
 
 Outgoing group broadcasts are ordinary JS8Call group messages. JS8Mail adds
-the visible `[JS8MAIL/0.0.3]` marker to every group broadcast so other clients
+the visible `[JS8Mail/0.0.3]` marker to every group broadcast so other clients
 can recognise JS8Mail-originated traffic while listening. This marker is not
 `J8M1 CAP`, so it does not request a response from every station hearing the
 group. Group broadcasts are reported as submitted with no ACK expected; they
