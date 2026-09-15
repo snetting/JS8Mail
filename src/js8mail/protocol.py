@@ -13,8 +13,11 @@ from dataclasses import dataclass
 MAX_PARTS = 255
 MAX_PART_BYTES = 4096
 MAX_FRAME_BYTES = 4096
-DISPLAY_VERSION = "JS8Mail/0.0.3"
+DISPLAY_VERSION = "JS8Mail/0.0.4"
+CAPABILITY_PROTOCOL_VERSION = 1
 CAPABILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
+CAPABILITY_FEATURES = frozenset({"E2E", "MP", "PA", "RR"})
+JS8MAIL_MARKER_RE = re.compile(r"\[JS8MAIL/\d+\.\d+\.\d+\]", re.IGNORECASE)
 _MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _STATION_RE = re.compile(r"^[A-Z0-9/]{1,16}$")
 _ADDRESS_RE = re.compile(r"^@?[A-Z0-9/]{1,16}$")
@@ -26,10 +29,10 @@ class MultipartError(ValueError):
 
 def format_capability(capabilities: tuple[str, ...] = ("E2E", "MP", "PA")) -> str:
     """Format the small, versioned capability advertisement."""
-    allowed = {"E2E", "MP", "PA", "RR"}
-    if not capabilities or any(cap not in allowed for cap in capabilities):
+    normalized = tuple(dict.fromkeys(cap.upper() for cap in capabilities))
+    if not normalized or any(cap not in CAPABILITY_FEATURES for cap in normalized):
         raise MultipartError("invalid JS8Mail capability")
-    result = f"J8M1 CAP 1 {','.join(dict.fromkeys(capabilities))}"
+    result = f"J8M1 CAP {CAPABILITY_PROTOCOL_VERSION} {','.join(normalized)}"
     if len(result.encode()) > MAX_FRAME_BYTES:
         raise MultipartError("capability advertisement is too large")
     return result
@@ -38,17 +41,30 @@ def format_capability(capabilities: tuple[str, ...] = ("E2E", "MP", "PA")) -> st
 def parse_capability(text: str) -> tuple[int, tuple[str, ...]] | None:
     """Parse a bounded capability advertisement from a received frame."""
     fields = text.strip().split()
-    if len(fields) != 4 or fields[:2] != ["J8M1", "CAP"]:
+    if len(fields) != 4 or [field.upper() for field in fields[:2]] != ["J8M1", "CAP"]:
         return None
     try:
         version = int(fields[2])
     except ValueError:
         return None
-    capabilities = tuple(fields[3].split(","))
-    allowed = {"E2E", "MP", "PA", "RR"}
-    if version != 1 or len(capabilities) > 8 or any(cap not in allowed for cap in capabilities):
+    capabilities = tuple(dict.fromkeys(cap.upper() for cap in fields[3].split(",")))
+    if (
+        version != CAPABILITY_PROTOCOL_VERSION
+        or not capabilities
+        or len(capabilities) > 8
+        or any(cap not in CAPABILITY_FEATURES for cap in capabilities)
+    ):
         return None
     return version, capabilities
+
+
+def contains_js8mail_marker(text: str) -> bool:
+    """Return whether readable text carries a versioned JS8Mail marker.
+
+    The marker is an interoperability hint only; it is never treated as
+    proof of enhanced capability until a valid ``J8M1 CAP`` is received.
+    """
+    return JS8MAIL_MARKER_RE.search(text) is not None
 
 
 @dataclass(frozen=True, slots=True)

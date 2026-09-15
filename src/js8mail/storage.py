@@ -1133,12 +1133,14 @@ class Database:
         )
         self.connection.commit()
 
-    def ensure_group(self, name: str, description: str = "") -> None:
+    def ensure_group(
+        self, name: str, description: str = "", *, subscribed: bool = False
+    ) -> None:
         now = utc_now_ms()
         self.connection.execute(
-            "INSERT INTO groups(name, description, first_seen_at_ms, last_seen_at_ms) VALUES (?, ?, ?, ?) "
+            "INSERT INTO groups(name, description, first_seen_at_ms, last_seen_at_ms, subscribed) VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(name) DO UPDATE SET description=CASE WHEN excluded.description != '' THEN excluded.description ELSE groups.description END",
-            (name.upper(), description, now, now),
+            (name.upper(), description, now, now, int(subscribed)),
         )
         self.connection.commit()
 

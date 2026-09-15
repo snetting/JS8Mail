@@ -38,6 +38,7 @@ from js8mail.protocol import (
     CAPABILITY_TTL_MS,
     MessagePart,
     MultipartAccumulator,
+    contains_js8mail_marker,
     format_capability,
     format_delivery_ack,
     format_human_data_part,
@@ -1175,7 +1176,7 @@ async def run(args: argparse.Namespace) -> None:
     database = Database(Path(args.database).expanduser().resolve())
     service = MailService(database)
     for group, description in DEFAULT_GROUPS:
-        database.ensure_group(group, description)
+        database.ensure_group(group, description, subscribed=group == "@JS8MAIL")
     configured_mode = database.get_configuration("enhanced_mode", "opportunistic")
     if configured_mode not in ENHANCED_MODES:
         configured_mode = "opportunistic"
@@ -2187,15 +2188,21 @@ async def run(args: argparse.Namespace) -> None:
                         if capability_now - last_capability < 60 * 60 * 1000:
                             capability = None
                         else:
-                            capability_last_sent[source.upper()] = capability_now
+                            # Record the throttle only after the response is
+                            # actually handed to JS8Call. A failed handoff
+                            # must remain retryable rather than suppressing
+                            # the peer's only capability response for an hour.
+                            pass
                     if capability is not None and isinstance(source, str):
                         try:
                             await controller.send_rf(f"{source} {format_capability(features)}")
+                            capability_last_sent[source.upper()] = utc_now_ms()
                             database.audit(
                                 "peer.capability_ack_submitted",
                                 {"peer": source.upper(), "version": version},
                             )
                         except (ConnectionError, RuntimeError):
+                            pending_capability_advertisements[source.upper()] = utc_now_ms() + 30_000
                             database.audit("peer.capability_ack_failed", {"peer": source.upper()})
                     # A group-directed MSG is useful alert traffic even when
                     # no JS8Mail peer is present. Preserve it in the separate
@@ -2333,9 +2340,7 @@ async def run(args: argparse.Namespace) -> None:
                             # capability toward the original sender. Do not
                             # also advertise only to the custodian.
                             capability_peer = local_call
-                        marker_seen = bool(
-                            re.search(r"\[JS8MAIL/\d+\.\d+\.\d+\]", message_text, re.IGNORECASE)
-                        )
+                        marker_seen = contains_js8mail_marker(message_text)
                         if (
                             marker_seen
                             and capability_peer != local_call

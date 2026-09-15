@@ -8,7 +8,7 @@ JS8Mail adds a durable mailbox, evidence collection, route selection, custody
 tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
-This document describes the current `0.0.3` implementation. It is useful and
+This document describes the current `0.0.4` implementation. It is useful and
 radio-capable, but still early and experimental. In particular, a route score
 is evidence-based advice, not a guarantee that a station is listening now.
 Always operate within your licence, local band plan, power limits, and the
@@ -646,6 +646,11 @@ catalogue including `@JS8MAIL` (discussion and updates), `@EMCOMM`, `@ARES`, `@R
 traffic are catalogued locally and inactive observed groups are eventually
 expired; the built-in defaults remain available.
 
+`@JS8MAIL` is subscribed by default so a fresh installation can receive
+discussion and update traffic. This is only a local default: the operator can
+unsubscribe it at any time, and JS8Mail never forwards group traffic
+automatically merely because the group is subscribed.
+
 Received group content appears in the separate group-alert area of the inbox.
 It is labelled with its source and path where known. A group alert is not
 authenticated merely because it arrived over RF. Automatic group forwarding
@@ -653,7 +658,7 @@ is opt-in, and acknowledgements must be designated or suppressed to avoid an
 ACK storm.
 
 Outgoing group broadcasts are ordinary JS8Call group messages. JS8Mail adds
-the visible `[JS8Mail/0.0.3]` marker to every group broadcast so other clients
+the visible `[JS8Mail/0.0.4]` marker to every group broadcast so other clients
 can recognise JS8Mail-originated traffic while listening. This marker is not
 `J8M1 CAP`, so it does not request a response from every station hearing the
 group. Group broadcasts are reported as submitted with no ACK expected; they

@@ -111,7 +111,7 @@ async def test_group_broadcast_is_terminal_without_ack_wait(tmp_path, monkeypatc
 
     await handler.transmit(message_id)
 
-    assert radio.sent == ["@JS8MAIL MSG [JS8Mail/0.0.3] hello group"]
+    assert radio.sent == ["@JS8MAIL MSG [JS8Mail/0.0.4] hello group"]
     assert database.get_message(message_id)["state"] == "delivered"  # type: ignore[index]
     assert service.message_views()[0]["confidence"] == "broadcast_submitted"
     assert not any(
@@ -262,7 +262,7 @@ async def test_opportunistic_unknown_peer_sends_plain_message_without_capability
 
     await handler.transmit(message_id)
 
-    assert radio.sent == ["N0CALL MSG [JS8Mail/0.0.3] hello ordinary station"]
+    assert radio.sent == ["N0CALL MSG [JS8Mail/0.0.4] hello ordinary station"]
     assert not any(
         attempt["action"] == "capability_wait"
         for attempt in database.list_attempts(message_id)

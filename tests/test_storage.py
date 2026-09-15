@@ -255,6 +255,16 @@ def test_group_subscription_persists_and_can_be_removed(tmp_path: Path) -> None:
     database.close()
 
 
+def test_default_js8mail_group_is_subscribed_without_overwriting_choice(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.ensure_group("@JS8MAIL", "discussion and updates", subscribed=True)
+    assert database.list_groups()[0]["subscribed"] == 1
+    database.set_group_subscription("@JS8MAIL", False)
+    database.ensure_group("@JS8MAIL", "discussion and updates", subscribed=True)
+    assert database.list_groups()[0]["subscribed"] == 0
+    database.close()
+
+
 def test_unsubscribed_stale_groups_expire_but_catalog_groups_remain(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     database.ensure_group("@EMCOMM", "emergency communications")

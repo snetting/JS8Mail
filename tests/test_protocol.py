@@ -12,6 +12,7 @@ from js8mail.adapters.js8call.protocol import (
 from js8mail.domain import NormalizedEvent
 from js8mail.protocol import (
     MultipartError,
+    contains_js8mail_marker,
     format_capability,
     format_delivery_ack,
     parse_ack,
@@ -24,6 +25,13 @@ def test_decode_valid_event() -> None:
     message = decode_line(b'{"type":"RX.DIRECTED","value":"N0CALL: HI","params":{"SNR":-10}}')
     assert message.type == "RX.DIRECTED"
     assert message.params["SNR"] == -10
+
+
+def test_capability_exchange_is_canonical_and_marker_is_only_a_hint() -> None:
+    assert format_capability(("mp", "E2E", "mp")) == "J8M1 CAP 1 MP,E2E"
+    assert parse_capability("j8m1 cap 1 mp,e2e") == (1, ("MP", "E2E"))
+    assert contains_js8mail_marker("N0CALL MSG [JS8Mail/0.0.4] hello")
+    assert not contains_js8mail_marker("N0CALL MSG JS8Mail hello")
 
 
 def test_decode_rejects_malformed_and_oversized_frames() -> None:

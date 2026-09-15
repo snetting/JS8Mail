@@ -1,6 +1,6 @@
 # JS8Mail enhanced envelope protocol v1
 
-Status: version 1 specification for the early `JS8Mail/0.0.3` implementation.
+Status: version 1 specification for the early `JS8Mail/0.0.4` implementation.
 
 This is the normative v1 wire specification, not an assertion that every
 JS8Call build exposes every transport feature. The adapter must capability
@@ -22,10 +22,22 @@ J8M1 CAP 1 E2E,MP,PA
 
 Features are comma-separated and may include `E2E` (delivery receipts), `MP`
 (multipart), `PA` (part acknowledgements), and `RR` (opt-in read receipts).
-Unknown features are ignored. A peer is enhanced only when a valid capability
-advertisement has been received and remains within its local expiry period
-(currently seven days). First contact therefore uses ordinary readable
-JS8Call text plus, optionally, a separate capability advertisement.
+Feature names are case-insensitive on input and are canonicalised to uppercase
+on output. Unknown or malformed features invalidate the advertisement.
+
+`J8M1 CAP` is a bidirectional capability advertisement, not a delivery ACK.
+When a client receives a valid CAP, it records the peer's capabilities and
+returns one directed CAP advertisement when its response throttle permits.
+The response is retried if JS8Call is busy or the API handoff fails; a failed
+response must not consume the peer's throttle interval. A peer is enhanced
+only when a valid CAP advertisement has been received and remains within its
+local expiry period (currently seven days).
+
+Readable `[JS8Mail/x.y.z]` text is only an identification hint. It can cause
+the receiver to schedule a rate-limited CAP response, but it is never treated
+as proof of capability. First contact can therefore remain ordinary readable
+JS8Call text, while Required mode explicitly sends CAP and waits for the
+path-aware response window before falling back.
 
 ## Multipart data
 
