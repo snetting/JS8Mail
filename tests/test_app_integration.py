@@ -121,6 +121,31 @@ async def test_group_broadcast_is_terminal_without_ack_wait(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_tx_yields_to_incoming_directed_message(tmp_path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    radio = FakeRadio()
+    handler = object.__new__(Handler)
+    handler.service = service
+    handler.client = radio
+    handler.status = {
+        "tx_mode": "automatic",
+        "paused": False,
+        "incoming_directed_until_ms": 9_999_999_999_999,
+    }
+    handler.airtime_budget = AirtimeBudget()
+    handler.message_budgets = {}
+    handler.tx_lock = asyncio.Lock()
+    handler.last_tx_at_ms = None
+    handler.next_tx_not_before_ms = None
+
+    with pytest.raises(RuntimeError, match="receiving a directed message"):
+        await handler.send_rf("@ALLCALL MSG queued broadcast")
+    assert radio.sent == []
+    database.close()
+
+
+@pytest.mark.asyncio
 async def test_stale_multi_hop_route_probes_first_hop_before_payload(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)

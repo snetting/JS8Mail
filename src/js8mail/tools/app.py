@@ -1034,6 +1034,9 @@ class Handler(BaseHTTPRequestHandler):
             raise RuntimeError("RF automation is paused")
         if self.status.get("tx_mode") != "automatic":
             raise RuntimeError("automatic RF transmission is disabled")
+        incoming_until = int(self.status.get("incoming_directed_until_ms", 0) or 0)
+        if incoming_until > utc_now_ms():
+            raise RuntimeError("JS8Call is receiving a directed message")
         # If JS8Call exposes the live PTT state, never queue behind an active
         # transmission. The timeout is deliberately bounded so a broken or
         # stale status event cannot deadlock the daemon forever.
@@ -1165,6 +1168,7 @@ async def run(args: argparse.Namespace) -> None:
         "dcd_until_ms": 0,
         "js8_activity_until_ms": 0,
         "tx_message_id": None,
+        "incoming_directed_until_ms": 0,
         "active_transaction_id": None,
         "speed_recommendation": None,
     }
@@ -1986,6 +1990,19 @@ async def run(args: argparse.Namespace) -> None:
                     for group in extract_groups(event.value, *[str(value) for value in event.params.values()]):
                         database.observe_group(group, default_group_description(group))
                     frame = normalize_directed_event(event) if event.event_type.startswith("RX.DIRECTED") else None
+                    if frame is not None:
+                        local_call = str(status.get("callsign", "")).upper()
+                        if local_call and frame.destination in {local_call, "@ALLCALL"}:
+                            # JS8Call deliberately suppresses automatic
+                            # replies while a directed message is arriving.
+                            # JS8Mail must apply the same rule to its own
+                            # scheduler so a queued broadcast cannot occupy
+                            # the next slot and truncate the incoming mail.
+                            raw_directed = str(event.params.get("TEXT", event.value))
+                            has_eot = bool(re.search(r"[♢◊]\s*$", raw_directed))
+                            status["incoming_directed_until_ms"] = utc_now_ms() + (
+                                5_000 if has_eot else 60_000
+                            )
                     ack = parse_ack(frame.payload) if frame is not None else None
                     source = frame.source if frame is not None else event.params.get("FROM")
                     command = frame.command if frame is not None else ""
