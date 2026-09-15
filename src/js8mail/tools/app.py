@@ -2078,8 +2078,9 @@ async def run(args: argparse.Namespace) -> None:
                 # intentionally short, so waiting for RX.DIRECTED alone can
                 # lose a perfectly complete J8M1 message.  Keep a small,
                 # connection-local assembler for enhanced data frames.  It is
-                # deliberately conservative: only a locally addressed MSG
-                # containing J8M1 D is promoted to a synthetic directed event.
+                # deliberately conservative: only a locally addressed MSG is
+                # assembled, and enhanced data is promoted to a synthetic
+                # directed event only after a continuation terminator.
                 activity_j8m_buffer: dict[str, Any] = {}
                 activity_j8m_last_ms = 0
 
@@ -2102,6 +2103,7 @@ async def run(args: argparse.Namespace) -> None:
                                 source=start.group(1).upper(),
                                 destination=start.group(2).upper(),
                                 parts=[activity_text],
+                                seed="",
                             )
                         elif activity_j8m_buffer:
                             activity_j8m_buffer["parts"].append(activity_text)
@@ -2109,10 +2111,41 @@ async def run(args: argparse.Namespace) -> None:
                         assembled = "".join(activity_j8m_buffer.get("parts", ()))
                         source = str(activity_j8m_buffer.get("source", "")).upper()
                         destination = str(activity_j8m_buffer.get("destination", "")).upper()
-                        if (
+                        locally_addressed = (
                             source
                             and destination == str(status.get("callsign", "")).upper()
-                            and "J8M1 D " in assembled.upper()
+                        )
+                        enhanced_activity = "J8M1 D " in assembled.upper()
+                        if locally_addressed and assembled and not enhanced_activity:
+                            standard_body = re.sub(
+                                r"^\s*[A-Z0-9/]{1,16}\s*:\s*[A-Z0-9/]{1,16}\s+MSG\s*",
+                                "",
+                                assembled,
+                                count=1,
+                                flags=re.IGNORECASE,
+                            )
+                            standard_body = re.sub(r"(?:…{2,}|\.{3,})\s*$", "", standard_body).strip()
+                            if standard_body:
+                                if not activity_j8m_buffer.get("seed"):
+                                    activity_j8m_buffer["seed"] = standard_body[:96]
+                                partial_id = "legacy-partial-" + hashlib.sha256(
+                                    f"{source}\n{destination}\n{activity_j8m_buffer['seed']}".encode()
+                                ).hexdigest()[:16]
+                                database.upsert_inbox_message(
+                                    source,
+                                    partial_id,
+                                    standard_body,
+                                    1,
+                                    (),
+                                    False,
+                                    (source,),
+                                    protocol="standard",
+                                    delivery="direct",
+                                )
+                        if (
+                            source
+                            and locally_addressed
+                            and enhanced_activity
                             and re.search(r"(?:…{2,}|\.{3,})\s*$", assembled)
                         ):
                             # The trailing ellipsis is JS8Call's continuation
