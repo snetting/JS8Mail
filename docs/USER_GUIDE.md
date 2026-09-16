@@ -9,10 +9,13 @@ tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
 This document describes the current `0.0.7` implementation. It is useful and
-radio-capable, but still early and experimental. In particular, a route score
-is evidence-based advice, not a guarantee that a station is listening now.
-Always operate within your licence, local band plan, power limits, and the
-expectations of other operators.
+radio-capable, and is suitable for supervised on-air use, but it remains early
+and experimental. Operators should monitor transmissions and be ready to pause
+automation if anything behaves unexpectedly. Extensive testing has not revealed
+unexpected transmit loops, but future changes or unforeseen glitches cannot be
+guaranteed away. In particular, a route score is evidence-based advice, not a
+guarantee that a station is listening now. Always operate within your licence,
+local band plan, power limits, and the expectations of other operators.
 
 ## What JS8Mail is for
 
@@ -249,10 +252,12 @@ not on whether the TCP API socket is still connected. After the timeout,
 JS8Call can disable automatic transmissions such as heartbeats and auto-replies
 until operator activity is detected.
 
-For an unattended or overnight JS8Mail station, disable this JS8Call idle
-timer (or use the build's equivalent of disabled) and disable operating-system
-suspend on AC power. Confirm the setting after upgrading JS8Call, since the
-label and defaults may differ between builds.
+For an unattended or overnight JS8Mail station, first confirm that unattended
+operation is permitted by your local licence conditions and band plan. Always
+observe those conditions. If permitted, disable this JS8Call idle timer (or use
+the build's equivalent of disabled) and disable operating-system suspend on AC
+power. Confirm the setting after upgrading JS8Call, since the label and
+defaults may differ between builds.
 
 JS8Mail's API status polling and reconnect logic can detect a closed or
 unresponsive API connection, but they do not reset JS8Call's keyboard/mouse

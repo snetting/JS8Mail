@@ -76,11 +76,10 @@ The local mailbox can also be started directly with explicit options:
 Automatic submission hands text to JS8Call; the UI reports only delivery
 evidence actually observed. JS8Mail is suitable for supervised on-air use.
 The code is still at an early stage, so operators should monitor transmissions,
-use sensible power and radio settings, and be ready to pause automation if
+use sensible power and radio settings and be ready to pause automation if
 anything behaves unexpectedly. Extensive testing has not revealed unexpected
-transmit loops, but future changes or unforeseen glitches cannot be guaranteed
-away. Follow local licensing and band-plan rules. The original receive-only
-probe remains available as `js8mail-probe`.
+transmit loops, but future changes or unforeseen glitches cannot be guaranteed.
+Follow local licensing and band-plan rules.
 
 JS8Call setup: enable its documented local TCP/JSON API on loopback (normally
 port 2442), ensure JS8Call has the correct audio input/output devices, and
@@ -89,9 +88,11 @@ you want to use. JS8Mail does not edit unknown JS8Call configuration files;
 the UI should be treated as setup guidance and the operator remains in control
 of RF transmission. Intermediate stations may not have these facilities, so
 the routing logic degrades to the strongest standard JS8Call behavior available.
-For unattended operation, disable JS8Call's operator-idle timeout (also called
-My Station Idle Time or, in some builds, `TxIdleWatchdog`) and operating-system
-suspend on AC power; TCP polling cannot reset that JS8Call safety timer.
+For unattended operation, first confirm that it is permitted by your local
+licence conditions and band plan. Always observe those conditions. If permitted,
+disable JS8Call's operator-idle timeout (also called My Station Idle Time or, in
+some builds, `TxIdleWatchdog`) and operating-system suspend on AC power; TCP
+polling cannot reset that JS8Call safety timer.
 
 Linux is the current development platform. A portable Windows bundle can be
 built with PyInstaller on Windows; users of that bundle do not need to install
