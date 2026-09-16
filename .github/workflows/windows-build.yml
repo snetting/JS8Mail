@@ -1,8 +1,11 @@
 name: Windows bundle
 
 on:
+  push:
+    branches:
+      - main
   schedule:
-    # Nightly at 02:17 UTC; avoid building on every normal development push.
+    # Nightly at 02:17 UTC; branch pushes are covered separately above.
     - cron: "17 2 * * *"
   workflow_dispatch:
 
