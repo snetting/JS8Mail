@@ -34,8 +34,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 The GitHub Actions workflow performs the same build on `windows-latest` and
 publishes `JS8Mail-windows-x64` as a downloadable workflow artifact. It runs
-whenever `main` is updated, including when a feature branch is merged into
-`main`. Pushes to feature branches do not start a Windows build.
+nightly at 02:17 UTC and checks whether `main` has changed since the last
+successful Windows build. If there were changes—including one or more merged
+feature branches—it builds once; otherwise it skips the Windows runner.
+Feature-branch pushes do not start a build, and daytime pushes are coalesced
+into the next nightly build.
 
 This repository intentionally does not commit generated `.exe` files. They
 are platform-specific, large, and reproducible from the script and workflow.

@@ -1,15 +1,48 @@
 name: Windows bundle
 
 on:
-  push:
-    branches:
-      - main
+  schedule:
+    # Nightly at 02:17 UTC; the job skips itself when main has not changed.
+    - cron: "17 2 * * *"
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
+  check-main:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_build: ${{ steps.check.outputs.needs_build }}
+    steps:
+      - name: Check for changes since the last Windows build
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'windows-build.yml',
+              branch: 'main',
+              status: 'success',
+              per_page: 1,
+            });
+
+            const lastSuccessfulRun = data.workflow_runs[0];
+            const needsBuild = !lastSuccessfulRun ||
+              lastSuccessfulRun.head_sha !== context.sha;
+
+            core.setOutput('needs_build', String(needsBuild));
+            core.info(lastSuccessfulRun
+              ? `Last successful Windows build: ${lastSuccessfulRun.head_sha}`
+              : 'No successful Windows build found');
+            core.info(`Current main commit: ${context.sha}`);
+            core.info(`Windows build required: ${needsBuild}`);
+
   build-windows:
+    needs: check-main
+    if: needs.check-main.outputs.needs_build == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
