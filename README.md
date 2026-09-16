@@ -74,9 +74,13 @@ The local mailbox can also be started directly with explicit options:
 ```
 
 Automatic submission hands text to JS8Call; the UI reports only delivery
-evidence actually observed. Use a dummy load, suitable low-power settings, and
-follow local licensing and band-plan rules. The original receive-only probe
-remains available as `js8mail-probe`.
+evidence actually observed. JS8Mail is suitable for supervised on-air use.
+The code is still at an early stage, so operators should monitor transmissions,
+use sensible power and radio settings, and be ready to pause automation if
+anything behaves unexpectedly. Extensive testing has not revealed unexpected
+transmit loops, but future changes or unforeseen glitches cannot be guaranteed
+away. Follow local licensing and band-plan rules. The original receive-only
+probe remains available as `js8mail-probe`.
 
 JS8Call setup: enable its documented local TCP/JSON API on loopback (normally
 port 2442), ensure JS8Call has the correct audio input/output devices, and
