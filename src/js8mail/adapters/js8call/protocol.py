@@ -115,14 +115,14 @@ def parse_legacy_ack(frame: DirectedFrame) -> tuple[str, tuple[str, ...]] | None
 
 
 _EOT_RE = re.compile(r"\s*[♢◊]\s*$")
+
+
 def _clean_directed_text(value: str) -> str:
     value = value.strip()
     value = _EOT_RE.sub("", value).strip()
     # Some versions include the source prefix in value/TEXT even though FROM
     # is also supplied as a structured parameter.
-    value = re.sub(
-        r"^\s*[@A-Z0-9/]{1,32}:\s+", "", value, count=1, flags=re.IGNORECASE
-    )
+    value = re.sub(r"^\s*[@A-Z0-9/]{1,32}:\s+", "", value, count=1, flags=re.IGNORECASE)
     return value.strip()
 
 
@@ -160,9 +160,7 @@ def normalize_directed_event(event: NormalizedEvent) -> DirectedFrame | None:
     stored_recipient = ""
     payload = without_destination
     if command == "MSG TO:":
-        match = re.match(
-            r"^MSG\s+TO:\s*([^\s]+)(?:\s+(.*))?$", payload, re.IGNORECASE
-        )
+        match = re.match(r"^MSG\s+TO:\s*([^\s]+)(?:\s+(.*))?$", payload, re.IGNORECASE)
         if match:
             stored_recipient = match.group(1).strip().upper()
             payload = (match.group(2) or "").strip()

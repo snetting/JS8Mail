@@ -11,7 +11,7 @@ SPEED_AIRTIME_MS = {
     1: 15_000,  # Fast
     2: 10_000,  # JS8-40 / Turbo
     4: 45_000,  # Slow
-    8: 5_000,   # JS8-60 / Ultra (experimental)
+    8: 5_000,  # JS8-60 / Ultra (experimental)
 }
 SPEED_ORDER = (4, 0, 1, 2, 8)
 
@@ -76,20 +76,28 @@ class AdaptiveSpeedPolicy:
         if current_evidence.attempts >= 2 and current_evidence.reliability < 0.5:
             current_index = SPEED_ORDER.index(current)
             slower = SPEED_ORDER[max(0, current_index - 1)]
-            return SpeedDecision(slower, slower != current, "recent failures justify stepping down one speed")
+            return SpeedDecision(
+                slower, slower != current, "recent failures justify stepping down one speed"
+            )
         chosen = current
         for speed in reversed(SPEED_ORDER):
             item = evidence.get(speed, SpeedEvidence())
-            if item.successes >= 3 and item.reliability >= 0.8 and (
-                item.average_snr is None or item.average_snr >= self.SNR_MARGINS[speed]
+            if (
+                item.successes >= 3
+                and item.reliability >= 0.8
+                and (item.average_snr is None or item.average_snr >= self.SNR_MARGINS[speed])
             ):
                 chosen = speed
                 break
         # API speed identifiers are sparse and are not ordered numerically;
         # compare their position in the policy order instead.
         if SPEED_ORDER.index(chosen) > SPEED_ORDER.index(current):
-            return SpeedDecision(chosen, True, "sustained reliable evidence supports a cautious speed increase")
-        return SpeedDecision(current, False, "retain current speed until stronger evidence is available")
+            return SpeedDecision(
+                chosen, True, "sustained reliable evidence supports a cautious speed increase"
+            )
+        return SpeedDecision(
+            current, False, "retain current speed until stronger evidence is available"
+        )
 
 
 @dataclass(slots=True)

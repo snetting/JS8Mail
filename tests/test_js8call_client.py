@@ -49,12 +49,30 @@ async def test_client_checks_and_sends_message() -> None:
         await writer.drain()
         ptt = json.loads(await reader.readline())
         writer.write(
-            (json.dumps({"type": "RIG.PTT_STATUS", "value": "", "params": {**ptt["params"], "PTT": False}}) + "\n").encode()
+            (
+                json.dumps(
+                    {
+                        "type": "RIG.PTT_STATUS",
+                        "value": "",
+                        "params": {**ptt["params"], "PTT": False},
+                    }
+                )
+                + "\n"
+            ).encode()
         )
         await writer.drain()
         queue = json.loads(await reader.readline())
         writer.write(
-            (json.dumps({"type": "TX.QUEUE_DEPTH", "value": "", "params": {**queue["params"], "DEPTH": 0}}) + "\n").encode()
+            (
+                json.dumps(
+                    {
+                        "type": "TX.QUEUE_DEPTH",
+                        "value": "",
+                        "params": {**queue["params"], "DEPTH": 0},
+                    }
+                )
+                + "\n"
+            ).encode()
         )
         await writer.drain()
         received.append(json.loads(await reader.readline()))
@@ -126,13 +144,29 @@ async def test_event_handler_can_make_read_only_request_without_blocking_reader(
 
     async def server_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         writer.write(
-            (json.dumps({"type": "RX.DIRECTED", "value": "OH3SPN ACK ♢", "params": {"FROM": "N0CALL", "TO": "OH3SPN", "CMD": " ACK", "TEXT": "OH3SPN ACK ♢"}}) + "\n").encode()
+            (
+                json.dumps(
+                    {
+                        "type": "RX.DIRECTED",
+                        "value": "OH3SPN ACK ♢",
+                        "params": {
+                            "FROM": "N0CALL",
+                            "TO": "OH3SPN",
+                            "CMD": " ACK",
+                            "TEXT": "OH3SPN ACK ♢",
+                        },
+                    }
+                )
+                + "\n"
+            ).encode()
         )
         await writer.drain()
         request = json.loads(await reader.readline())
         assert request["type"] == "TX.GET_TEXT"
         writer.write(
-            (json.dumps({"type": "TX.TEXT", "value": "", "params": request["params"]}) + "\n").encode()
+            (
+                json.dumps({"type": "TX.TEXT", "value": "", "params": request["params"]}) + "\n"
+            ).encode()
         )
         await writer.drain()
         request_seen.set()

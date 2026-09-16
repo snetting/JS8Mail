@@ -42,7 +42,9 @@ def test_attempted_path_is_penalized_but_can_be_reused_and_stale_evidence_decays
     repeated = RouteEngine(graph).choose("A", "C", now_ms=NOW, attempted_paths={fresh.path})
     assert repeated.action == RouteAction.RELAY_NOW
     assert repeated.path == ("A", "D", "C")
-    exhausted = RouteEngine(graph).choose("A", "C", now_ms=NOW, attempted_paths={fresh.path, repeated.path})
+    exhausted = RouteEngine(graph).choose(
+        "A", "C", now_ms=NOW, attempted_paths={fresh.path, repeated.path}
+    )
     assert exhausted.path == fresh.path
     assert "no untried" in exhausted.explanation
 

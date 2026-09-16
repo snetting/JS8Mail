@@ -48,7 +48,9 @@ def test_message_retry_is_durable_and_progressively_scheduled(tmp_path: Path) ->
 
 def test_partial_legacy_inbox_fragment_can_be_reconciled(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
-    database.upsert_inbox_message("MM0ZFG", "legacy-partial-426", "TEST SELF DELIVERY …", 1, (), False)
+    database.upsert_inbox_message(
+        "MM0ZFG", "legacy-partial-426", "TEST SELF DELIVERY …", 1, (), False
+    )
     assert database.find_partial_inbox("mm0zfg", "TEST SELF DELIVERY") == "legacy-partial-426"
     assert database.list_inbox()[0]["protocol"] == "standard"
     database.close()
@@ -135,7 +137,10 @@ def test_message_parts_are_idempotent_and_survive_reopen(tmp_path: Path) -> None
     database = Database(path)
     database.upsert_message_part("m1", 2, 2, "SECOND", direction="incoming", peer="N0CALL")
     database.upsert_message_part("m1", 2, 2, "SECOND", direction="incoming", peer="N0CALL")
-    assert database.list_message_parts("m1", direction="incoming", peer="n0call")[0]["payload"] == "SECOND"
+    assert (
+        database.list_message_parts("m1", direction="incoming", peer="n0call")[0]["payload"]
+        == "SECOND"
+    )
     database.close()
     reopened = Database(path)
     assert len(reopened.list_message_parts("m1", direction="incoming", peer="N0CALL")) == 1
@@ -242,9 +247,7 @@ def test_remove_message_cleans_all_spool_history(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     database.enqueue_message("m1", "DEST", "body")
     database.record_attempt("m1", "direct", "DEST", "submitted")
-    database.upsert_message_part(
-        "m1", 1, 1, "body", direction="outgoing", peer="DEST"
-    )
+    database.upsert_message_part("m1", 1, 1, "body", direction="outgoing", peer="DEST")
     database.upsert_custody("m1", "RELAY", "accepted")
     database.record_message_path("m1", ("ORIGIN", "RELAY", "DEST"))
     database.save_message_airtime("m1", 1000)
@@ -252,10 +255,19 @@ def test_remove_message_cleans_all_spool_history(tmp_path: Path) -> None:
     database.delete_message("m1")
 
     assert database.get_message("m1") is None
-    for table in ("message_attempts", "message_parts", "custody", "message_paths", "message_airtime"):
-        assert database.connection.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE message_id = ?", ("m1",)
-        ).fetchone()[0] == 0
+    for table in (
+        "message_attempts",
+        "message_parts",
+        "custody",
+        "message_paths",
+        "message_airtime",
+    ):
+        assert (
+            database.connection.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE message_id = ?", ("m1",)
+            ).fetchone()[0]
+            == 0
+        )
     database.close()
 
 

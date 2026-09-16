@@ -46,4 +46,7 @@ def context_from_params(params: Mapping[str, Any]) -> tuple[str, int | None]:
     if isinstance(dial, bool) or not isinstance(dial, (int, float)):
         dial = params.get("FREQ")
     raw_dial = int(dial) if isinstance(dial, (int, float)) and not isinstance(dial, bool) else None
-    return (str(explicit).strip().lower() if explicit else band_from_frequency_hz(raw_dial), raw_dial)
+    return (
+        str(explicit).strip().lower() if explicit else band_from_frequency_hz(raw_dial),
+        raw_dial,
+    )

@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 
-
 TX_TRAIN_QUIET_MS = 15_000
 
 

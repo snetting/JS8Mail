@@ -94,16 +94,26 @@ class DeterministicRadioSimulation:
         designated_ack: str | None = None,
     ) -> tuple[SimTransmission, ...]:
         group = group.upper()
-        if not group.startswith("@") or any(recipient.upper() not in self.nodes for recipient in recipients):
+        if not group.startswith("@") or any(
+            recipient.upper() not in self.nodes for recipient in recipients
+        ):
             raise ValueError("invalid group simulation")
         for recipient in recipients:
             node = self.nodes[recipient.upper()]
             if message_id in node.inbox:
                 continue
             node.inbox[message_id] = body
-            self.transmissions.append(SimTransmission("ORIGIN", recipient.upper(), message_id, group=group))
+            self.transmissions.append(
+                SimTransmission("ORIGIN", recipient.upper(), message_id, group=group)
+            )
         ack_key = (group, message_id)
-        if designated_ack is not None and designated_ack.upper() in self.nodes and ack_key not in self._group_acks:
-            self.transmissions.append(SimTransmission(designated_ack.upper(), "ORIGIN", message_id, group=group))
+        if (
+            designated_ack is not None
+            and designated_ack.upper() in self.nodes
+            and ack_key not in self._group_acks
+        ):
+            self.transmissions.append(
+                SimTransmission(designated_ack.upper(), "ORIGIN", message_id, group=group)
+            )
             self._group_acks.add(ack_key)
         return tuple(self.transmissions)

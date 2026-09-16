@@ -113,7 +113,9 @@ class RouteEngine:
                     return
                 action = RouteAction.DIRECT if len(path) == 2 else RouteAction.RELAY_NOW
                 explanation = ""
-                paths.append(RoutePlan(action, path, max(0.0, total), weakest, airtime, explanation))
+                paths.append(
+                    RoutePlan(action, path, max(0.0, total), weakest, airtime, explanation)
+                )
                 return
             for next_node, link, score in self.graph.candidates(node, now_ms):
                 if next_node in path:
@@ -140,7 +142,11 @@ class RouteEngine:
         selected = max(
             candidates, key=lambda plan: (plan.score, -len(plan.path), -plan.expected_airtime_ms)
         )
-        retry_note = " A previously attempted route was selected again because no untried viable route remains." if selected.path in attempted else ""
+        retry_note = (
+            " A previously attempted route was selected again because no untried viable route remains."
+            if selected.path in attempted
+            else ""
+        )
         explanation = (
             f"Selected {'direct' if selected.action is RouteAction.DIRECT else 'relay'} path "
             f"{' → '.join(selected.path)}; weakest link {selected.weakest_link_score:.2f}, "

@@ -2,8 +2,9 @@
 
 import asyncio
 
-from js8mail.application.service import MailService
 import pytest
+
+from js8mail.application.service import MailService
 from js8mail.domain import utc_now_ms
 from js8mail.radio_policy import AirtimeBudget
 from js8mail.rf_timing import TX_TRAIN_QUIET_MS, TxTrain
@@ -47,8 +48,14 @@ def test_ack_deadline_starts_after_final_frame_not_first_gap(tmp_path) -> None:
     service = MailService(database)
     message_id = service.compose("N0CALL", "", "payload")
     transaction_id = database.begin_transmission_transaction(
-        message_id, "direct", "N0CALL", "N0CALL", ("OH3SPN", "N0CALL"),
-        "hash", 30_000, 60_000,
+        message_id,
+        "direct",
+        "N0CALL",
+        "N0CALL",
+        ("OH3SPN", "N0CALL"),
+        "hash",
+        30_000,
+        60_000,
     )
     database.mark_transmission_submitted(transaction_id)
     old_deadline = utc_now_ms() - 1
@@ -84,8 +91,14 @@ def test_broadcast_without_rf_completion_is_not_reported_delivered(tmp_path) -> 
     service = MailService(database)
     message_id = service.compose("@JS8MAIL", "", "one brief notice")
     transaction_id = database.begin_transmission_transaction(
-        message_id, "group_broadcast", "@JS8MAIL", "@JS8MAIL",
-        ("OH3SPN", "@JS8MAIL"), "hash", 30_000, 60_000,
+        message_id,
+        "group_broadcast",
+        "@JS8MAIL",
+        "@JS8MAIL",
+        ("OH3SPN", "@JS8MAIL"),
+        "hash",
+        30_000,
+        60_000,
     )
     database.mark_transmission_submitted(transaction_id)
     database.transition_message(message_id, "waiting_route")
@@ -103,8 +116,14 @@ async def test_enhanced_train_never_halts_at_frame_or_train_boundary(tmp_path) -
     service = MailService(database)
     message_id = service.compose("N0CALL", "", "enhanced part")
     transaction_id = database.begin_transmission_transaction(
-        message_id, "multipart", "N0CALL", "N0CALL", ("OH3SPN", "N0CALL"),
-        "hash", 30_000, 60_000,
+        message_id,
+        "multipart",
+        "N0CALL",
+        "N0CALL",
+        ("OH3SPN", "N0CALL"),
+        "hash",
+        30_000,
+        60_000,
     )
     database.mark_transmission_submitted(transaction_id)
     handler = object.__new__(Handler)

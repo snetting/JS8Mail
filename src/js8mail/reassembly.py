@@ -14,7 +14,6 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 
-
 _START_RE = re.compile(
     r"^\s*([A-Z0-9/]{1,16})\s*:\s*([A-Z0-9/]{1,16})\s+MSG(?:\s+(.*?))?\s*$",
     re.IGNORECASE,
@@ -24,9 +23,7 @@ _DIRECTED_START_RE = re.compile(
     re.IGNORECASE,
 )
 _CALLSIGN_PREFIX_RE = re.compile(r"^\s*[A-Z0-9/]{1,16}\s*:", re.IGNORECASE)
-_CONTROL_START_RE = re.compile(
-    r"^\s*J8M1\s+(?:CAP|PA|REQ|DELIVERED)\b", re.IGNORECASE
-)
+_CONTROL_START_RE = re.compile(r"^\s*J8M1\s+(?:CAP|PA|REQ|DELIVERED)\b", re.IGNORECASE)
 _ELLIPSIS_RE = re.compile(r"(?:…{2,}|\.{3,})\s*[♢◊]?\s*$")
 
 
@@ -134,10 +131,11 @@ class ActivityAssembler:
         ):
             if left not in (None, "", 0) and right not in (None, "", 0) and left != right:
                 return False
-        if stream.offset is not None and fragment.offset is not None:
-            if abs(stream.offset - fragment.offset) > 12:
-                return False
-        return True
+        return not (
+            stream.offset is not None
+            and fragment.offset is not None
+            and abs(stream.offset - fragment.offset) > 12
+        )
 
     def _expire(self, now_received_at_ms: int) -> None:
         expired = [
@@ -162,11 +160,7 @@ class ActivityAssembler:
         bare_control = False
         if start is None and self.accept_control_starts:
             start = _DIRECTED_START_RE.match(text)
-            if (
-                start is None
-                and not self._streams
-                and _CONTROL_START_RE.match(text) is not None
-            ):
+            if start is None and not self._streams and _CONTROL_START_RE.match(text) is not None:
                 # Some JS8Call builds expose a directed control train without
                 # the first-frame address prefix.  The protocol marker itself
                 # is still an unambiguous stream boundary; the application
@@ -181,7 +175,7 @@ class ActivityAssembler:
                 source, destination = "", ""
                 seed_text = text
                 is_message = False
-            else:
+            elif start is not None:
                 source, destination = start.group(1).upper(), start.group(2).upper()
                 seed = start.group(3) or ""
                 is_message = _START_RE.match(text) is not None
@@ -190,27 +184,43 @@ class ActivityAssembler:
                     + (" MSG" if is_message else "")
                     + (f" {seed}" if seed else "")
                 )
+            else:
+                return ()
             # ``None`` is used by the control-plane observer for overheard
             # CAP exchanges.  It may learn both endpoints, but the caller
             # still decides whether a response is permitted.
-            if (
-                local_destination is not None
-                and destination != local_destination.strip().upper()
-            ):
+            if local_destination is not None and destination != local_destination.strip().upper():
                 return ()
             digest = hashlib.sha256(
                 f"{source}\n{destination}\n{fragment.received_at_ms}\n{seed_text}".encode()
             ).hexdigest()[:20]
             stream = _Stream(
-                f"activity-{digest}", source, destination,
+                f"activity-{digest}",
+                source,
+                destination,
                 [seed_text],
-                1, fragment.observed_at_ms, fragment.observed_at_ms, fragment.received_at_ms,
-                fragment.band, fragment.dial_frequency, fragment.offset, fragment.speed,
+                1,
+                fragment.observed_at_ms,
+                fragment.observed_at_ms,
+                fragment.received_at_ms,
+                fragment.band,
+                fragment.dial_frequency,
+                fragment.offset,
+                fragment.speed,
             )
             self._streams[stream.stream_id] = stream
             if is_last:
                 del self._streams[stream.stream_id]
-                return (ActivityAssembly(stream.stream_id, source, destination, "".join(stream.parts), True, "authoritative" if fragment.bits is not None else "legacy"),)
+                return (
+                    ActivityAssembly(
+                        stream.stream_id,
+                        source,
+                        destination,
+                        "".join(stream.parts),
+                        True,
+                        "authoritative" if fragment.bits is not None else "legacy",
+                    ),
+                )
             return (self._snapshot(stream),)
 
         # A first-frame activity line is a new stream only if it is a locally
@@ -220,7 +230,8 @@ class ActivityAssembler:
         if not self._streams or _CALLSIGN_PREFIX_RE.match(text):
             return ()
         candidates = [
-            stream for stream in self._streams.values()
+            stream
+            for stream in self._streams.values()
             if self._context_matches(stream, fragment)
             and fragment.received_at_ms - stream.last_received_at_ms <= self.max_age_ms
         ]
@@ -241,11 +252,16 @@ class ActivityAssembler:
         legacy_last = fragment.bits is None and bool(_ELLIPSIS_RE.search(text))
         if is_last or legacy_last:
             result = ActivityAssembly(
-                stream.stream_id, stream.source, stream.destination, "".join(stream.parts),
+                stream.stream_id,
+                stream.source,
+                stream.destination,
+                "".join(stream.parts),
                 not stream.ambiguous,
                 ("reassembled" if fragment.bits is not None else "legacy")
-                if not stream.ambiguous else "ambiguous",
-                stream.ambiguous, stream.gap_suspected,
+                if not stream.ambiguous
+                else "ambiguous",
+                stream.ambiguous,
+                stream.gap_suspected,
             )
             del self._streams[stream.stream_id]
             return (result,)

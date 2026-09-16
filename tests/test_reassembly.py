@@ -9,7 +9,12 @@ def test_js8call_bits_use_masks_and_reassemble_first_middle_last():
     assert first_frame(5)
     assert last_frame(6)
     assembler = ActivityAssembler()
-    assert assembler.feed(fragment("F4LPU: OH3SPN MSG ", 1, 1000), local_destination="OH3SPN")[0].confidence == "partial"
+    assert (
+        assembler.feed(fragment("F4LPU: OH3SPN MSG ", 1, 1000), local_destination="OH3SPN")[
+            0
+        ].confidence
+        == "partial"
+    )
     assembler.feed(fragment(" HELLO ", 4, 2000), local_destination="OH3SPN")
     result = assembler.feed(fragment("WORLD", 2, 3000), local_destination="OH3SPN")[0]
     assert result.complete
@@ -32,7 +37,9 @@ def test_single_frame_and_unknown_extra_bits_are_supported():
 def test_prefixed_unrelated_activity_does_not_clear_pending_message():
     assembler = ActivityAssembler()
     assembler.feed(fragment("F4LPU: OH3SPN MSG PART ONE ", 1, 1000), local_destination="OH3SPN")
-    assert not assembler.feed(fragment("M0OUE: G0ABC MSG OTHER", 3, 1500), local_destination="OH3SPN")
+    assert not assembler.feed(
+        fragment("M0OUE: G0ABC MSG OTHER", 3, 1500), local_destination="OH3SPN"
+    )
     result = assembler.feed(fragment("PART TWO", 2, 2000), local_destination="OH3SPN")[0]
     assert result.complete
     assert "PART ONE" in result.text and "PART TWO" in result.text
@@ -66,33 +73,31 @@ def test_legacy_no_bits_uses_ellipsis_only_as_provisional_completion():
 
 def test_control_reassembly_recovers_multiframe_capability_response():
     assembler = ActivityAssembler(accept_control_starts=True)
-    assert assembler.feed(
-        fragment("M0SPN: OH3SPN", 1, 1000), local_destination="OH3SPN"
-    )[0].complete is False
+    assert (
+        assembler.feed(fragment("M0SPN: OH3SPN", 1, 1000), local_destination="OH3SPN")[0].complete
+        is False
+    )
     # An unrelated directed message may be decoded between CAP fragments.
     unrelated = assembler.feed(
         fragment("M7XNT: OH3SPN MSG HELLO", 3, 1200), local_destination="OH3SPN"
     )
     assert unrelated and unrelated[0].complete
     assert "J8M1 CAP" not in unrelated[0].text
-    assert not assembler.feed(
-        fragment("J8M1 CAP 1", 0, 2000), local_destination="OH3SPN"
-    )[0].complete
-    result = assembler.feed(
-        fragment("E2E,MP,PA", 2, 3000), local_destination="OH3SPN"
-    )[0]
+    assert not assembler.feed(fragment("J8M1 CAP 1", 0, 2000), local_destination="OH3SPN")[
+        0
+    ].complete
+    result = assembler.feed(fragment("E2E,MP,PA", 2, 3000), local_destination="OH3SPN")[0]
     assert result.complete
     assert "J8M1 CAP 1" in result.text
 
 
 def test_control_reassembly_can_learn_overheard_capability():
     assembler = ActivityAssembler(accept_control_starts=True)
-    assert assembler.feed(
-        fragment("M0SPN: F4LPU", 1, 1000), local_destination=None
-    )[0].complete is False
-    result = assembler.feed(
-        fragment("J8M1 CAP 1 E2E,MP,PA", 2, 2000), local_destination=None
-    )[0]
+    assert (
+        assembler.feed(fragment("M0SPN: F4LPU", 1, 1000), local_destination=None)[0].complete
+        is False
+    )
+    result = assembler.feed(fragment("J8M1 CAP 1 E2E,MP,PA", 2, 2000), local_destination=None)[0]
     assert result.complete
     assert result.source == "M0SPN"
     assert result.destination == "F4LPU"
@@ -115,7 +120,4 @@ def test_control_reassembly_accepts_bare_multiframe_delivery_receipt():
     assert result is not None
     assert result.source == ""
     assert result.destination == ""
-    assert result.text == (
-        "J8M1 DELIVERED ABCDEF0123456789 1789561122012 "
-        "OH3SPN,OH3SPN/1"
-    )
+    assert result.text == ("J8M1 DELIVERED ABCDEF0123456789 1789561122012 OH3SPN,OH3SPN/1")

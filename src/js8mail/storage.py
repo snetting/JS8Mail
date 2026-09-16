@@ -486,8 +486,7 @@ class Database:
             # appear as new after upgrading. New rows retain NULL until the
             # operator opens them.
             self.connection.execute(
-                "UPDATE inbox_messages SET read_at_ms = updated_at_ms "
-                "WHERE read_at_ms IS NULL"
+                "UPDATE inbox_messages SET read_at_ms = updated_at_ms WHERE read_at_ms IS NULL"
             )
             self.connection.execute(
                 "INSERT INTO schema_migrations(version, applied_at_ms) "
@@ -580,7 +579,16 @@ class Database:
             "last_observed_at_ms=excluded.last_observed_at_ms, observation_count=temporal_links.observation_count+1, "
             "max_snr=CASE WHEN excluded.max_snr IS NULL THEN temporal_links.max_snr WHEN temporal_links.max_snr IS NULL THEN excluded.max_snr ELSE MAX(temporal_links.max_snr, excluded.max_snr) END, "
             "js8m_observation_count=temporal_links.js8m_observation_count+excluded.js8m_observation_count",
-            (source.upper(), destination.upper(), band, speed, observed, observed, snr_value, js8m_observation),
+            (
+                source.upper(),
+                destination.upper(),
+                band,
+                speed,
+                observed,
+                observed,
+                snr_value,
+                js8m_observation,
+            ),
         )
         self.connection.commit()
 
@@ -616,7 +624,17 @@ class Database:
             "last_observed_at_ms=excluded.last_observed_at_ms, observation_count=temporal_links.observation_count+1, "
             "max_snr=CASE WHEN excluded.max_snr IS NULL THEN temporal_links.max_snr WHEN temporal_links.max_snr IS NULL THEN excluded.max_snr ELSE MAX(temporal_links.max_snr, excluded.max_snr) END, "
             "success_count=temporal_links.success_count+excluded.success_count, failure_count=temporal_links.failure_count+excluded.failure_count",
-            (source.upper(), destination.upper(), normalized_band, str(speed), now, now, snr, int(success), int(not success)),
+            (
+                source.upper(),
+                destination.upper(),
+                normalized_band,
+                str(speed),
+                now,
+                now,
+                snr,
+                int(success),
+                int(not success),
+            ),
         )
         self.connection.commit()
 
@@ -646,12 +664,22 @@ class Database:
         }
 
     def airtime_state(self, scope: str = "radio") -> dict[str, int | None]:
-        row = self.connection.execute("SELECT * FROM airtime_usage WHERE scope = ?", (scope,)).fetchone()
+        row = self.connection.execute(
+            "SELECT * FROM airtime_usage WHERE scope = ?", (scope,)
+        ).fetchone()
         if row is None:
             return {"window_started_at_ms": None, "window_used_ms": 0, "message_used_ms": 0}
-        return {key: row[key] for key in ("window_started_at_ms", "window_used_ms", "message_used_ms")}
+        return {
+            key: row[key] for key in ("window_started_at_ms", "window_used_ms", "message_used_ms")
+        }
 
-    def save_airtime_state(self, window_started_at_ms: int | None, window_used_ms: int, message_used_ms: int, scope: str = "radio") -> None:
+    def save_airtime_state(
+        self,
+        window_started_at_ms: int | None,
+        window_used_ms: int,
+        message_used_ms: int,
+        scope: str = "radio",
+    ) -> None:
         self.connection.execute(
             "INSERT INTO airtime_usage(scope, window_started_at_ms, window_used_ms, message_used_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(scope) DO UPDATE SET window_started_at_ms=excluded.window_started_at_ms, window_used_ms=excluded.window_used_ms, message_used_ms=excluded.message_used_ms, updated_at_ms=excluded.updated_at_ms",
@@ -660,7 +688,9 @@ class Database:
         self.connection.commit()
 
     def message_airtime_used(self, message_id: str) -> int:
-        row = self.connection.execute("SELECT used_ms FROM message_airtime WHERE message_id = ?", (message_id,)).fetchone()
+        row = self.connection.execute(
+            "SELECT used_ms FROM message_airtime WHERE message_id = ?", (message_id,)
+        ).fetchone()
         return int(row[0]) if row else 0
 
     def save_message_airtime(self, message_id: str, used_ms: int) -> None:
@@ -795,7 +825,7 @@ class Database:
         if rows:
             self.connection.executemany(
                 "UPDATE transmission_transactions SET status='unconfirmed' WHERE id=?",
-                [(int(row['id']),) for row in rows],
+                [(int(row["id"]),) for row in rows],
             )
             self.connection.commit()
         return [dict(row) for row in rows]
@@ -841,7 +871,7 @@ class Database:
         if rows:
             self.connection.executemany(
                 "UPDATE transmission_transactions SET status='timed_out' WHERE id=?",
-                [(int(row['id']),) for row in rows],
+                [(int(row["id"]),) for row in rows],
             )
             self.connection.commit()
         return [dict(row) for row in rows]
@@ -952,7 +982,17 @@ class Database:
         self.connection.execute(
             "INSERT INTO messages(id, destination, subject, body, priority, state, expires_at_ms, "
             "created_at_ms, updated_at_ms, enhanced_mode) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
-            (message_id, destination, subject, body, priority, expires_at_ms, now, now, enhanced_mode),
+            (
+                message_id,
+                destination,
+                subject,
+                body,
+                priority,
+                expires_at_ms,
+                now,
+                now,
+                enhanced_mode,
+            ),
         )
         self.connection.commit()
         self.audit("message.queued", {"message_id": message_id, "destination": destination})
@@ -1003,7 +1043,9 @@ class Database:
         parameters: tuple[Any, ...] = (band.strip().lower(),) if band else ()
         rows = self.connection.execute(
             "SELECT id, event_type, value, params_json, observed_at_ms "
-            ", band, dial_frequency FROM observations" + where + " ORDER BY observed_at_ms DESC LIMIT ?",
+            ", band, dial_frequency FROM observations"
+            + where
+            + " ORDER BY observed_at_ms DESC LIMIT ?",
             parameters + (bounded_limit,),
         ).fetchall()
         result: list[dict[str, Any]] = []
@@ -1013,7 +1055,9 @@ class Database:
             result.append(item)
         return result
 
-    def prune_observations(self, *, now_ms: int | None = None, retention_ms: int = 7 * 24 * 60 * 60 * 1000) -> int:
+    def prune_observations(
+        self, *, now_ms: int | None = None, retention_ms: int = 7 * 24 * 60 * 60 * 1000
+    ) -> int:
         """Bound detailed RF evidence without touching mailbox or audit data."""
         if retention_ms < 60_000:
             raise ValueError("observation retention is too short")
@@ -1173,7 +1217,9 @@ class Database:
             return None
         return int(row["protocol_version"]), tuple(json.loads(row["capabilities_json"]))
 
-    def upsert_custody(self, message_id: str, custodian: str, status: str, detail: str = "") -> None:
+    def upsert_custody(
+        self, message_id: str, custodian: str, status: str, detail: str = ""
+    ) -> None:
         if status not in {"offered", "accepted", "retrieval_pending", "forwarded", "failed"}:
             raise ValueError("invalid custody status")
         self.connection.execute(
@@ -1223,7 +1269,11 @@ class Database:
         now = utc_now_ms()
         group_name = group_name.upper()[:32] if group_name.startswith("@") else ""
         protocol = "js8m" if protocol.lower() == "js8m" else "standard"
-        delivery = delivery if delivery in {"direct", "forwarded", "stored_collected", "group_broadcast"} else "direct"
+        delivery = (
+            delivery
+            if delivery in {"direct", "forwarded", "stored_collected", "group_broadcast"}
+            else "direct"
+        )
         self.connection.execute(
             "INSERT INTO inbox_messages(sender, message_id, body, total_parts, received_parts_json, complete, path, first_received_at_ms, updated_at_ms, group_name, protocol, delivery, subject) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sender, message_id) DO UPDATE SET body=excluded.body, "
@@ -1235,8 +1285,19 @@ class Database:
             "AND inbox_messages.received_parts_json=excluded.received_parts_json "
             "THEN inbox_messages.read_at_ms ELSE NULL END",
             (
-                sender.upper(), message_id, body, total_parts, json.dumps(received_parts),
-                int(complete), "→".join(path), now, now, group_name, protocol, delivery, subject[:120],
+                sender.upper(),
+                message_id,
+                body,
+                total_parts,
+                json.dumps(received_parts),
+                int(complete),
+                "→".join(path),
+                now,
+                now,
+                group_name,
+                protocol,
+                delivery,
+                subject[:120],
             ),
         )
         self.connection.commit()
@@ -1246,9 +1307,7 @@ class Database:
         if group_only:
             query += " WHERE group_name != ''"
         query += " ORDER BY updated_at_ms DESC"
-        rows = self.connection.execute(
-            query
-        ).fetchall()
+        rows = self.connection.execute(query).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
@@ -1302,6 +1361,7 @@ class Database:
             "SELECT sender, message_id, body FROM inbox_messages "
             "WHERE complete = 0 ORDER BY updated_at_ms DESC"
         ).fetchall()
+
         def comparable(value: str) -> str:
             value = re.sub(r"\[JS8MAIL/[^\]]+\]\s*", "", value, flags=re.IGNORECASE)
             value = re.sub(r"(?:…{2,}|\.{3,})\s*\d*\s*$", "", value)
@@ -1318,6 +1378,7 @@ class Database:
 
     def reconcile_forwarded_inbox_messages(self) -> int:
         """Merge complete forwarded copies into matching origin partials."""
+
         def comparable(value: str) -> str:
             value = re.sub(r"\[JS8MAIL/[^\]]+\]\s*", "", value, flags=re.IGNORECASE)
             value = re.sub(r"(?:…{2,}|\.{3,})\s*\d*\s*$", "", value)
@@ -1336,7 +1397,8 @@ class Database:
                 continue
             match = next(
                 (
-                    partial for partial in partials
+                    partial
+                    for partial in partials
                     if comparable(str(partial["body"]))
                     and (
                         complete_body.startswith(comparable(str(partial["body"])))
@@ -1356,9 +1418,14 @@ class Database:
                 "path = ?, protocol = ?, delivery = ?, updated_at_ms = ? "
                 "WHERE sender = ? AND message_id = ?",
                 (
-                    complete["body"], "[1]", "→".join(path), complete["protocol"],
+                    complete["body"],
+                    "[1]",
+                    "→".join(path),
+                    complete["protocol"],
                     "stored_collected" if len(path) > 1 else complete["delivery"],
-                    utc_now_ms(), sender, match["message_id"],
+                    utc_now_ms(),
+                    sender,
+                    match["message_id"],
                 ),
             )
             self.connection.execute(
@@ -1389,9 +1456,7 @@ class Database:
         )
         self.connection.commit()
 
-    def ensure_group(
-        self, name: str, description: str = "", *, subscribed: bool = False
-    ) -> None:
+    def ensure_group(self, name: str, description: str = "", *, subscribed: bool = False) -> None:
         now = utc_now_ms()
         self.connection.execute(
             "INSERT INTO groups(name, description, first_seen_at_ms, last_seen_at_ms, subscribed) VALUES (?, ?, ?, ?, ?) "
@@ -1406,7 +1471,9 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def prune_groups(self, *, now_ms: int | None = None, retention_ms: int = 30 * 24 * 60 * 60 * 1000) -> int:
+    def prune_groups(
+        self, *, now_ms: int | None = None, retention_ms: int = 30 * 24 * 60 * 60 * 1000
+    ) -> int:
         if retention_ms < 60_000:
             raise ValueError("group retention is too short")
         cutoff = (utc_now_ms() if now_ms is None else now_ms) - retention_ms
@@ -1426,9 +1493,7 @@ class Database:
         state from RX/TX observations only; configured groups (seen_count=0)
         are intentionally retained.
         """
-        rows = self.connection.execute(
-            "SELECT name FROM groups WHERE seen_count > 0"
-        ).fetchall()
+        rows = self.connection.execute("SELECT name FROM groups WHERE seen_count > 0").fetchall()
         removed = 0
         for row in rows:
             name = str(row[0]).upper()
@@ -1458,11 +1523,15 @@ class Database:
     ) -> None:
         from js8mail.application.lifecycle import MessageState, can_transition
 
-        row = self.connection.execute("SELECT state, retry_count FROM messages WHERE id = ?", (message_id,)).fetchone()
+        row = self.connection.execute(
+            "SELECT state, retry_count FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
         if row is None:
             raise KeyError(message_id)
         current = MessageState(row["state"])
-        if current != MessageState.WAITING_ROUTE and not can_transition(current, MessageState.WAITING_ROUTE):
+        if current != MessageState.WAITING_ROUTE and not can_transition(
+            current, MessageState.WAITING_ROUTE
+        ):
             raise ValueError(f"Cannot defer message in state {current}")
         now = utc_now_ms()
         self.connection.execute(
@@ -1482,7 +1551,9 @@ class Database:
         row = self.connection.execute(
             "SELECT next_attempt_at_ms FROM messages WHERE id = ?", (message_id,)
         ).fetchone()
-        return row is not None and (row["next_attempt_at_ms"] is None or row["next_attempt_at_ms"] <= utc_now_ms())
+        return row is not None and (
+            row["next_attempt_at_ms"] is None or row["next_attempt_at_ms"] <= utc_now_ms()
+        )
 
     def wake_message_for_route(self, message_id: str) -> None:
         """Make a waiting message due without changing its retry count or state."""
@@ -1495,7 +1566,9 @@ class Database:
         self.connection.commit()
 
     def delete_message(self, message_id: str) -> None:
-        row = self.connection.execute("SELECT state FROM messages WHERE id = ?", (message_id,)).fetchone()
+        row = self.connection.execute(
+            "SELECT state FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
         if row is None:
             raise KeyError(message_id)
         if row["state"] == "in_progress":

@@ -94,9 +94,7 @@ def parse_query_call_response(text: str) -> QueryCallResponse | None:
             age /= 60
         elif unit.upper() == "H":
             age *= 60
-    if (snr is not None and not -60 <= snr <= 60) or (
-        age is not None and age > 24 * 60
-    ):
+    if (snr is not None and not -60 <= snr <= 60) or (age is not None and age > 24 * 60):
         return None
     recipient = match.group("recipient")
     return QueryCallResponse(recipient.upper() if recipient else None, snr, age)
@@ -121,9 +119,9 @@ def correlate_query_call_response(
     active = [
         query
         for query in pending
-        if 0 <= now_ms - query.submitted_at_ms <= (
-            max_age_ms if allow_late else min(max_age_ms, query.response_window_ms)
-        )
+        if 0
+        <= now_ms - query.submitted_at_ms
+        <= (max_age_ms if allow_late else min(max_age_ms, query.response_window_ms))
         and (not band or not query.band or query.band.lower() == band)
     ]
     exact = [query for query in active if query.responder == responder]

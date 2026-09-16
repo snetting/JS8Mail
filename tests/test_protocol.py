@@ -11,22 +11,22 @@ from js8mail.adapters.js8call.protocol import (
 )
 from js8mail.domain import NormalizedEvent
 from js8mail.protocol import (
+    MessagePart,
     MultipartError,
-    contains_js8mail_marker,
     clean_user_message,
+    contains_js8mail_marker,
+    extract_envelope_subject,
+    extract_js8mail_control,
     find_capability,
     format_capability,
     format_delivery_ack,
+    format_human_data_part,
+    format_standard_user_payload,
+    is_js8mail_wire_frame,
     parse_ack,
     parse_capability,
     parse_delivery_ack,
-    extract_js8mail_control,
     parse_human_data_part,
-    is_js8mail_wire_frame,
-    extract_envelope_subject,
-    format_human_data_part,
-    format_standard_user_payload,
-    MessagePart,
 )
 
 
@@ -41,13 +41,9 @@ def test_capability_exchange_is_canonical_and_marker_is_only_passive_evidence() 
     assert parse_capability("j8m1 cap 1 mp,e2e") == (1, ("MP", "E2E"))
     assert contains_js8mail_marker("N0CALL MSG [JS8Mail/0.0.6] hello")
     assert not contains_js8mail_marker("N0CALL MSG JS8Mail hello")
-    assert find_capability("M0OUE: OH3SPN J8M1 CAP 1 E2E,MP,PA ♢") == (
-        1, ("E2E", "MP", "PA")
-    )
+    assert find_capability("M0OUE: OH3SPN J8M1 CAP 1 E2E,MP,PA ♢") == (1, ("E2E", "MP", "PA"))
     # JS8Call may concatenate adjacent activity fragments at a boundary.
-    assert find_capability("M0OUE: OH3SPNJ8M1 CAP 1E2E,MP,PA ♢") == (
-        1, ("E2E", "MP", "PA")
-    )
+    assert find_capability("M0OUE: OH3SPNJ8M1 CAP 1E2E,MP,PA ♢") == (1, ("E2E", "MP", "PA"))
 
 
 def test_decode_rejects_malformed_and_oversized_frames() -> None:
@@ -96,7 +92,10 @@ def test_enhanced_payload_with_spaces_is_parsed_without_losing_receipt() -> None
     assert parsed is not None
     part, origin, destination = parsed
     assert (part.message_id, part.number, part.total, part.payload) == (
-        "abc123", 1, 1, "TEST MESSAGE WITH SPACES"
+        "abc123",
+        1,
+        1,
+        "TEST MESSAGE WITH SPACES",
     )
     assert origin is None and destination is None
 
@@ -104,15 +103,13 @@ def test_enhanced_payload_with_spaces_is_parsed_without_losing_receipt() -> None
 def test_js8call_uppercase_wire_ids_correlate_with_lowercase_database_ids() -> None:
     from js8mail.protocol import parse_ack, parse_resend_request
 
-    assert parse_ack("J8M1 PA ABCDEF0123456789 1 1") == (
-        "part", "abcdef0123456789", "1"
-    )
+    assert parse_ack("J8M1 PA ABCDEF0123456789 1 1") == ("part", "abcdef0123456789", "1")
     assert parse_ack("J8M1 DELIVERED ABCDEF0123456789 123 OH3SPN,M0SPN") == (
-        "delivered", "abcdef0123456789", None
+        "delivered",
+        "abcdef0123456789",
+        None,
     )
-    assert parse_resend_request("J8M1 REQ ABCDEF0123456789 2 2") == (
-        "abcdef0123456789", 2, (2,)
-    )
+    assert parse_resend_request("J8M1 REQ ABCDEF0123456789 2 2") == ("abcdef0123456789", 2, (2,))
 
 
 def test_portable_callsigns_are_valid_in_envelopes_and_paths() -> None:
@@ -137,9 +134,10 @@ def test_enhanced_metadata_rejects_injected_ids_and_paths() -> None:
 
 
 def test_extract_control_normalizes_js8call_display_prefix() -> None:
-    assert extract_js8mail_control(
-        "OH3SPN J8M1 DELIVERED ABCDEF0123456789 123 OH3SPN,MM0SPN"
-    ) == "J8M1 DELIVERED ABCDEF0123456789 123 OH3SPN,MM0SPN"
+    assert (
+        extract_js8mail_control("OH3SPN J8M1 DELIVERED ABCDEF0123456789 123 OH3SPN,MM0SPN")
+        == "J8M1 DELIVERED ABCDEF0123456789 123 OH3SPN,MM0SPN"
+    )
     with pytest.raises(MultipartError):
         format_delivery_ack("abc", 123, ("OH3SPN", "bad call"))
 
@@ -206,12 +204,16 @@ def test_parse_direct_and_relayed_legacy_ack() -> None:
     assert parse_legacy_ack(relayed) == ("MM0ZFG", ("OH3SPN", "MM0ZFG"))
 
     # An ordinary relayed text is not an ACK and must not complete mail.
-    assert parse_legacy_ack(
-        normalize_directed_event(
-            NormalizedEvent(
-                "RX.DIRECTED", "OH3SPN> MM0ZFG>J8M1 CAP 1 E2E", {
-                    "FROM": "IZ1KJG", "TO": "OH3SPN", "CMD": ">"
-                }, 1
+    assert (
+        parse_legacy_ack(
+            normalize_directed_event(
+                NormalizedEvent(
+                    "RX.DIRECTED",
+                    "OH3SPN> MM0ZFG>J8M1 CAP 1 E2E",
+                    {"FROM": "IZ1KJG", "TO": "OH3SPN", "CMD": ">"},
+                    1,
+                )
             )
         )
-    ) is None
+        is None
+    )

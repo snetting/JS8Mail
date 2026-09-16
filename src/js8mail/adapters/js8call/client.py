@@ -112,6 +112,7 @@ class Js8CallClient:
 
                 async def dispatch(current_event: NormalizedEvent = event) -> None:
                     await handler(current_event)
+
                 task: asyncio.Task[None] = asyncio.create_task(dispatch())
                 self._event_tasks.add(task)
                 task.add_done_callback(self._event_tasks.discard)
@@ -145,7 +146,11 @@ class Js8CallClient:
             queue = await self.request_read_only("TX.GET_QUEUE_DEPTH")
         except (ConnectionError, TimeoutError, RuntimeError):
             queue = None
-        if queue is not None and queue.type == "TX.QUEUE_DEPTH" and int(queue.params.get("DEPTH", 0)) > 0:
+        if (
+            queue is not None
+            and queue.type == "TX.QUEUE_DEPTH"
+            and int(queue.params.get("DEPTH", 0)) > 0
+        ):
             raise RuntimeError("JS8Call transmit queue is occupied")
         request_id = self._request_id()
         # JS8Call's automatic API path is TX.SEND_MESSAGE with the text in

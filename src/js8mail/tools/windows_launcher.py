@@ -14,8 +14,7 @@ def windows_main() -> None:
     if "--open-browser" not in arguments:
         arguments.append("--open-browser")
     if not any(
-        argument == "--database" or argument.startswith("--database=")
-        for argument in arguments
+        argument == "--database" or argument.startswith("--database=") for argument in arguments
     ):
         executable_dir = Path(sys.executable).resolve().parent
         arguments.extend(("--database", str(executable_dir / "js8mail.sqlite3")))

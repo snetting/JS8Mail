@@ -128,12 +128,8 @@ def test_fresh_direct_response_guard_uses_current_band(tmp_path) -> None:
         band="20m",
     )
 
-    assert fresh_direct_response_age_ms(
-        service, "OH3SPN", "M0SPN", "20m", now_ms=11_000
-    ) == 1_000
-    assert fresh_direct_response_age_ms(
-        service, "OH3SPN", "M0SPN", "40m", now_ms=11_000
-    ) is None
+    assert fresh_direct_response_age_ms(service, "OH3SPN", "M0SPN", "20m", now_ms=11_000) == 1_000
+    assert fresh_direct_response_age_ms(service, "OH3SPN", "M0SPN", "40m", now_ms=11_000) is None
     database.close()
 
 
@@ -168,12 +164,8 @@ async def test_selected_multi_hop_plan_reaches_fake_radio(tmp_path, monkeypatch)
 
     await handler.transmit(message_id, plan)
 
-    assert radio.sent == [
-        "MM0ZFG>SP2ST>MSG J8M1 D " + message_id + " 1/1 {S:route}| test path"
-    ]
-    assert database.attempted_message_paths(message_id) == {
-        ("OH3SPN", "MM0ZFG", "SP2ST")
-    }
+    assert radio.sent == ["MM0ZFG>SP2ST>MSG J8M1 D " + message_id + " 1/1 {S:route}| test path"]
+    assert database.attempted_message_paths(message_id) == {("OH3SPN", "MM0ZFG", "SP2ST")}
     database.close()
 
 
@@ -312,7 +304,9 @@ async def test_stale_multi_hop_route_probes_first_hop_before_payload(tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(tmp_path, monkeypatch) -> None:
+async def test_unknown_peer_capability_waits_then_falls_back_to_plain_message(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
@@ -375,8 +369,13 @@ async def test_multipart_sender_waits_for_part_ack_before_next_part(tmp_path, mo
     handler = object.__new__(Handler)
     handler.service = service
     handler.client = radio
-    handler.status = {"callsign": "OH3SPN", "tx_mode": "automatic", "paused": False,
-                      "speed": 0, "band": "20m"}
+    handler.status = {
+        "callsign": "OH3SPN",
+        "tx_mode": "automatic",
+        "paused": False,
+        "speed": 0,
+        "band": "20m",
+    }
     handler.announced_destinations = set()
     handler.airtime_budget = AirtimeBudget()
     handler.message_budgets = {}
@@ -402,7 +401,9 @@ async def test_multipart_sender_waits_for_part_ack_before_next_part(tmp_path, mo
 def test_receipt_path_is_origin_to_destination() -> None:
     assert delivery_path_for_receipt("OH3SPN", "M0SPN", ()) == ("OH3SPN", "M0SPN")
     assert delivery_path_for_receipt("OH3SPN", "M0SPN", ("M0SPN", "R1", "OH3SPN")) == (
-        "OH3SPN", "R1", "M0SPN"
+        "OH3SPN",
+        "R1",
+        "M0SPN",
     )
 
 
@@ -415,8 +416,14 @@ def test_part_ack_advances_durable_stop_and_wait_without_transmitting(tmp_path) 
     database.transition_message(message_id, "waiting_route")
     database.transition_message(message_id, "in_progress")
     transaction_id = database.begin_transmission_transaction(
-        message_id, "multipart", "N0CALL", "N0CALL", ("OH3SPN", "N0CALL"),
-        "hash", 30_000, 480_000,
+        message_id,
+        "multipart",
+        "N0CALL",
+        "N0CALL",
+        ("OH3SPN", "N0CALL"),
+        "hash",
+        30_000,
+        480_000,
     )
     database.mark_transmission_submitted(transaction_id)
     receipt = parse_part_ack(f"J8M1 PA {message_id.upper()} 3 1")
@@ -431,7 +438,9 @@ def test_part_ack_advances_durable_stop_and_wait_without_transmitting(tmp_path) 
 
 
 @pytest.mark.asyncio
-async def test_opportunistic_unknown_peer_sends_plain_message_without_capability_probe(tmp_path, monkeypatch) -> None:
+async def test_opportunistic_unknown_peer_sends_plain_message_without_capability_probe(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
@@ -463,8 +472,7 @@ async def test_opportunistic_unknown_peer_sends_plain_message_without_capability
 
     assert radio.sent == ["N0CALL MSG first contact: hello ordinary station [JS8Mail/0.0.7]"]
     assert not any(
-        attempt["action"] == "capability_wait"
-        for attempt in database.list_attempts(message_id)
+        attempt["action"] == "capability_wait" for attempt in database.list_attempts(message_id)
     )
     database.close()
 
@@ -483,8 +491,12 @@ async def test_store_offer_uses_readable_text_for_unknown_custodian(tmp_path, mo
     handler.service = service
     handler.client = radio
     handler.status = {
-        "callsign": "OH3SPN", "tx_mode": "automatic", "paused": False,
-        "speed": 0, "band": "20m", "js8_activity_until_ms": 0,
+        "callsign": "OH3SPN",
+        "tx_mode": "automatic",
+        "paused": False,
+        "speed": 0,
+        "band": "20m",
+        "js8_activity_until_ms": 0,
     }
     handler.airtime_budget = AirtimeBudget()
     handler.message_budgets = {}
@@ -495,15 +507,15 @@ async def test_store_offer_uses_readable_text_for_unknown_custodian(tmp_path, mo
 
     await handler.transmit_store(message_id, "CUST")
 
-    assert radio.sent == [
-        "CUST MSG TO:N0CALL first contact: hello ordinary station"
-    ]
+    assert radio.sent == ["CUST MSG TO:N0CALL first contact: hello ordinary station"]
     assert "standard-readable" in database.list_attempts(message_id)[-1]["detail"]
     database.close()
 
 
 @pytest.mark.asyncio
-async def test_store_offer_uses_enhanced_envelope_for_capable_custodian(tmp_path, monkeypatch) -> None:
+async def test_store_offer_uses_enhanced_envelope_for_capable_custodian(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
@@ -517,8 +529,12 @@ async def test_store_offer_uses_enhanced_envelope_for_capable_custodian(tmp_path
     handler.service = service
     handler.client = radio
     handler.status = {
-        "callsign": "OH3SPN", "tx_mode": "automatic", "paused": False,
-        "speed": 0, "band": "20m", "js8_activity_until_ms": 0,
+        "callsign": "OH3SPN",
+        "tx_mode": "automatic",
+        "paused": False,
+        "speed": 0,
+        "band": "20m",
+        "js8_activity_until_ms": 0,
     }
     handler.airtime_budget = AirtimeBudget()
     handler.message_budgets = {}
@@ -540,7 +556,9 @@ async def test_store_offer_uses_enhanced_envelope_for_capable_custodian(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_standard_mode_sends_plain_message_without_capability_probe(tmp_path, monkeypatch) -> None:
+async def test_standard_mode_sends_plain_message_without_capability_probe(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_TX_GAP_MS", 0)
     monkeypatch.setattr("js8mail.tools.app.AUTOMATED_RX_WINDOW_MS", 0)
     database = Database(tmp_path / "mail.sqlite3")
@@ -551,8 +569,12 @@ async def test_standard_mode_sends_plain_message_without_capability_probe(tmp_pa
     handler.service = service
     handler.client = radio
     handler.status = {
-        "callsign": "OH3SPN", "tx_mode": "automatic", "paused": False,
-        "speed": 0, "band": "20m", "js8_activity_until_ms": 0,
+        "callsign": "OH3SPN",
+        "tx_mode": "automatic",
+        "paused": False,
+        "speed": 0,
+        "band": "20m",
+        "js8_activity_until_ms": 0,
         "enhanced_mode": "standard",
     }
     handler.announced_destinations = set()

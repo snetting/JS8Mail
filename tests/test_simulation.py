@@ -20,8 +20,12 @@ def test_three_hop_multipart_recovers_one_missing_part() -> None:
 
 def test_group_broadcast_deduplicates_and_limits_ack_to_designated_station() -> None:
     simulation = DeterministicRadioSimulation("ORIGIN", "A", "B", "COORD")
-    first = simulation.group_broadcast("g1", "@EMCOMM", "Need assistance", ("A", "B"), designated_ack="COORD")
-    second = simulation.group_broadcast("g1", "@EMCOMM", "Need assistance", ("A", "B"), designated_ack="COORD")
+    first = simulation.group_broadcast(
+        "g1", "@EMCOMM", "Need assistance", ("A", "B"), designated_ack="COORD"
+    )
+    second = simulation.group_broadcast(
+        "g1", "@EMCOMM", "Need assistance", ("A", "B"), designated_ack="COORD"
+    )
     assert len(first) == 3
     assert len(second) == 3
     assert sum(item.target == "ORIGIN" for item in second) == 1

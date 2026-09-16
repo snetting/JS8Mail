@@ -22,7 +22,11 @@ class MailService:
         self.database = database
 
     def compose(
-        self, destination: str, subject: str, body: str, priority: int = 0,
+        self,
+        destination: str,
+        subject: str,
+        body: str,
+        priority: int = 0,
         enhanced_mode: str | None = None,
     ) -> str:
         destination = destination.strip().upper()
@@ -96,7 +100,9 @@ class MailService:
             (MessageState.QUEUED, utc_now_ms(), message_id),
         )
         self.database.connection.commit()
-        self.database.record_attempt(message_id, "manual_retry", "route", "requested", "operator requested immediate retry")
+        self.database.record_attempt(
+            message_id, "manual_retry", "route", "requested", "operator requested immediate retry"
+        )
 
     def delete(self, message_id: str) -> None:
         try:
@@ -201,8 +207,7 @@ class MailService:
             elif any(item["status"] == "accepted" for item in view["custody"]):
                 view["confidence"] = "stored_at_custodian"
             elif any(
-                attempt["action"] in {"hop_ack", "standard_ack"}
-                and attempt["status"] == "received"
+                attempt["action"] in {"hop_ack", "standard_ack"} and attempt["status"] == "received"
                 for attempt in attempts
             ):
                 view["confidence"] = "radio_acknowledged"
@@ -231,7 +236,8 @@ class MailService:
                     }
                     detail = str(latest_attempt.get("detail") or "").lower()
                     discovery_defer = action == "defer" and any(
-                        word in detail for word in ("route", "query", "probe", "discovery", "listening")
+                        word in detail
+                        for word in ("route", "query", "probe", "discovery", "listening")
                     )
                     if status == "submitted" and action in delivery_actions:
                         view["confidence"] = (
@@ -240,7 +246,9 @@ class MailService:
                             else "awaiting_delivery_ack"
                         )
                     elif action in {
-                        "delivery_timeout", "store_timeout", "relay_forward_timeout"
+                        "delivery_timeout",
+                        "store_timeout",
+                        "relay_forward_timeout",
                     } or (status in {"uncertain", "deferred"} and not discovery_defer):
                         view["confidence"] = "delivery_uncertain"
                     elif action in discovery_actions or action == "defer" or discovery_defer:
@@ -256,7 +264,9 @@ class MailService:
             views.append(view)
         return views
 
-    def message_graph(self, message_id: str, origin: str, band: str | None = None) -> dict[str, object]:
+    def message_graph(
+        self, message_id: str, origin: str, band: str | None = None
+    ) -> dict[str, object]:
         message = self.database.get_message(message_id)
         if message is None:
             raise KeyError(message_id)
@@ -279,7 +289,14 @@ class MailService:
             key = (source, target)
             edge = edges.setdefault(
                 key,
-                {"from": source, "to": target, "kind": "observed", "count": 0, "latest": 0, "snr": None},
+                {
+                    "from": source,
+                    "to": target,
+                    "kind": "observed",
+                    "count": 0,
+                    "latest": 0,
+                    "snr": None,
+                },
             )
             edge["count"] = int(edge["count"]) + 1
             edge["latest"] = max(int(edge["latest"]), int(observation["observed_at_ms"]))
@@ -295,7 +312,14 @@ class MailService:
             key = (origin, target)
             edge = edges.setdefault(
                 key,
-                {"from": origin, "to": target, "kind": "attempted", "count": 0, "latest": 0, "snr": None},
+                {
+                    "from": origin,
+                    "to": target,
+                    "kind": "attempted",
+                    "count": 0,
+                    "latest": 0,
+                    "snr": None,
+                },
             )
             if attempt["status"] in {"received", "available"}:
                 edge["kind"] = "confirmed"
@@ -360,15 +384,13 @@ class MailService:
                 destination = destination.strip().upper()
             else:
                 destination = (local_callsign or "").strip().upper()
-            if (
-                not destination
-                or destination.startswith("@")
-                or source == destination
-            ):
+            if not destination or destination.startswith("@") or source == destination:
                 continue
             nodes.update((source, destination))
             key = (source, destination)
-            item = directions.setdefault(key, {"latest": 0, "count": 0, "active": 0, "js8m": False, "snr": None})
+            item = directions.setdefault(
+                key, {"latest": 0, "count": 0, "active": 0, "js8m": False, "snr": None}
+            )
             item["latest"] = max(int(item["latest"]), int(observation["observed_at_ms"]))
             item["count"] = int(item["count"]) + 1
             if age_ms <= 10 * 60 * 1000:
@@ -387,7 +409,9 @@ class MailService:
             now - max_age_ms, band=band
         ):
             try:
-                path = tuple(str(item).strip().upper() for item in json.loads(transaction["path_json"]))
+                path = tuple(
+                    str(item).strip().upper() for item in json.loads(transaction["path_json"])
+                )
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
             path = tuple(item for item in path if item and not item.startswith("@"))
@@ -424,8 +448,11 @@ class MailService:
             source = str(link.get("source", "")).strip().upper()
             destination = str(link.get("destination", "")).strip().upper()
             if (
-                not source or not destination or source == destination
-                or source.startswith("@") or destination.startswith("@")
+                not source
+                or not destination
+                or source == destination
+                or source.startswith("@")
+                or destination.startswith("@")
             ):
                 continue
             latest = int(link.get("last_observed_at_ms") or 0)
@@ -441,12 +468,12 @@ class MailService:
             item["count"] = max(int(item["count"]), int(link.get("observation_count") or 0))
             if age_ms <= 10 * 60 * 1000:
                 item["active"] = max(int(item["active"]), 1)
-            item["js8m"] = bool(
-                item["js8m"] or int(link.get("js8m_observation_count") or 0) > 0
-            )
+            item["js8m"] = bool(item["js8m"] or int(link.get("js8m_observation_count") or 0) > 0)
             link_snr = link.get("max_snr")
             if isinstance(link_snr, (int, float)):
-                item["snr"] = link_snr if item["snr"] is None else max(float(item["snr"]), float(link_snr))
+                item["snr"] = (
+                    link_snr if item["snr"] is None else max(float(item["snr"]), float(link_snr))
+                )
         edges: list[dict[str, object]] = []
         pairs: dict[tuple[str, str], list[tuple[str, str]]] = {}
         for source, destination in directions:
@@ -458,20 +485,32 @@ class MailService:
             latest = max(int(forward.get("latest", 0)), int(reverse.get("latest", 0)))
             age_ms = max(0, now - latest)
             freshness = max(0.05, 1.0 - age_ms / max_age_ms)
-            reciprocal = bool(forward and reverse and min(int(forward["latest"]), int(reverse["latest"])) >= now - 10 * 60 * 1000)
+            reciprocal = bool(
+                forward
+                and reverse
+                and min(int(forward["latest"]), int(reverse["latest"])) >= now - 10 * 60 * 1000
+            )
             active_count = max(int(forward.get("active", 0)), int(reverse.get("active", 0)))
-            kind = "reciprocal" if reciprocal else ("active_one_way" if active_count >= 2 else "isolated_one_way")
+            kind = (
+                "reciprocal"
+                if reciprocal
+                else ("active_one_way" if active_count >= 2 else "isolated_one_way")
+            )
             js8m = bool(forward.get("js8m", False) or reverse.get("js8m", False))
-            edges.append({
-                "from": left,
-                "to": right,
-                "kind": kind,
-                "age_seconds": age_ms // 1000,
-                "freshness": round(freshness, 3),
-                "snr": forward.get("snr") if forward.get("snr") is not None else reverse.get("snr"),
-                "observations": sum(int(directions[key]["count"]) for key in directed_keys),
-                "js8m": js8m,
-            })
+            edges.append(
+                {
+                    "from": left,
+                    "to": right,
+                    "kind": kind,
+                    "age_seconds": age_ms // 1000,
+                    "freshness": round(freshness, 3),
+                    "snr": forward.get("snr")
+                    if forward.get("snr") is not None
+                    else reverse.get("snr"),
+                    "observations": sum(int(directions[key]["count"]) for key in directed_keys),
+                    "js8m": js8m,
+                }
+            )
         return {"band": band, "generated_at_ms": now, "nodes": sorted(nodes), "edges": edges}
 
     def station_views(
@@ -508,10 +547,16 @@ class MailService:
                     if observed >= int(item["last_seen_ms"]):
                         item["last_seen_ms"] = observed
                     if isinstance(snr, (int, float)):
-                        item["snr"] = snr if item["snr"] is None else max(float(item["snr"]), float(snr))
+                        item["snr"] = (
+                            snr if item["snr"] is None else max(float(item["snr"]), float(snr))
+                        )
                     evidence = item["evidence"]
                     assert isinstance(evidence, set)
-                    evidence.add("direct" if observation["event_type"] != "QUERY.CALL.RESPONSE" else "remote_report")
+                    evidence.add(
+                        "direct"
+                        if observation["event_type"] != "QUERY.CALL.RESPONSE"
+                        else "remote_report"
+                    )
             if isinstance(target, str) and target and not target.startswith("@"):
                 call = target.upper()
                 if call != excluded:
@@ -528,7 +573,9 @@ class MailService:
                     if observed >= int(item["last_seen_ms"]):
                         item["last_seen_ms"] = observed
                     if isinstance(snr, (int, float)):
-                        item["snr"] = snr if item["snr"] is None else max(float(item["snr"]), float(snr))
+                        item["snr"] = (
+                            snr if item["snr"] is None else max(float(item["snr"]), float(snr))
+                        )
                     evidence = item["evidence"]
                     assert isinstance(evidence, set)
                     evidence.add("reported_target")
@@ -542,7 +589,10 @@ class MailService:
         return result[: max(1, min(limit, 100))]
 
     def recently_heard(
-        self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000,
+        self,
+        callsign: str,
+        now_ms: int | None = None,
+        window_ms: int = 600_000,
         band: str | None = None,
     ) -> bool:
         return self.recent_heard_age_ms(callsign, now_ms, window_ms, band) is not None
@@ -552,7 +602,10 @@ class MailService:
         return self.database.peer_capabilities(callsign.strip()) is not None
 
     def recent_heard_age_ms(
-        self, callsign: str, now_ms: int | None = None, window_ms: int = 600_000,
+        self,
+        callsign: str,
+        now_ms: int | None = None,
+        window_ms: int = 600_000,
         band: str | None = None,
     ) -> int | None:
         """Return the age of the freshest recent direct observation, if any.
@@ -596,7 +649,10 @@ class MailService:
         window_ms: int = 600_000,
         band: str | None = None,
     ) -> bool:
-        return self.recent_answered_age_ms(callsign, local_callsign, now_ms, window_ms, band) is not None
+        return (
+            self.recent_answered_age_ms(callsign, local_callsign, now_ms, window_ms, band)
+            is not None
+        )
 
     def recent_answered_age_ms(
         self,
@@ -631,7 +687,10 @@ class MailService:
         return freshest
 
     def promising_stations(
-        self, destination: str, now_ms: int | None = None, window_ms: int = 600_000,
+        self,
+        destination: str,
+        now_ms: int | None = None,
+        window_ms: int = 600_000,
         band: str | None = None,
     ) -> list[str]:
         wanted = destination.strip().upper()

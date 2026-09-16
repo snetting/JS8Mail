@@ -36,4 +36,6 @@ def extract_groups(*values: str) -> tuple[str, ...]:
 
 def default_group_description(group: str) -> str:
     wanted = group.upper()
-    return next((description for name, description in DEFAULT_GROUPS if name == wanted), "observed group")
+    return next(
+        (description for name, description in DEFAULT_GROUPS if name == wanted), "observed group"
+    )

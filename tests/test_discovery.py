@@ -25,9 +25,7 @@ def test_standard_query_forms_are_bounded_and_normalized() -> None:
     assert parse_messages_available("NO") is None
     assert parse_query_call_response("OH3SPN YES") == QueryCallResponse("OH3SPN")
     assert parse_query_call_response("OH3SPN YES …… ♢") == QueryCallResponse("OH3SPN")
-    assert parse_query_call_response("OH3SPN YES -08 (1M)") == QueryCallResponse(
-        "OH3SPN", -8, 1
-    )
+    assert parse_query_call_response("OH3SPN YES -08 (1M)") == QueryCallResponse("OH3SPN", -8, 1)
     assert parse_query_call_response("OH3SPN YES -25 (33M…… ♢") == QueryCallResponse(
         "OH3SPN", -25, 33
     )
@@ -43,26 +41,21 @@ def test_compact_yes_without_repeated_recipient_is_valid() -> None:
 
 
 def test_query_call_response_uses_unambiguous_outstanding_context() -> None:
-    pending = [
-        PendingCallQuery(1_000, "SP2ST", "MM0ZFG", "candidate-query:MM0ZFG:SP2ST", "20m")
-    ]
-    assert correlate_query_call_response(
-        pending, "MM0ZFG", now_ms=2_000, band="20m"
-    ) == pending[0]
+    pending = [PendingCallQuery(1_000, "SP2ST", "MM0ZFG", "candidate-query:MM0ZFG:SP2ST", "20m")]
+    assert correlate_query_call_response(pending, "MM0ZFG", now_ms=2_000, band="20m") == pending[0]
 
     ambiguous = [
         PendingCallQuery(1_000, "SP2ST", "@ALLCALL", "call-query:SP2ST", "20m"),
         PendingCallQuery(1_500, "G0ABC", "@ALLCALL", "call-query:G0ABC", "20m"),
     ]
-    assert correlate_query_call_response(
-        ambiguous, "MM0ZFG", now_ms=2_000, band="20m"
-    ) is None
-    assert correlate_query_call_response(
-        pending, "MM0ZFG", now_ms=200_000, band="20m"
-    ) is None
-    assert correlate_query_call_response(
-        pending, "MM0ZFG", now_ms=200_000, band="20m", max_age_ms=300_000, allow_late=True
-    ) == pending[0]
+    assert correlate_query_call_response(ambiguous, "MM0ZFG", now_ms=2_000, band="20m") is None
+    assert correlate_query_call_response(pending, "MM0ZFG", now_ms=200_000, band="20m") is None
+    assert (
+        correlate_query_call_response(
+            pending, "MM0ZFG", now_ms=200_000, band="20m", max_age_ms=300_000, allow_late=True
+        )
+        == pending[0]
+    )
 
 
 def test_empty_queries_back_off_exponentially_and_success_resets() -> None:

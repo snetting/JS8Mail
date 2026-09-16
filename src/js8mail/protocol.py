@@ -8,8 +8,8 @@ honest delivery evidence.
 from __future__ import annotations
 
 import re
-from urllib.parse import quote, unquote
 from dataclasses import dataclass
+from urllib.parse import quote, unquote
 
 MAX_PARTS = 255
 MAX_PART_BYTES = 4096
@@ -33,9 +33,7 @@ _MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _STATION_RE = re.compile(r"^[A-Z0-9/]{1,16}$")
 _ADDRESS_RE = re.compile(r"^@?[A-Z0-9/]{1,16}$")
 _SUBJECT_PREFIX_RE = re.compile(r"^\{S:([A-Za-z0-9._~%+-]{1,240})\}\|\s*", re.IGNORECASE)
-_CONTROL_FRAME_RE = re.compile(
-    r"\bJ8M1\s+(?:CAP|PA|REQ|DELIVERED)\b.*$", re.IGNORECASE
-)
+_CONTROL_FRAME_RE = re.compile(r"\bJ8M1\s+(?:CAP|PA|REQ|DELIVERED)\b.*$", re.IGNORECASE)
 
 
 def canonical_message_id(message_id: str) -> str:
@@ -112,9 +110,7 @@ def is_js8mail_wire_frame(text: str) -> bool:
     normalized = text.strip()
     if re.match(r"^MSG(?=J8M1\s)", normalized, re.IGNORECASE):
         normalized = normalized[3:].lstrip()
-    return bool(re.match(
-        r"^J8M1\s+(?:CAP|D|PA|REQ|DELIVERED)\b", normalized, re.IGNORECASE
-    ))
+    return bool(re.match(r"^J8M1\s+(?:CAP|D|PA|REQ|DELIVERED)\b", normalized, re.IGNORECASE))
 
 
 def extract_js8mail_control(text: str) -> str | None:
@@ -141,7 +137,7 @@ def extract_envelope_subject(payload: str) -> tuple[str, str]:
         subject = unquote(match.group(1))
     except ValueError:
         return "", payload
-    return (subject[:120], payload[match.end():]) if subject else ("", payload[match.end():])
+    return (subject[:120], payload[match.end() :]) if subject else ("", payload[match.end() :])
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,13 +291,13 @@ def parse_resend_request(text: str) -> tuple[str, int, tuple[int, ...]] | None:
     return canonical_message_id(message_id), total, missing
 
 
-def format_delivery_ack(
-    message_id: str, delivered_at_ms: int, path: tuple[str, ...] = ()
-) -> str:
+def format_delivery_ack(message_id: str, delivered_at_ms: int, path: tuple[str, ...] = ()) -> str:
     """Format an end-to-end delivery receipt for the original sender."""
     if _MESSAGE_ID_RE.fullmatch(message_id) is None:
         raise MultipartError("invalid message id")
-    if delivered_at_ms < 0 or any(_STATION_RE.fullmatch(station.upper()) is None for station in path):
+    if delivered_at_ms < 0 or any(
+        _STATION_RE.fullmatch(station.upper()) is None for station in path
+    ):
         raise MultipartError("invalid delivery metadata")
     path_text = ",".join(path[:8]) or "?"
     result = f"J8M1 DELIVERED {message_id} {delivered_at_ms} {path_text}"
@@ -323,8 +319,13 @@ def parse_delivery_ack(text: str) -> tuple[str, int, tuple[str, ...]] | None:
     except ValueError:
         return None
     path = tuple(path_text.split(","))
-    if delivered_at_ms < 0 or len(path) > 8 or (
-        path != ("?",) and any(_STATION_RE.fullmatch(station.upper()) is None for station in path)
+    if (
+        delivered_at_ms < 0
+        or len(path) > 8
+        or (
+            path != ("?",)
+            and any(_STATION_RE.fullmatch(station.upper()) is None for station in path)
+        )
     ):
         return None
     return canonical_message_id(message_id), delivered_at_ms, path
@@ -363,12 +364,15 @@ def format_human_data_part(
         encoded_subject = quote(subject[:120], safe="._~-")
         payload = f"{{S:{encoded_subject}}}| {payload}"
     if origin or destination:
-        if not origin or not destination or any(
-            _ADDRESS_RE.fullmatch(value.upper()) is None
-            for value in (origin, destination)
+        if (
+            not origin
+            or not destination
+            or any(_ADDRESS_RE.fullmatch(value.upper()) is None for value in (origin, destination))
         ):
             raise MultipartError("invalid multipart route context")
-        result = f"J8M1 D {origin} {destination} {part.message_id} {part.number}/{part.total} {payload}"
+        result = (
+            f"J8M1 D {origin} {destination} {part.message_id} {part.number}/{part.total} {payload}"
+        )
     else:
         result = f"J8M1 D {part.message_id} {part.number}/{part.total} {payload}"
     if len(result.encode()) > MAX_FRAME_BYTES:
@@ -406,7 +410,9 @@ def parse_human_data_part(
     return part, origin, destination
 
 
-def split_human_message(message_id: str, body: str, chunk_bytes: int = 180) -> tuple[MessagePart, ...]:
+def split_human_message(
+    message_id: str, body: str, chunk_bytes: int = 180
+) -> tuple[MessagePart, ...]:
     """Split readable data into bounded JS8Mail parts for enhanced peers."""
     if chunk_bytes < 32 or chunk_bytes > MAX_PART_BYTES:
         raise MultipartError("invalid part size")
@@ -427,7 +433,9 @@ def split_human_message(message_id: str, body: str, chunk_bytes: int = 180) -> t
     total = len(chunks)
     if not total:
         raise MultipartError("message body is empty")
-    return tuple(MessagePart(message_id, number, total, payload) for number, payload in enumerate(chunks, 1))
+    return tuple(
+        MessagePart(message_id, number, total, payload) for number, payload in enumerate(chunks, 1)
+    )
 
 
 def format_ordinary_message(destination: str, body: str, announce: bool = False) -> str:

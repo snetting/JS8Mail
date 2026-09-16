@@ -116,8 +116,7 @@ def capability_response_window_ms(path: tuple[str, ...], speed: object) -> int:
     # Start this window after the outbound CAP train has actually finished.
     return min(
         CAPABILITY_MAX_RESPONSE_MS,
-        max(CAPABILITY_RESPONSE_DEADLINE_MS, 3 * cycle_ms + 60_000)
-        + (hops - 1) * 2 * cycle_ms,
+        max(CAPABILITY_RESPONSE_DEADLINE_MS, 3 * cycle_ms + 60_000) + (hops - 1) * 2 * cycle_ms,
     )
 
 
@@ -294,7 +293,9 @@ def _recent_outbound_transaction(
     target the same responder, refuse to guess.
     """
     candidates = database.pending_transmission_for_ack(source, now_ms)
-    live = [item for item in candidates if item["status"] in {"queued", "tx_active", "awaiting_ack"}]
+    live = [
+        item for item in candidates if item["status"] in {"queued", "tx_active", "awaiting_ack"}
+    ]
     if len(live) > 1:
         return None
     chosen = live or candidates
@@ -337,8 +338,7 @@ def complete_rf_train(
         )
     database.audit(
         "radio.tx_train_completed",
-        {"message_id": message_on_air, "on_air_ms": actual_ms,
-         "reserved_ms": reserved_ms},
+        {"message_id": message_on_air, "on_air_ms": actual_ms, "reserved_ms": reserved_ms},
     )
     transaction_id = controller.active_transaction_id
     if transaction_id is not None:
@@ -349,8 +349,11 @@ def complete_rf_train(
             message = database.get_message(message_id)
             if message is not None and message["state"] == MessageState.IN_PROGRESS:
                 database.record_attempt(
-                    message_id, "group_broadcast", str(transaction["target"]),
-                    "complete", "RF broadcast completed; no recipient ACK expected",
+                    message_id,
+                    "group_broadcast",
+                    str(transaction["target"]),
+                    "complete",
+                    "RF broadcast completed; no recipient ACK expected",
                 )
                 database.transition_message(message_id, MessageState.DELIVERED)
         else:
@@ -359,8 +362,10 @@ def complete_rf_train(
     capability_message_id = status.get("pending_capability_message_id")
     if capability_message_id:
         database.record_attempt(
-            str(capability_message_id), "capability_tx",
-            str(status.get("pending_capability_peer") or ""), "complete",
+            str(capability_message_id),
+            "capability_tx",
+            str(status.get("pending_capability_peer") or ""),
+            "complete",
             "CAP RF transmission completed; response window begins now",
         )
         status["pending_capability_message_id"] = None
@@ -388,35 +393,34 @@ def reconcile_part_receipt(
     """Durably accept a cumulative PA and wake only the next missing part."""
     message_id = str(message["id"])
     if source.upper() != str(message["destination"]).upper():
-        database.audit("message.part_ack_ignored", {
-            "message_id": message_id, "reason": "unexpected source"
-        })
+        database.audit(
+            "message.part_ack_ignored", {"message_id": message_id, "reason": "unexpected source"}
+        )
         return False
     parts = split_human_message(message_id, str(message["body"]))
     if receipt.total != len(parts):
-        database.audit("message.part_ack_ignored", {
-            "message_id": message_id, "reason": "total mismatch"
-        })
+        database.audit(
+            "message.part_ack_ignored", {"message_id": message_id, "reason": "total mismatch"}
+        )
         return False
-    changed = database.merge_outgoing_part_receipt(
-        message_id, receipt.total, receipt.received
-    )
+    changed = database.merge_outgoing_part_receipt(message_id, receipt.total, receipt.received)
     detail = f"received {len(receipt.received)}/{receipt.total} parts"
     if receipt.missing:
         detail += f"; pending {','.join(map(str, receipt.missing))}"
     database.record_attempt(message_id, "hop_ack", source, "received", detail)
-    if changed and receipt.missing and message["state"] in {
-        MessageState.IN_PROGRESS, MessageState.WAITING_ROUTE
-    }:
+    if (
+        changed
+        and receipt.missing
+        and message["state"] in {MessageState.IN_PROGRESS, MessageState.WAITING_ROUTE}
+    ):
         transactions = database.list_transmission_transactions(message_id)
-        if transactions and transactions[-1]["status"] in {
-            "queued", "tx_active", "awaiting_ack"
-        }:
+        if transactions and transactions[-1]["status"] in {"queued", "tx_active", "awaiting_ack"}:
             database.acknowledge_transmission(int(transactions[-1]["id"]))
         if message["state"] == MessageState.IN_PROGRESS:
             database.transition_message(message_id, MessageState.WAITING_ROUTE)
         database.wake_message_for_route(message_id)
     return changed
+
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>JS8Mail</title><style>
@@ -664,8 +668,7 @@ class Handler(BaseHTTPRequestHandler):
             observations = self.service.database.recent_observations(60)
             noisy_events = {"RIG.PTT", "TX.FRAME"}
             visible = [
-                item for item in observations
-                if str(item.get("event_type", "")) not in noisy_events
+                item for item in observations if str(item.get("event_type", "")) not in noisy_events
             ][:12]
             self.reply(200, visible)
         elif path == "/api/graph":
@@ -687,7 +690,9 @@ class Handler(BaseHTTPRequestHandler):
                 ),
             )
         elif path == "/api/stations":
-            band = parse_qs(urlparse(self.path).query).get("band", [""])[0] or str(self.status.get("band", ""))
+            band = parse_qs(urlparse(self.path).query).get("band", [""])[0] or str(
+                self.status.get("band", "")
+            )
             self.reply(
                 200,
                 self.service.station_views(
@@ -700,7 +705,13 @@ class Handler(BaseHTTPRequestHandler):
             if not callsign.strip():
                 self.reply(400, {"error": "callsign is required"})
             else:
-                self.reply(200, {"callsign": callsign.strip().upper(), "js8m": self.service.is_js8m_capable(callsign)})
+                self.reply(
+                    200,
+                    {
+                        "callsign": callsign.strip().upper(),
+                        "js8m": self.service.is_js8m_capable(callsign),
+                    },
+                )
         elif path == "/api/route":
             query = parse_qs(urlparse(self.path).query)
             origin = query.get("origin", [""])[0]
@@ -739,9 +750,7 @@ class Handler(BaseHTTPRequestHandler):
                     except (ConnectionError, OSError, RuntimeError, TimeoutError):
                         # The local pause is still authoritative when the
                         # installed JS8Call build does not expose TX.HALT.
-                        self.service.database.audit(
-                            "radio.halt_unavailable", {"source": "ui"}
-                        )
+                        self.service.database.audit("radio.halt_unavailable", {"source": "ui"})
                 self.reply(200, {"ok": True, "paused": True})
                 return
             if path == "/api/control/resume":
@@ -855,8 +864,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             if prior_path and prior_path[0] == origin and prior_path[-1] == destination.upper():
                 plan = RoutePlan(
-                    RouteAction.DIRECT if len(prior_path) == 2 else RouteAction.RELAY,
-                    prior_path, 0.0, 0.0, 0,
+                    RouteAction.DIRECT if len(prior_path) == 2 else RouteAction.RELAY_NOW,
+                    prior_path,
+                    0.0,
+                    0.0,
+                    0,
                     "Retaining the recent path while awaiting multipart receipts.",
                 )
         if plan is None and origin and not first_delivery_attempt:
@@ -875,10 +887,7 @@ class Handler(BaseHTTPRequestHandler):
         # Standard is a complete opt-out for this message: do not wait for
         # CAP and do not emit the readable marker that invites a peer to begin
         # capability discovery. Opportunistic uses the marker on first contact.
-        announce = (
-            enhanced_mode != "standard"
-            and destination not in self.announced_destinations
-        )
+        announce = enhanced_mode != "standard" and destination not in self.announced_destinations
         standard_payload = format_standard_user_payload(
             str(message.get("subject", "")), str(message["body"])
         )
@@ -888,12 +897,11 @@ class Handler(BaseHTTPRequestHandler):
             else None
         )
         capability_attempts = [
-            attempt for attempt in self.service.database.list_attempts(message_id)
+            attempt
+            for attempt in self.service.database.list_attempts(message_id)
             if attempt["action"] == "capability" and attempt["status"] == "submitted"
         ]
-        capability_window_ms = capability_response_window_ms(
-            path, self.status.get("speed", 0)
-        )
+        capability_window_ms = capability_response_window_ms(path, self.status.get("speed", 0))
         if (
             enhanced_mode == "required"
             and not destination.startswith("@")
@@ -902,23 +910,28 @@ class Handler(BaseHTTPRequestHandler):
         ):
             capability_sent_at = int(capability_attempts[-1]["created_at_ms"])
             completed = [
-                attempt for attempt in self.service.database.list_attempts(message_id)
-                if attempt["action"] == "capability_tx" and attempt["status"] == "complete"
+                attempt
+                for attempt in self.service.database.list_attempts(message_id)
+                if attempt["action"] == "capability_tx"
+                and attempt["status"] == "complete"
                 and int(attempt["created_at_ms"]) >= capability_sent_at
             ]
-            elapsed = (
-                utc_now_ms() - int(completed[-1]["created_at_ms"])
-                if completed else 0
-            )
-            if (not completed and utc_now_ms() - capability_sent_at < CAPABILITY_TX_START_GRACE_MS) or (
-                completed and elapsed < capability_window_ms
-            ) or self.status.get("tx_train_pending"):
+            elapsed = utc_now_ms() - int(completed[-1]["created_at_ms"]) if completed else 0
+            if (
+                (not completed and utc_now_ms() - capability_sent_at < CAPABILITY_TX_START_GRACE_MS)
+                or (completed and elapsed < capability_window_ms)
+                or self.status.get("tx_train_pending")
+            ):
                 remaining = (
                     max(30_000, CAPABILITY_TX_START_GRACE_MS - (utc_now_ms() - capability_sent_at))
-                    if not completed else max(5_000, capability_window_ms - elapsed)
+                    if not completed
+                    else max(5_000, capability_window_ms - elapsed)
                 )
                 self.service.database.record_attempt(
-                    message_id, "capability_wait", destination, "waiting",
+                    message_id,
+                    "capability_wait",
+                    destination,
+                    "waiting",
                     "waiting for CAP RF completion or JS8Mail capability response",
                 )
                 self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
@@ -929,7 +942,10 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             self.service.database.record_attempt(
-                message_id, "capability_timeout", destination, "fallback",
+                message_id,
+                "capability_timeout",
+                destination,
+                "fallback",
                 "no capability response; using ordinary JS8Call delivery",
             )
         enhanced_parts = (
@@ -940,10 +956,7 @@ class Handler(BaseHTTPRequestHandler):
         selected_enhanced_parts = enhanced_parts
         if enhanced_parts:
             bitmap = self.service.database.outgoing_part_bitmap(message_id, len(enhanced_parts))
-            missing = [
-                part for part in enhanced_parts
-                if not bitmap & (1 << (part.number - 1))
-            ]
+            missing = [part for part in enhanced_parts if not bitmap & (1 << (part.number - 1))]
             # After a full PA, a missing DELIVERED receipt may be nudged by
             # repeating only the final part on the later retry opportunity.
             selected_enhanced_parts = (missing[0] if missing else enhanced_parts[-1],)
@@ -971,7 +984,8 @@ class Handler(BaseHTTPRequestHandler):
         elif enhanced_parts:
             wire_texts = tuple(
                 format_ordinary_message(
-                    destination, format_human_data_part(part, subject=str(message.get("subject", "")))
+                    destination,
+                    format_human_data_part(part, subject=str(message.get("subject", ""))),
                 )
                 for part in selected_enhanced_parts
             )
@@ -990,8 +1004,7 @@ class Handler(BaseHTTPRequestHandler):
         # is awaited, and ordinary stations remain valid recipients.
         if (
             enhanced_mode == "required"
-            and
-            not destination.startswith("@")
+            and not destination.startswith("@")
             and destination not in self.capability_advertised_destinations
             and self.service.database.peer_capabilities(destination) is None
         ):
@@ -1004,7 +1017,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.status["pending_capability_message_id"] = message_id
                 self.status["pending_capability_peer"] = destination.upper()
                 await Handler.send_rf(self, capability_text, message_id)
-                self.status.setdefault("capability_last_sent", {})[destination.upper()] = utc_now_ms()
+                self.status.setdefault("capability_last_sent", {})[destination.upper()] = (
+                    utc_now_ms()
+                )
                 self.service.database.record_attempt(
                     message_id,
                     "capability",
@@ -1016,7 +1031,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.capability_advertised_destinations.add(destination)
                 self.announced_destinations.add(destination)
                 self.service.database.record_attempt(
-                    message_id, "capability_wait", destination, "waiting",
+                    message_id,
+                    "capability_wait",
+                    destination,
+                    "waiting",
                     f"waiting for JS8Mail capability response after RF completion; window "
                     f"{capability_window_ms // 1000}s for {max(1, len(path) - 1)} hop(s)",
                 )
@@ -1024,7 +1042,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.service.database.defer_message(
                     message_id,
                     capability_outbound_ms(path, capability_text, self.status.get("speed", 0))
-                    + capability_window_ms + TX_TRAIN_QUIET_MS,
+                    + capability_window_ms
+                    + TX_TRAIN_QUIET_MS,
                     f"waiting for capability response before ordinary fallback "
                     f"({capability_window_ms // 1000}s estimated)",
                 )
@@ -1036,8 +1055,11 @@ class Handler(BaseHTTPRequestHandler):
                     f"{exc.scope} airtime budget exhausted; radio is idle and policy blocked TX"
                 )
                 self.service.database.record_attempt(
-                    message_id, "capability", destination,
-                    "failed" if exc.scope == "per-message-total" else "deferred", detail
+                    message_id,
+                    "capability",
+                    destination,
+                    "failed" if exc.scope == "per-message-total" else "deferred",
+                    detail,
                 )
                 if exc.scope == "per-message-total":
                     self.service.database.transition_message(message_id, MessageState.FAILED)
@@ -1063,9 +1085,7 @@ class Handler(BaseHTTPRequestHandler):
                     increment_retry=False,
                 )
                 return
-        self.service.database.record_attempt(
-            message_id, action, target, "started", detail
-        )
+        self.service.database.record_attempt(message_id, action, target, "started", detail)
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
@@ -1079,7 +1099,10 @@ class Handler(BaseHTTPRequestHandler):
             destination,
             tuple(path),
             hashlib.sha256("\n".join(wire_texts).encode("utf-8")).hexdigest(),
-            sum(estimate_airtime_ms(text, speed if speed in SPEED_AIRTIME_MS else 0) for text in wire_texts),
+            sum(
+                estimate_airtime_ms(text, speed if speed in SPEED_AIRTIME_MS else 0)
+                for text in wire_texts
+            ),
             delivery_response_window_ms(action, tuple(path), speed),
             int(message.get("retry_count", 0)),
             str(self.status.get("band", "")),
@@ -1090,19 +1113,28 @@ class Handler(BaseHTTPRequestHandler):
                 await self._maybe_adapt_speed(target)
             for part in enhanced_parts:
                 self.service.database.upsert_message_part(
-                    part.message_id, part.number, part.total, part.payload,
-                    direction="outgoing", peer=destination,
+                    part.message_id,
+                    part.number,
+                    part.total,
+                    part.payload,
+                    direction="outgoing",
+                    peer=destination,
                 )
             for text in wire_texts:
                 current = self.service.database.get_message(message_id)
                 if current is None or current["state"] in {
-                    MessageState.CANCELLED, MessageState.FAILED, MessageState.EXPIRED,
+                    MessageState.CANCELLED,
+                    MessageState.FAILED,
+                    MessageState.EXPIRED,
                 }:
                     self.service.database.mark_transmission_unconfirmed(transaction_id)
                     if self.active_transaction_id == transaction_id:
                         self.active_transaction_id = None
                     self.service.database.record_attempt(
-                        message_id, action, target, "cancelled",
+                        message_id,
+                        action,
+                        target,
+                        "cancelled",
                         "remaining frames suppressed after operator cancellation",
                     )
                     return
@@ -1151,7 +1183,11 @@ class Handler(BaseHTTPRequestHandler):
             )
         self.service.database.audit(
             "message.submitted_to_js8call",
-            {"message_id": message_id, "text_length": sum(len(text) for text in wire_texts), "frames": len(wire_texts)},
+            {
+                "message_id": message_id,
+                "text_length": sum(len(text) for text in wire_texts),
+                "frames": len(wire_texts),
+            },
         )
         self.announced_destinations.add(destination)
 
@@ -1175,17 +1211,22 @@ class Handler(BaseHTTPRequestHandler):
             and self.service.database.peer_capabilities(destination) is None
         ):
             capability_attempts = [
-                attempt for attempt in self.service.database.list_attempts(message_id)
+                attempt
+                for attempt in self.service.database.list_attempts(message_id)
                 if attempt["action"] == "capability" and attempt["status"] == "submitted"
             ]
             if capability_attempts:
                 sent_at = int(capability_attempts[-1]["created_at_ms"])
                 completed = [
-                    attempt for attempt in self.service.database.list_attempts(message_id)
-                    if attempt["action"] == "capability_tx" and attempt["status"] == "complete"
+                    attempt
+                    for attempt in self.service.database.list_attempts(message_id)
+                    if attempt["action"] == "capability_tx"
+                    and attempt["status"] == "complete"
                     and int(attempt["created_at_ms"]) >= sent_at
                 ]
-                elapsed = utc_now_ms() - (int(completed[-1]["created_at_ms"]) if completed else sent_at)
+                elapsed = utc_now_ms() - (
+                    int(completed[-1]["created_at_ms"]) if completed else sent_at
+                )
                 cap_path = self.service.database.recent_message_path(
                     message_id, max_age_ms=60 * 60 * 1000
                 )
@@ -1193,17 +1234,22 @@ class Handler(BaseHTTPRequestHandler):
                     cap_path = (str(self.status.get("callsign", "")), destination)
                 window = (
                     capability_response_window_ms(cap_path, self.status.get("speed", 0))
-                    if completed else CAPABILITY_TX_START_GRACE_MS
+                    if completed
+                    else CAPABILITY_TX_START_GRACE_MS
                 )
                 if elapsed < window or self.status.get("tx_train_pending"):
                     remaining = max(5_000, window - elapsed)
                     self.service.database.record_attempt(
-                        message_id, "capability_wait", destination, "waiting",
+                        message_id,
+                        "capability_wait",
+                        destination,
+                        "waiting",
                         "waiting for JS8Mail capability response before store fallback",
                     )
                     self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
                     self.service.database.defer_message(
-                        message_id, remaining,
+                        message_id,
+                        remaining,
                         "waiting for capability response before store fallback",
                     )
                     return
@@ -1216,10 +1262,7 @@ class Handler(BaseHTTPRequestHandler):
         # also prevents a stale capability row from causing repeated J8M1
         # offers after a restart.
         custodian_capability = self.service.database.peer_capabilities(custodian)
-        enhanced_store = (
-            enhanced_mode != "standard"
-            and custodian_capability is not None
-        )
+        enhanced_store = enhanced_mode != "standard" and custodian_capability is not None
         custodian_features = (
             {feature.upper() for feature in custodian_capability[1]}
             if custodian_capability is not None
@@ -1251,7 +1294,9 @@ class Handler(BaseHTTPRequestHandler):
         self.service.database.record_attempt(
             message_id, "store", custodian, "started", f"offer for later retrieval by {destination}"
         )
-        self.service.database.upsert_custody(message_id, custodian, "offered", "store offer submitted")
+        self.service.database.upsert_custody(
+            message_id, custodian, "offered", "store offer submitted"
+        )
         self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
         self.service.database.transition_message(message_id, MessageState.IN_PROGRESS)
         try:
@@ -1269,7 +1314,9 @@ class Handler(BaseHTTPRequestHandler):
                 estimate_airtime_ms(item, speed if speed in SPEED_AIRTIME_MS else 0)
                 for item in store_texts
             ),
-            delivery_response_window_ms("store", (origin, custodian.upper()) if origin else (custodian.upper(),), speed),
+            delivery_response_window_ms(
+                "store", (origin, custodian.upper()) if origin else (custodian.upper(),), speed
+            ),
             int(message.get("retry_count", 0)),
             str(self.status.get("band", "")),
         )
@@ -1279,13 +1326,18 @@ class Handler(BaseHTTPRequestHandler):
             for store_text in store_texts:
                 current = self.service.database.get_message(message_id)
                 if current is None or current["state"] in {
-                    MessageState.CANCELLED, MessageState.FAILED, MessageState.EXPIRED,
+                    MessageState.CANCELLED,
+                    MessageState.FAILED,
+                    MessageState.EXPIRED,
                 }:
                     self.service.database.mark_transmission_unconfirmed(transaction_id)
                     if self.active_transaction_id == transaction_id:
                         self.active_transaction_id = None
                     self.service.database.record_attempt(
-                        message_id, "store", custodian, "cancelled",
+                        message_id,
+                        "store",
+                        custodian,
+                        "cancelled",
                         "remaining store frames suppressed after operator cancellation",
                     )
                     return
@@ -1294,15 +1346,23 @@ class Handler(BaseHTTPRequestHandler):
             self.service.database.mark_transmission_unconfirmed(transaction_id)
             if self.active_transaction_id == transaction_id:
                 self.active_transaction_id = None
-            self.service.database.record_attempt(message_id, "store", custodian, "failed", type(exc).__name__)
-            self.service.database.upsert_custody(message_id, custodian, "failed", type(exc).__name__)
+            self.service.database.record_attempt(
+                message_id, "store", custodian, "failed", type(exc).__name__
+            )
+            self.service.database.upsert_custody(
+                message_id, custodian, "failed", type(exc).__name__
+            )
             raise
         except Exception as exc:
             self.service.database.mark_transmission_unconfirmed(transaction_id)
             if self.active_transaction_id == transaction_id:
                 self.active_transaction_id = None
-            self.service.database.record_attempt(message_id, "store", custodian, "failed", type(exc).__name__)
-            self.service.database.upsert_custody(message_id, custodian, "failed", type(exc).__name__)
+            self.service.database.record_attempt(
+                message_id, "store", custodian, "failed", type(exc).__name__
+            )
+            self.service.database.upsert_custody(
+                message_id, custodian, "failed", type(exc).__name__
+            )
             raise
         self.service.database.mark_transmission_submitted(transaction_id)
         self.service.database.record_attempt(
@@ -1355,11 +1415,15 @@ class Handler(BaseHTTPRequestHandler):
             except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
                 detail = str(exc) or type(exc).__name__
                 self.service.database.record_attempt(
-                    message_id, "direct", destination, "deferred",
+                    message_id,
+                    "direct",
+                    destination,
+                    "deferred",
                     f"direct handoff deferred: {detail}",
                 )
                 self.service.database.defer_message(
-                    message_id, 60_000,
+                    message_id,
+                    60_000,
                     f"fresh RF evidence retained; waiting to transmit: {detail}",
                     increment_retry=False,
                 )
@@ -1517,7 +1581,10 @@ class Handler(BaseHTTPRequestHandler):
         # stale status event cannot deadlock the daemon forever.
         if self.status.get("radio_activity") == "TX":
             deadline = asyncio.get_running_loop().time() + 180
-            while self.status.get("radio_activity") == "TX" and asyncio.get_running_loop().time() < deadline:
+            while (
+                self.status.get("radio_activity") == "TX"
+                and asyncio.get_running_loop().time() < deadline
+            ):
                 await asyncio.sleep(0.25)
             if self.status.get("radio_activity") == "TX":
                 raise RuntimeError("JS8Call is still transmitting")
@@ -1553,11 +1620,15 @@ class Handler(BaseHTTPRequestHandler):
         if not self.airtime_budget.can_spend_at(airtime_ms, now):
             if message_id is not None:
                 self.service.database.record_attempt(
-                    message_id, "airtime_budget", "radio", "blocked",
+                    message_id,
+                    "airtime_budget",
+                    "radio",
+                    "blocked",
                     f"rolling airtime budget exhausted at speed {speed}",
                 )
             self.service.database.audit(
-                "radio.airtime_blocked", {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed}
+                "radio.airtime_blocked",
+                {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed},
             )
             raise AirtimeBudgetExceeded("rolling")
         message_budget = None
@@ -1574,7 +1645,10 @@ class Handler(BaseHTTPRequestHandler):
                 message_budget.message_used_ms = saved_message_airtime
             if not message_budget.can_spend_at(airtime_ms, now):
                 self.service.database.record_attempt(
-                    message_id, "airtime_budget", "message", "blocked",
+                    message_id,
+                    "airtime_budget",
+                    "message",
+                    "blocked",
                     f"per-message airtime budget exhausted at speed {speed}",
                 )
                 scope = (
@@ -1606,10 +1680,11 @@ class Handler(BaseHTTPRequestHandler):
             self.status["tx_message_id"] = message_id
         self.status["tx_reserved_ms"] = airtime_ms
         try:
-            if self.status.get("paused") or self.status.get("tx_train_pending") or (
-                int(self.status.get("incoming_directed_until_ms", 0) or 0) > utc_now_ms()
-            ) or (
-                int(self.status.get("incoming_activity_until_ms", 0) or 0) > utc_now_ms()
+            if (
+                self.status.get("paused")
+                or self.status.get("tx_train_pending")
+                or (int(self.status.get("incoming_directed_until_ms", 0) or 0) > utc_now_ms())
+                or (int(self.status.get("incoming_activity_until_ms", 0) or 0) > utc_now_ms())
             ):
                 raise RuntimeError("radio slot changed before API handoff")
             await self.client.send_message(text)
@@ -1624,7 +1699,8 @@ class Handler(BaseHTTPRequestHandler):
         # extend this hold from the actual end of transmission.
         self.next_tx_not_before_ms = self.last_tx_at_ms + airtime_ms + AUTOMATED_RX_WINDOW_MS
         self.service.database.audit(
-            "radio.airtime_reserved", {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed}
+            "radio.airtime_reserved",
+            {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed},
         )
 
 
@@ -1754,6 +1830,7 @@ async def run(args: argparse.Namespace) -> None:
         """Complete an operation only after its last PTT-off remains quiet."""
         await asyncio.sleep(TX_TRAIN_QUIET_MS / 1000)
         complete_rf_train(database, controller, status, tx_train)
+
     # Enhanced PA/DELIVERED responses are queued after RX rather than handed
     # to JS8Call from inside the RX event task. JS8Call deliberately rejects
     # automatic TX while it is still completing a directed receive.
@@ -1792,9 +1869,7 @@ async def run(args: argparse.Namespace) -> None:
             # airtime when multiple frames complete before the reply slot.
             pending_protocol_replies[key] = (utc_now_ms() + 5_000, text, peer.upper())
         else:
-            pending_protocol_replies.setdefault(
-                key, (utc_now_ms() + 5_000, text, peer.upper())
-            )
+            pending_protocol_replies.setdefault(key, (utc_now_ms() + 5_000, text, peer.upper()))
         database.audit(
             "message.protocol_reply_queued",
             {"peer": peer.upper(), "message_id": message_id, "text_length": len(text)},
@@ -1842,7 +1917,9 @@ async def run(args: argparse.Namespace) -> None:
             f"the original sender."
         )
         if not reverse_path:
-            detail += " No recorded reverse path was available; this is a direct reachability attempt."
+            detail += (
+                " No recorded reverse path was available; this is a direct reachability attempt."
+            )
         database.audit(
             "delivery.control",
             {
@@ -1973,9 +2050,7 @@ async def run(args: argparse.Namespace) -> None:
             )
             scheduler.record(key, now)
             if route_destination is not None:
-                response_window_ms = query_response_window_ms(
-                    action, status.get("speed", 0)
-                )
+                response_window_ms = query_response_window_ms(action, status.get("speed", 0))
                 pending_call_queries.append(
                     PendingCallQuery(
                         now_wall,
@@ -2033,7 +2108,8 @@ async def run(args: argparse.Namespace) -> None:
                     continue
                 if (
                     str(status.get("pending_capability_peer") or "") == peer
-                    or now_wall_ms - capability_last_sent.get(peer, 0) < CAPABILITY_RESPONSE_COOLDOWN_MS
+                    or now_wall_ms - capability_last_sent.get(peer, 0)
+                    < CAPABILITY_RESPONSE_COOLDOWN_MS
                 ):
                     pending_capability_advertisements.pop(peer, None)
                     pending_capability_reasons.pop(peer, None)
@@ -2048,9 +2124,7 @@ async def run(args: argparse.Namespace) -> None:
                     )
                 else:
                     pending_capability_advertisements.pop(peer, None)
-                    reason = pending_capability_reasons.pop(
-                        peer, "explicit CAP handshake"
-                    )
+                    reason = pending_capability_reasons.pop(peer, "explicit CAP handshake")
                     capability_last_sent[peer] = now_wall_ms
                     database.audit(
                         "peer.capability_advertisement_submitted",
@@ -2062,18 +2136,14 @@ async def run(args: argparse.Namespace) -> None:
                 try:
                     await controller.send_rf(reply_text)
                 except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
-                    pending_protocol_replies[reply_key] = (
-                        now_wall_ms + 30_000, reply_text, peer
-                    )
+                    pending_protocol_replies[reply_key] = (now_wall_ms + 30_000, reply_text, peer)
                     database.audit(
                         "message.protocol_reply_deferred",
                         {"peer": peer, "reason": str(exc) or type(exc).__name__},
                     )
                 else:
                     pending_protocol_replies.pop(reply_key, None)
-                    database.audit(
-                        "message.protocol_reply_submitted", {"peer": peer}
-                    )
+                    database.audit("message.protocol_reply_submitted", {"peer": peer})
             # Resolve one durable RF transaction at a time.  The parent
             # message is deliberately not used as the ACK correlation key:
             # it may have been moved back to route discovery after a timeout,
@@ -2081,10 +2151,15 @@ async def run(args: argparse.Namespace) -> None:
             # transmission.
             for broadcast in database.expire_unfinished_broadcasts(now_wall_ms):
                 broadcast_message = database.get_message(str(broadcast["message_id"]))
-                if broadcast_message is not None and broadcast_message["state"] == MessageState.IN_PROGRESS:
+                if (
+                    broadcast_message is not None
+                    and broadcast_message["state"] == MessageState.IN_PROGRESS
+                ):
                     database.record_attempt(
-                        str(broadcast["message_id"]), "group_broadcast",
-                        str(broadcast["target"]), "uncertain",
+                        str(broadcast["message_id"]),
+                        "group_broadcast",
+                        str(broadcast["target"]),
+                        "uncertain",
                         "RF completion was not observed; not rebroadcasting automatically",
                     )
                     database.transition_message(str(broadcast["message_id"]), MessageState.FAILED)
@@ -2186,14 +2261,18 @@ async def run(args: argparse.Namespace) -> None:
                         await controller.prepare(str(message["id"]))
                     except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
                         database.record_attempt(
-                            str(message["id"]), "prepare", destination, "deferred",
+                            str(message["id"]),
+                            "prepare",
+                            destination,
+                            "deferred",
                             str(exc) or type(exc).__name__,
                         )
                     continue
                 if message["state"] == MessageState.IN_PROGRESS:
                     transactions = database.list_transmission_transactions(str(message["id"]))
                     active_transactions = [
-                        item for item in transactions
+                        item
+                        for item in transactions
                         if item["status"] in {"queued", "tx_active", "awaiting_ack"}
                     ]
                     if active_transactions:
@@ -2219,7 +2298,8 @@ async def run(args: argparse.Namespace) -> None:
                 if message["state"] == MessageState.IN_PROGRESS:
                     attempts = database.list_attempts(str(message["id"]))
                     direct_submissions = [
-                        attempt for attempt in attempts
+                        attempt
+                        for attempt in attempts
                         if attempt["action"] in {"direct", "multipart"}
                         and attempt["status"] == "submitted"
                     ]
@@ -2233,36 +2313,41 @@ async def run(args: argparse.Namespace) -> None:
                     has_followup = any(
                         (
                             attempt["action"] == "delivery_ack"
-                            or (
-                                attempt["action"] == "standard_ack"
-                                and not enhanced_message
-                            )
+                            or (attempt["action"] == "standard_ack" and not enhanced_message)
                         )
                         and attempt["status"] in {"received", "confirmed"}
                         for attempt in attempts
                     )
                     if direct_submissions and not has_followup:
                         relevant_tx = next(
-                            (item for item in reversed(transactions)
-                             if item["operation"] in {"direct", "multipart"}
-                             and item["tx_finished_at_ms"] is not None),
+                            (
+                                item
+                                for item in reversed(transactions)
+                                if item["operation"] in {"direct", "multipart"}
+                                and item["tx_finished_at_ms"] is not None
+                            ),
                             None,
                         )
                         last_direct = int(relevant_tx["tx_finished_at_ms"]) if relevant_tx else None
                         deadline_ms = (
-                            ENHANCED_RECEIPT_DEADLINE_MS if enhanced_message
+                            ENHANCED_RECEIPT_DEADLINE_MS
+                            if enhanced_message
                             else DIRECT_RESPONSE_DEADLINE_MS
                         )
                         direct_expired = (
-                            last_direct is not None
-                            and now_wall_ms - last_direct >= deadline_ms
+                            last_direct is not None and now_wall_ms - last_direct >= deadline_ms
                         )
                         if direct_expired:
                             database.record_attempt(
-                                str(message["id"]), "direct_timeout", destination, "failed",
+                                str(message["id"]),
+                                "direct_timeout",
+                                destination,
+                                "failed",
                                 f"no final delivery evidence within {deadline_ms // 60_000}-minute post-TX deadline",
                             )
-                            database.transition_message(str(message["id"]), MessageState.WAITING_ROUTE)
+                            database.transition_message(
+                                str(message["id"]), MessageState.WAITING_ROUTE
+                            )
                             origin = str(status.get("callsign", "")).upper()
                             if origin:
                                 try:
@@ -2283,7 +2368,8 @@ async def run(args: argparse.Namespace) -> None:
                     # stuck in IN_PROGRESS if the relay never produces a
                     # final ACK/receipt either.
                     relay_hop_acks = [
-                        attempt for attempt in attempts
+                        attempt
+                        for attempt in attempts
                         if attempt["action"] == "standard_ack"
                         and attempt["status"] == "received"
                         and str(attempt["target"]).upper() != destination.upper()
@@ -2393,10 +2479,22 @@ async def run(args: argparse.Namespace) -> None:
                             latest_attempt = database.list_attempts(message_id)[-1]
                             if latest_attempt["action"] != "capability_wait":
                                 selected_route_cache.pop(message_id, None)
-                        except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
-                            if isinstance(exc, AirtimeBudgetExceeded) and exc.scope == "per-message-total":
+                        except (
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                        ) as exc:
+                            if (
+                                isinstance(exc, AirtimeBudgetExceeded)
+                                and exc.scope == "per-message-total"
+                            ):
                                 database.record_attempt(
-                                    str(message["id"]), "direct", destination, "failed",
+                                    str(message["id"]),
+                                    "direct",
+                                    destination,
+                                    "failed",
                                     "one-hour per-message airtime ceiling reached",
                                 )
                                 database.transition_message(str(message["id"]), MessageState.FAILED)
@@ -2427,7 +2525,9 @@ async def run(args: argparse.Namespace) -> None:
                 # A query-call reply can complete a multi-hop path without
                 # requiring the original destination to answer us directly.
                 # Use that fresh evidence as soon as the message is due.
-                if message["state"] == MessageState.WAITING_ROUTE and database.due_for_retry(str(message["id"])):
+                if message["state"] == MessageState.WAITING_ROUTE and database.due_for_retry(
+                    str(message["id"])
+                ):
                     plan = retained_plan or service.plan_route(
                         str(status.get("callsign", "")),
                         destination,
@@ -2465,10 +2565,22 @@ async def run(args: argparse.Namespace) -> None:
                             latest_attempt = database.list_attempts(message_id)[-1]
                             if latest_attempt["action"] != "capability_wait":
                                 selected_route_cache.pop(message_id, None)
-                        except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
-                            if isinstance(exc, AirtimeBudgetExceeded) and exc.scope == "per-message-total":
+                        except (
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                        ) as exc:
+                            if (
+                                isinstance(exc, AirtimeBudgetExceeded)
+                                and exc.scope == "per-message-total"
+                            ):
                                 database.record_attempt(
-                                    str(message["id"]), "relay", plan.path[1], "failed",
+                                    str(message["id"]),
+                                    "relay",
+                                    plan.path[1],
+                                    "failed",
                                     "one-hour per-message airtime ceiling reached",
                                 )
                                 database.transition_message(str(message["id"]), MessageState.FAILED)
@@ -2494,15 +2606,17 @@ async def run(args: argparse.Namespace) -> None:
                 # same message to the same custodian, ignoring the defer
                 # interval written below (and the longer post-timeout
                 # backoff written by the transaction reaper).
-                if (
-                    message.get("retry_count", 0) >= 3
-                    and database.due_for_retry(str(message["id"]))
+                if message.get("retry_count", 0) >= 3 and database.due_for_retry(
+                    str(message["id"])
                 ):
-                    candidate_custodian = next((candidate for candidate in promising if candidate != destination), None)
+                    candidate_custodian = next(
+                        (candidate for candidate in promising if candidate != destination), None
+                    )
                     active_custody = {
                         str(item["custodian"]).upper()
                         for item in database.list_custody(str(message["id"]))
-                        if item["status"] in {"offered", "accepted", "retrieval_pending", "forwarded"}
+                        if item["status"]
+                        in {"offered", "accepted", "retrieval_pending", "forwarded"}
                     }
                     custody_history = {
                         str(item["custodian"]).upper()
@@ -2519,18 +2633,36 @@ async def run(args: argparse.Namespace) -> None:
                     ):
                         try:
                             await controller.transmit_store(str(message["id"]), candidate_custodian)
-                        except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
-                            if isinstance(exc, AirtimeBudgetExceeded) and exc.scope == "per-message-total":
+                        except (
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                        ) as exc:
+                            if (
+                                isinstance(exc, AirtimeBudgetExceeded)
+                                and exc.scope == "per-message-total"
+                            ):
                                 database.record_attempt(
-                                    str(message["id"]), "store", candidate_custodian, "failed",
+                                    str(message["id"]),
+                                    "store",
+                                    candidate_custodian,
+                                    "failed",
                                     "one-hour per-message airtime ceiling reached",
                                 )
                                 database.transition_message(str(message["id"]), MessageState.FAILED)
                                 continue
                             database.record_attempt(
-                                str(message["id"]), "store", candidate_custodian, "deferred", type(exc).__name__
+                                str(message["id"]),
+                                "store",
+                                candidate_custodian,
+                                "deferred",
+                                type(exc).__name__,
                             )
-                            database.defer_message(str(message["id"]), 60_000, "custodian offer unavailable")
+                            database.defer_message(
+                                str(message["id"]), 60_000, "custodian offer unavailable"
+                            )
                         continue
                 if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(
                     str(message["id"])
@@ -2692,18 +2824,24 @@ async def run(args: argparse.Namespace) -> None:
                             bits = int(bits) if bits is not None else None
                         except (TypeError, ValueError):
                             bits = None
+
                         def numeric_param(name: str) -> int | None:
                             value = event.params.get(name)
                             try:
                                 return int(value) if value is not None else None
                             except (TypeError, ValueError):
                                 return None
+
                         now_ms = utc_now_ms()
                         fragment = ActivityFragment(
-                            str(event.value), bits, event.received_at_ms, now_ms,
+                            str(event.value),
+                            bits,
+                            event.received_at_ms,
+                            now_ms,
                             str(status.get("band", "")),
                             numeric_param("DIAL_FREQUENCY") or status.get("dial_frequency"),
-                            numeric_param("OFFSET"), numeric_param("SPEED"),
+                            numeric_param("OFFSET"),
+                            numeric_param("SPEED"),
                         )
                         capability_assemblies = capability_assembler.feed(
                             # CAP advertisements may be heard between two
@@ -2711,7 +2849,8 @@ async def run(args: argparse.Namespace) -> None:
                             # station can learn their capability passively;
                             # the normal handler below still limits replies
                             # to CAPs addressed to our callsign.
-                            fragment, local_destination=None,
+                            fragment,
+                            local_destination=None,
                         )
                         for capability_assembly in capability_assemblies:
                             if not capability_assembly.complete or capability_assembly.ambiguous:
@@ -2750,19 +2889,24 @@ async def run(args: argparse.Namespace) -> None:
                             # and audit behavior identical for RX.DIRECTED and
                             # reconstructed activity/control trains.
                             cap_params = dict(event.params)
-                            cap_params.update({
-                                "FROM": control_source,
-                                "TO": control_destination,
-                                "CMD": "",
-                                "TEXT": control_text,
-                            })
+                            cap_params.update(
+                                {
+                                    "FROM": control_source,
+                                    "TO": control_destination,
+                                    "CMD": "",
+                                    "TEXT": control_text,
+                                }
+                            )
                             event = NormalizedEvent(
-                                "RX.DIRECTED", control_text,
-                                cap_params, event.received_at_ms,
+                                "RX.DIRECTED",
+                                control_text,
+                                cap_params,
+                                event.received_at_ms,
                             )
                             break
                         assemblies = activity_assembler.feed(
-                            fragment, local_destination=str(status.get("callsign", "")),
+                            fragment,
+                            local_destination=str(status.get("callsign", "")),
                         )
                         for assembly in assemblies:
                             source = assembly.source.upper()
@@ -2770,7 +2914,10 @@ async def run(args: argparse.Namespace) -> None:
                             assembled = assembly.text
                             body = re.sub(
                                 r"^\s*[A-Z0-9/]{1,16}\s*:\s*[A-Z0-9/]{1,16}\s+MSG\s*",
-                                "", assembled, count=1, flags=re.IGNORECASE,
+                                "",
+                                assembled,
+                                count=1,
+                                flags=re.IGNORECASE,
                             )
                             body = ActivityAssembler.clean_text(body)
                             if body and not assembly.complete:
@@ -2781,38 +2928,64 @@ async def run(args: argparse.Namespace) -> None:
                                 # instead of creating a second copy.
                                 partial_id = database.find_partial_inbox(source, body)
                                 if partial_id is None:
-                                    partial_id = "legacy-partial-" + hashlib.sha256(
-                                        f"{source}\n{destination}\n{body[:96]}".encode()
-                                    ).hexdigest()[:16]
+                                    partial_id = (
+                                        "legacy-partial-"
+                                        + hashlib.sha256(
+                                            f"{source}\n{destination}\n{body[:96]}".encode()
+                                        ).hexdigest()[:16]
+                                    )
                                 database.upsert_inbox_message(
-                                    source, partial_id, body, 1, (), False, (source,),
-                                    protocol="js8m" if "J8M1 D " in assembled.upper() else "standard",
+                                    source,
+                                    partial_id,
+                                    body,
+                                    1,
+                                    (),
+                                    False,
+                                    (source,),
+                                    protocol="js8m"
+                                    if "J8M1 D " in assembled.upper()
+                                    else "standard",
                                     delivery="direct",
                                 )
                                 if assembly.ambiguous or assembly.gap_suspected:
                                     database.audit(
                                         "radio.activity_reassembly_uncertain",
-                                        {"source": source, "destination": destination,
-                                         "stream_id": assembly.stream_id,
-                                         "ambiguous": assembly.ambiguous,
-                                         "gap_suspected": assembly.gap_suspected},
+                                        {
+                                            "source": source,
+                                            "destination": destination,
+                                            "stream_id": assembly.stream_id,
+                                            "ambiguous": assembly.ambiguous,
+                                            "gap_suspected": assembly.gap_suspected,
+                                        },
                                     )
                             if assembly.complete and not assembly.ambiguous:
                                 complete_text = ActivityAssembler.clean_text(assembled)
                                 synthetic_params = dict(event.params)
-                                synthetic_params.update({
-                                    "FROM": source, "TO": destination, "CMD": "MSG",
-                                    "TEXT": complete_text, "PARTIAL": False,
-                                })
+                                synthetic_params.update(
+                                    {
+                                        "FROM": source,
+                                        "TO": destination,
+                                        "CMD": "MSG",
+                                        "TEXT": complete_text,
+                                        "PARTIAL": False,
+                                    }
+                                )
                                 event = NormalizedEvent(
-                                    "RX.DIRECTED", complete_text, synthetic_params,
+                                    "RX.DIRECTED",
+                                    complete_text,
+                                    synthetic_params,
                                     event.received_at_ms,
                                 )
                                 database.audit(
                                     "radio.activity_reassembled",
-                                    {"source": source, "destination": destination,
-                                     "protocol": "js8m" if "J8M1 D " in assembled.upper() else "standard",
-                                     "confidence": assembly.confidence},
+                                    {
+                                        "source": source,
+                                        "destination": destination,
+                                        "protocol": "js8m"
+                                        if "J8M1 D " in assembled.upper()
+                                        else "standard",
+                                        "confidence": assembly.confidence,
+                                    },
                                 )
                                 break
                     # PTT may drop briefly between frames of one message.
@@ -2857,8 +3030,13 @@ async def run(args: argparse.Namespace) -> None:
                     # aliases below also support builds which forward the
                     # internal decode-complete notification.
                     decode_events = {
-                        "RX.ACTIVITY", "RX.DIRECTED", "RX.SPOT", "RX.DECODE",
-                        "RX.DECODE_FINISHED", "RX.DCD", "DECODE.FINISHED",
+                        "RX.ACTIVITY",
+                        "RX.DIRECTED",
+                        "RX.SPOT",
+                        "RX.DECODE",
+                        "RX.DECODE_FINISHED",
+                        "RX.DCD",
+                        "DECODE.FINISHED",
                     }
                     if event.event_type in decode_events:
                         status["dcd_until_ms"] = utc_now_ms() + 1_000
@@ -2885,7 +3063,11 @@ async def run(args: argparse.Namespace) -> None:
                                 group_values.append(value)
                         for group in extract_groups(*group_values):
                             database.observe_group(group, default_group_description(group))
-                    frame = normalize_directed_event(event) if event.event_type.startswith("RX.DIRECTED") else None
+                    frame = (
+                        normalize_directed_event(event)
+                        if event.event_type.startswith("RX.DIRECTED")
+                        else None
+                    )
                     local_call = str(status.get("callsign", "")).upper()
                     # Some JS8Call builds mirror an RX.ACTIVITY fragment as
                     # RX.DIRECTED and attach BITS to it.  It is not a second
@@ -2897,11 +3079,13 @@ async def run(args: argparse.Namespace) -> None:
                     activity_mirror = (
                         event.event_type == "RX.DIRECTED"
                         and event.params.get("BITS") is not None
-                        and bool(re.match(
-                            r"^\s*[A-Z0-9/]{1,16}\s*:\s*[A-Z0-9/]{1,16}",
-                            str(event.value),
-                            re.IGNORECASE,
-                        ))
+                        and bool(
+                            re.match(
+                                r"^\s*[A-Z0-9/]{1,16}\s*:\s*[A-Z0-9/]{1,16}",
+                                str(event.value),
+                                re.IGNORECASE,
+                            )
+                        )
                     )
                     if activity_mirror:
                         database.audit(
@@ -2909,47 +3093,51 @@ async def run(args: argparse.Namespace) -> None:
                             {"source": frame.source if frame is not None else ""},
                         )
                         return
-                    directed_to_local = frame is not None and frame.destination in {local_call, "@ALLCALL"}
+                    directed_to_local = frame is not None and frame.destination in {
+                        local_call,
+                        "@ALLCALL",
+                    }
                     if frame is None and event.event_type == "RX.ACTIVITY" and local_call:
                         activity_text = str(event.params.get("TEXT", event.value))
                         directed_to_local = bool(
                             re.match(r"^\s*[A-Z0-9/]{1,16}\s*:\s*", activity_text, re.IGNORECASE)
-                            and re.search(rf"\b{re.escape(local_call)}\b", activity_text, re.IGNORECASE)
+                            and re.search(
+                                rf"\b{re.escape(local_call)}\b", activity_text, re.IGNORECASE
+                            )
                         )
                     if directed_to_local:
-                            # JS8Call deliberately suppresses automatic
-                            # replies while a directed message is arriving.
-                            # JS8Mail must apply the same rule to its own
-                            # scheduler so a queued broadcast cannot occupy
-                            # the next slot and truncate the incoming mail.
-                            raw_directed = str(event.params.get("TEXT", event.value))
-                            has_eot = bool(re.search(r"[♢◊]\s*$", raw_directed))
-                            # JS8Call can expose a partial directed decode with
-                            # both its continuation marker and the frame EOT
-                            # (for example ``…… ♢``).  The EOT alone therefore
-                            # is not proof that the incoming message is safe
-                            # to interrupt with an automated transmission.
-                            partial_marker = bool(
-                                re.search(r"(?:…|\.{3,})\s*[♢◊]?\s*$", raw_directed)
+                        # JS8Call deliberately suppresses automatic
+                        # replies while a directed message is arriving.
+                        # JS8Mail must apply the same rule to its own
+                        # scheduler so a queued broadcast cannot occupy
+                        # the next slot and truncate the incoming mail.
+                        raw_directed = str(event.params.get("TEXT", event.value))
+                        has_eot = bool(re.search(r"[♢◊]\s*$", raw_directed))
+                        # JS8Call can expose a partial directed decode with
+                        # both its continuation marker and the frame EOT
+                        # (for example ``…… ♢``).  The EOT alone therefore
+                        # is not proof that the incoming message is safe
+                        # to interrupt with an automated transmission.
+                        partial_marker = bool(re.search(r"(?:…|\.{3,})\s*[♢◊]?\s*$", raw_directed))
+                        complete_directed = has_eot and not partial_marker
+                        now = utc_now_ms()
+                        # RX.ACTIVITY and RX.DIRECTED can be emitted for
+                        # the same frame in either task order. Once the
+                        # completed RX.DIRECTED event has been seen, do
+                        # not let the activity copy reopen the partial
+                        # message hold.
+                        completion_guard = int(
+                            status.get("incoming_directed_completion_guard_until_ms", 0) or 0
+                        )
+                        if event.event_type != "RX.ACTIVITY" or completion_guard <= now:
+                            status["incoming_directed_until_ms"] = now + (
+                                45_000 if complete_directed else 3 * 60_000
                             )
-                            complete_directed = has_eot and not partial_marker
-                            now = utc_now_ms()
-                            # RX.ACTIVITY and RX.DIRECTED can be emitted for
-                            # the same frame in either task order. Once the
-                            # completed RX.DIRECTED event has been seen, do
-                            # not let the activity copy reopen the partial
-                            # message hold.
-                            completion_guard = int(
-                                status.get("incoming_directed_completion_guard_until_ms", 0) or 0
-                            )
-                            if event.event_type != "RX.ACTIVITY" or completion_guard <= now:
-                                status["incoming_directed_until_ms"] = now + (
-                                    45_000 if complete_directed else 3 * 60_000
-                                )
-                            if complete_directed:
-                                status["incoming_directed_completion_guard_until_ms"] = now + 45_000
+                        if complete_directed:
+                            status["incoming_directed_completion_guard_until_ms"] = now + 45_000
                     ack = parse_ack(frame.payload) if frame is not None else None
-                    source = frame.source if frame is not None else event.params.get("FROM")
+                    source_value = frame.source if frame is not None else event.params.get("FROM")
+                    source = source_value if isinstance(source_value, str) else ""
                     command = frame.command if frame is not None else ""
                     message_text = frame.payload if frame is not None else ""
                     resend = parse_resend_request(frame.payload) if frame is not None else None
@@ -2962,20 +3150,30 @@ async def run(args: argparse.Namespace) -> None:
                                 str(requested_message["destination"]).upper() == source.upper()
                                 or any(
                                     item["custodian"].upper() == source.upper()
-                                    and item["status"] in {"accepted", "retrieval_pending", "forwarded"}
+                                    and item["status"]
+                                    in {"accepted", "retrieval_pending", "forwarded"}
                                     for item in database.list_custody(request_id)
                                 )
-                                or any(source.upper() in {call.upper() for call in path} for path in database.message_paths(request_id))
+                                or any(
+                                    source.upper() in {call.upper() for call in path}
+                                    for path in database.message_paths(request_id)
+                                )
                             )
                         if authorized:
                             try:
                                 if requested_message is None:
                                     raise ValueError("unknown multipart message")
-                                parts = split_human_message(request_id, str(requested_message["body"]))
+                                parts = split_human_message(
+                                    request_id, str(requested_message["body"])
+                                )
                                 if total != len(parts):
-                                    raise ValueError("multipart request total does not match stored message")
+                                    raise ValueError(
+                                        "multipart request total does not match stored message"
+                                    )
                                 raw_path = str(event.params.get("PATH", ""))
-                                request_path = tuple(item.upper() for item in raw_path.split(">") if item)
+                                request_path = tuple(
+                                    item.upper() for item in raw_path.split(">") if item
+                                )
                                 for number in missing:
                                     if number <= len(parts):
                                         payload = format_human_data_part(
@@ -2991,26 +3189,45 @@ async def run(args: argparse.Namespace) -> None:
                                         )
                                         await controller.send_rf(text, request_id)
                                 database.record_attempt(
-                                    request_id, "part_resend", source, "submitted",
+                                    request_id,
+                                    "part_resend",
+                                    source,
+                                    "submitted",
                                     f"served {len(missing)} requested part(s) through custody path",
                                 )
                             except (ValueError, RuntimeError, ConnectionError):
-                                database.record_attempt(request_id, "part_resend", source, "failed", "unable to serve request")
-                    available_id = parse_messages_available(frame.wire_text if frame is not None else "")
+                                database.record_attempt(
+                                    request_id,
+                                    "part_resend",
+                                    source,
+                                    "failed",
+                                    "unable to serve request",
+                                )
+                    available_id = parse_messages_available(
+                        frame.wire_text if frame is not None else ""
+                    )
                     if available_id is not None and isinstance(source, str):
                         retrieval_key = (source.upper(), available_id)
                         if retrieval_key not in pending_retrievals:
                             try:
-                                await controller.send_rf(retrieve_message_query(source, available_id))
+                                await controller.send_rf(
+                                    retrieve_message_query(source, available_id)
+                                )
                                 pending_retrievals[retrieval_key] = (utc_now_ms(), 1)
                                 database.audit(
                                     "inbox.retrieval_submitted",
-                                    {"custodian": source.upper(), "js8call_message_id": available_id},
+                                    {
+                                        "custodian": source.upper(),
+                                        "js8call_message_id": available_id,
+                                    },
                                 )
                             except (ConnectionError, RuntimeError):
                                 database.audit(
                                     "inbox.retrieval_failed",
-                                    {"custodian": source.upper(), "js8call_message_id": available_id},
+                                    {
+                                        "custodian": source.upper(),
+                                        "js8call_message_id": available_id,
+                                    },
                                 )
                     capability_text = frame.payload if frame is not None else str(event.value)
                     capability = (
@@ -3020,8 +3237,12 @@ async def run(args: argparse.Namespace) -> None:
                     )
                     capability_source = source
                     if capability_source is None and event.event_type == "RX.ACTIVITY":
-                        source_match = re.match(r"^\s*([A-Z0-9/]{1,16})\s*:", capability_text, re.IGNORECASE)
-                        capability_source = source_match.group(1) if source_match is not None else None
+                        source_match = re.match(
+                            r"^\s*([A-Z0-9/]{1,16})\s*:", capability_text, re.IGNORECASE
+                        )
+                        capability_source = (
+                            source_match.group(1) if source_match is not None else None
+                        )
                     # Only a CAP addressed to this station gets a response.
                     # CAPs overheard between other stations, including group
                     # traffic, are useful graph intelligence but must remain
@@ -3040,7 +3261,10 @@ async def run(args: argparse.Namespace) -> None:
                         pending_capability_advertisements.pop(capability_source.upper(), None)
                         pending_capability_reasons.pop(capability_source.upper(), None)
                         for pending_message in database.list_messages(MessageState.WAITING_ROUTE):
-                            if str(pending_message["destination"]).upper() == capability_source.upper():
+                            if (
+                                str(pending_message["destination"]).upper()
+                                == capability_source.upper()
+                            ):
                                 database.wake_message_for_route(str(pending_message["id"]))
                         # CAP is a request/response hint, not an endlessly
                         # echoed heartbeat. One reply per peer per hour is
@@ -3054,7 +3278,11 @@ async def run(args: argparse.Namespace) -> None:
                             # must remain retryable rather than suppressing
                             # the peer's only capability response for an hour.
                             pass
-                    if capability is not None and isinstance(capability_source, str) and capability_reply_allowed:
+                    if (
+                        capability is not None
+                        and isinstance(capability_source, str)
+                        and capability_reply_allowed
+                    ):
                         # Defer the response until JS8Call has completed the
                         # current RX event. Direct handoff here races the
                         # modem's directed-message acknowledgement path.
@@ -3077,9 +3305,12 @@ async def run(args: argparse.Namespace) -> None:
                         and frame.destination != "@ALLCALL"
                         and message_text.strip()
                     ):
-                        group_id = "group-" + hashlib.sha256(
-                            f"{frame.destination}\n{source.upper()}\n{message_text}".encode()
-                        ).hexdigest()[:16]
+                        group_id = (
+                            "group-"
+                            + hashlib.sha256(
+                                f"{frame.destination}\n{source.upper()}\n{message_text}".encode()
+                            ).hexdigest()[:16]
+                        )
                         database.upsert_inbox_message(
                             source,
                             group_id,
@@ -3104,10 +3335,15 @@ async def run(args: argparse.Namespace) -> None:
                         and frame is not None
                         and frame.destination == local_call
                     ):
-                        if command == "MSG TO:" and frame.stored_recipient.upper() not in {
-                            local_call,
-                            "",
-                        } and not frame.stored_recipient.startswith("@"):
+                        if (
+                            command == "MSG TO:"
+                            and frame.stored_recipient.upper()
+                            not in {
+                                local_call,
+                                "",
+                            }
+                            and not frame.stored_recipient.startswith("@")
+                        ):
                             database.audit(
                                 "custody.inbound_accepted",
                                 {
@@ -3161,9 +3397,8 @@ async def run(args: argparse.Namespace) -> None:
                             if retrieved is not None:
                                 original_sender = retrieved.group(1).upper()
                                 message_text = message_text[: retrieved.start()].rstrip()
-                        partial = (
-                            not frame.final
-                            or bool(re.search(r"(?:…|\.{3,})\s*$", message_text))
+                        partial = not frame.final or bool(
+                            re.search(r"(?:…|\.{3,})\s*$", message_text)
                         )
                         partial_id = database.find_partial_inbox(source, message_text)
                         partial_match = None
@@ -3174,20 +3409,20 @@ async def run(args: argparse.Namespace) -> None:
                                 if partial_sender.upper() != source.upper():
                                     original_sender = partial_sender
                         legacy_id = partial_id or (
-                            "legacy-partial-" + hashlib.sha256(
+                            "legacy-partial-"
+                            + hashlib.sha256(
                                 f"{original_sender.upper()}\n{message_text.rstrip('… .')}".encode()
                             ).hexdigest()[:16]
                             if partial
-                            else "legacy-" + hashlib.sha256(
+                            else "legacy-"
+                            + hashlib.sha256(
                                 f"{original_sender.upper()}\n{message_text}".encode()
                             ).hexdigest()[:16]
                         )
                         inbox_path = tuple(str(event.params.get("PATH", source)).split(">"))
                         if partial_match is not None and partial_match[0].upper() != source.upper():
                             immediate_path = tuple(
-                                item.strip().upper()
-                                for item in inbox_path
-                                if item.strip()
+                                item.strip().upper() for item in inbox_path if item.strip()
                             )
                             inbox_path = (partial_match[0].upper(),) + tuple(
                                 item for item in immediate_path if item != partial_match[0].upper()
@@ -3252,41 +3487,52 @@ async def run(args: argparse.Namespace) -> None:
                                 ),
                             )
                         matching_retrievals = [
-                            (key, state) for key, state in pending_retrievals.items()
-                            if key[0] == source.upper()
+                            (retrieval_key, state)
+                            for retrieval_key, state in pending_retrievals.items()
+                            if retrieval_key[0] == source.upper()
                         ]
                         if partial and matching_retrievals:
-                            key, (next_retry_at, retry_count) = matching_retrievals[0]
+                            retrieval_key, (next_retry_at, retry_count) = matching_retrievals[0]
                             now = utc_now_ms()
                             if retry_count < max_retrieval_retries and now >= next_retry_at:
                                 retry_at = now + retrieval_retry_delay_ms
-                                pending_retrievals[key] = (retry_at, retry_count + 1)
+                                pending_retrievals[retrieval_key] = (retry_at, retry_count + 1)
 
                                 async def retry_partial_retrieval(
                                     custodian: str = source.upper(),
-                                    stored_id: int = key[1],
+                                    stored_id: int = retrieval_key[1],
                                     message_id: str = legacy_id,
                                     attempt: int = retry_count + 1,
                                 ) -> None:
                                     await asyncio.sleep(retrieval_retry_delay_ms / 1000)
                                     try:
-                                        await controller.send_rf(retrieve_message_query(custodian, stored_id))
+                                        await controller.send_rf(
+                                            retrieve_message_query(custodian, stored_id)
+                                        )
                                         database.record_attempt(
-                                            message_id, "inbox_retrieval", custodian, "submitted",
+                                            message_id,
+                                            "inbox_retrieval",
+                                            custodian,
+                                            "submitted",
                                             f"re-requested JS8Call message {stored_id} after partial decode (attempt {attempt})",
                                         )
                                     except (ConnectionError, RuntimeError):
                                         database.audit(
                                             "inbox.retrieval_retry_failed",
-                                            {"custodian": custodian, "js8call_message_id": stored_id},
+                                            {
+                                                "custodian": custodian,
+                                                "js8call_message_id": stored_id,
+                                            },
                                         )
 
                                 asyncio.create_task(retry_partial_retrieval())
                         elif not partial:
-                            for key in tuple(pending_retrievals):
-                                if key[0] == source.upper():
-                                    pending_retrievals.pop(key, None)
-                    query_response = parse_query_call_response(frame.wire_text if frame is not None else "")
+                            for retrieval_key in tuple(pending_retrievals):
+                                if retrieval_key[0] == source.upper():
+                                    pending_retrievals.pop(retrieval_key, None)
+                    query_response = parse_query_call_response(
+                        frame.wire_text if frame is not None else ""
+                    )
                     if (
                         query_response is not None
                         and isinstance(source, str)
@@ -3403,7 +3649,10 @@ async def run(args: argparse.Namespace) -> None:
                             if matched_query.responder != "@ALLCALL":
                                 pending_call_queries.remove(matched_query)
                             for message in database.list_messages(MessageState.WAITING_ROUTE):
-                                if str(message["destination"]).upper() == queried_destination.upper():
+                                if (
+                                    str(message["destination"]).upper()
+                                    == queried_destination.upper()
+                                ):
                                     message_id = str(message["id"])
                                     if message_id not in route_evidence_settle_until_ms:
                                         settle_ms = route_evidence_settling_window_ms(
@@ -3468,7 +3717,9 @@ async def run(args: argparse.Namespace) -> None:
                     legacy_ack = parse_legacy_ack(frame) if frame is not None else None
                     if isinstance(source, str) and legacy_ack is not None:
                         ack_responder, ack_path = legacy_ack
-                        matched = _recent_outbound_transaction(database, ack_responder, utc_now_ms())
+                        matched = _recent_outbound_transaction(
+                            database, ack_responder, utc_now_ms()
+                        )
                         if matched is not None:
                             message, transaction = matched
                             message_id = str(message["id"])
@@ -3483,15 +3734,23 @@ async def run(args: argparse.Namespace) -> None:
                             operation = str(transaction["operation"])
                             if operation == "store":
                                 database.upsert_custody(
-                                    message_id, ack_responder, "accepted", "standard JS8Call store ACK"
+                                    message_id,
+                                    ack_responder,
+                                    "accepted",
+                                    "standard JS8Call store ACK",
                                 )
                                 database.record_attempt(
-                                    message_id, "custody_ack", ack_responder, "received",
+                                    message_id,
+                                    "custody_ack",
+                                    ack_responder,
+                                    "received",
                                     "stored at custodian; recipient retrieval and delivery remain unproven",
                                 )
                                 if message["state"] not in {
-                                    MessageState.STORED, MessageState.DELIVERED,
-                                    MessageState.FAILED, MessageState.EXPIRED,
+                                    MessageState.STORED,
+                                    MessageState.DELIVERED,
+                                    MessageState.FAILED,
+                                    MessageState.EXPIRED,
                                     MessageState.CANCELLED,
                                 }:
                                     database.transition_message(message_id, MessageState.STORED)
@@ -3510,9 +3769,12 @@ async def run(args: argparse.Namespace) -> None:
                             if (
                                 operation != "store"
                                 and ack_responder == destination
-                                and message["state"] not in {
-                                    MessageState.STORED, MessageState.DELIVERED,
-                                    MessageState.FAILED, MessageState.EXPIRED,
+                                and message["state"]
+                                not in {
+                                    MessageState.STORED,
+                                    MessageState.DELIVERED,
+                                    MessageState.FAILED,
+                                    MessageState.EXPIRED,
                                     MessageState.CANCELLED,
                                 }
                                 and not enhanced_message
@@ -3521,7 +3783,9 @@ async def run(args: argparse.Namespace) -> None:
                                 origin = str(status.get("callsign", "")).upper()
                                 if origin:
                                     try:
-                                        speed = int(event.params.get("SPEED", status.get("speed", 0)))
+                                        speed = int(
+                                            event.params.get("SPEED", status.get("speed", 0))
+                                        )
                                     except (TypeError, ValueError):
                                         speed = 0
                                     ack_snr = event.params.get("SNR")
@@ -3529,7 +3793,9 @@ async def run(args: argparse.Namespace) -> None:
                                         origin,
                                         ack_responder,
                                         speed if speed in SPEED_AIRTIME_MS else 0,
-                                        float(ack_snr) if isinstance(ack_snr, (int, float)) else None,
+                                        float(ack_snr)
+                                        if isinstance(ack_snr, (int, float))
+                                        else None,
                                         True,
                                         str(status.get("band", "")),
                                     )
@@ -3547,17 +3813,24 @@ async def run(args: argparse.Namespace) -> None:
                         receipt_message = database.get_message(message_id)
                         if receipt_message is not None:
                             if kind == "delivered":
-                                metadata = parse_delivery_ack(frame.payload if frame is not None else "")
+                                metadata = parse_delivery_ack(
+                                    frame.payload if frame is not None else ""
+                                )
                                 receipt_path = metadata[2] if metadata is not None else ()
-                                destination_matches = source.upper() == str(receipt_message["destination"]).upper()
+                                destination_matches = (
+                                    source.upper() == str(receipt_message["destination"]).upper()
+                                )
                                 destination_name = str(receipt_message["destination"]).upper()
                                 custody_rows = [
-                                    item for item in database.list_custody(message_id)
-                                    if item["status"] in {"accepted", "retrieval_pending", "forwarded"}
+                                    item
+                                    for item in database.list_custody(message_id)
+                                    if item["status"]
+                                    in {"accepted", "retrieval_pending", "forwarded"}
                                 ]
                                 receipt_nodes = {item.upper() for item in receipt_path}
                                 forwarding_custodians = [
-                                    item for item in custody_rows
+                                    item
+                                    for item in custody_rows
                                     if item["custodian"].upper() in receipt_nodes
                                     and item["custodian"].upper() != destination_name
                                 ]
@@ -3566,25 +3839,33 @@ async def run(args: argparse.Namespace) -> None:
                                 # custodian that forwarded it.  Correlate every
                                 # proven custodian named in the receipt path.
                                 forwarded_matches = bool(
-                                    forwarding_custodians
-                                    and destination_name in receipt_nodes
+                                    forwarding_custodians and destination_name in receipt_nodes
                                 )
                                 if destination_matches or forwarded_matches:
                                     detail = "end-to-end receipt"
                                     if metadata is not None:
                                         _, delivered_at_ms, path = metadata
-                                        detail = f"delivered_at={delivered_at_ms}; path={'→'.join(path)}"
-                                    database.record_attempt(message_id, "delivery_ack", source, "received", detail)
+                                        detail = (
+                                            f"delivered_at={delivered_at_ms}; path={'→'.join(path)}"
+                                        )
+                                    database.record_attempt(
+                                        message_id, "delivery_ack", source, "received", detail
+                                    )
                                     if forwarded_matches:
                                         for custody_row in forwarding_custodians:
                                             custodian = str(custody_row["custodian"])
                                             database.upsert_custody(
-                                                message_id, custodian, "forwarded",
+                                                message_id,
+                                                custodian,
+                                                "forwarded",
                                                 f"final receipt path includes {destination_name}",
                                             )
                                             database.record_attempt(
-                                                message_id, "custodian_forwarded", custodian,
-                                                "confirmed", detail,
+                                                message_id,
+                                                "custodian_forwarded",
+                                                custodian,
+                                                "confirmed",
+                                                detail,
                                             )
                                     if receipt_message["state"] not in {
                                         MessageState.DELIVERED,
@@ -3592,19 +3873,35 @@ async def run(args: argparse.Namespace) -> None:
                                         MessageState.EXPIRED,
                                         MessageState.CANCELLED,
                                     }:
-                                        database.transition_message(message_id, MessageState.DELIVERED)
+                                        database.transition_message(
+                                            message_id, MessageState.DELIVERED
+                                        )
                             else:
-                                part_ack = parse_part_ack(frame.payload if frame is not None else "")
+                                part_ack = parse_part_ack(
+                                    frame.payload if frame is not None else ""
+                                )
                                 if part_ack is not None:
-                                    reconcile_part_receipt(database, receipt_message, part_ack, source)
-                    parsed_part = parse_human_data_part(frame.payload) if frame is not None else None
-                    if parsed_part is not None and isinstance(source, str) and source.upper() != status["callsign"]:
+                                    reconcile_part_receipt(
+                                        database, receipt_message, part_ack, source
+                                    )
+                    parsed_part = (
+                        parse_human_data_part(frame.payload) if frame is not None else None
+                    )
+                    if (
+                        parsed_part is not None
+                        and isinstance(source, str)
+                        and source.upper() != status["callsign"]
+                    ):
                         part, envelope_origin, envelope_destination = parsed_part
                         envelope_subject, user_payload = extract_envelope_subject(part.payload)
                         if envelope_subject:
                             part = MessagePart(
-                                part.message_id, part.number, part.total, user_payload,
-                                part.origin, part.destination,
+                                part.message_id,
+                                part.number,
+                                part.total,
+                                user_payload,
+                                part.origin,
+                                part.destination,
                             )
                         # A valid JS8Mail data part is passive proof that this
                         # peer understands at least multipart framing. Do not
@@ -3629,7 +3926,8 @@ async def run(args: argparse.Namespace) -> None:
                                 logical_sender = (envelope_origin or source).upper()
                                 reassembly_key = (logical_sender, part.message_id)
                                 accumulator = reassembly.setdefault(
-                                    reassembly_key, MultipartAccumulator(part.message_id, part.total)
+                                    reassembly_key,
+                                    MultipartAccumulator(part.message_id, part.total),
                                 )
                                 if not accumulator.receipt().received:
                                     for stored_part in database.list_message_parts(
@@ -3676,7 +3974,9 @@ async def run(args: argparse.Namespace) -> None:
                                     receipt.received,
                                     receipt.complete,
                                     route or (source,),
-                                    envelope_destination if envelope_destination and envelope_destination.startswith("@") else "",
+                                    envelope_destination
+                                    if envelope_destination and envelope_destination.startswith("@")
+                                    else "",
                                     protocol="js8m",
                                     delivery="forwarded" if len(route) >= 3 else "direct",
                                     subject=envelope_subject,

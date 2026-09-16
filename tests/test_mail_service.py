@@ -14,7 +14,11 @@ def test_compose_cancel_and_retry(tmp_path: Path) -> None:
     message_id = service.compose("n0call", "Test", "Hello")
     message = database.get_message(message_id)
     assert message["state"] == "queued"  # type: ignore[index]
-    assert DEFAULT_MESSAGE_TTL_MS - 1 <= message["expires_at_ms"] - message["created_at_ms"] <= DEFAULT_MESSAGE_TTL_MS  # type: ignore[index]
+    assert (
+        DEFAULT_MESSAGE_TTL_MS - 1
+        <= message["expires_at_ms"] - message["created_at_ms"]
+        <= DEFAULT_MESSAGE_TTL_MS
+    )  # type: ignore[index]
     service.cancel(message_id)
     assert database.get_message(message_id)["state"] == "cancelled"  # type: ignore[index]
     service.retry(message_id)
@@ -75,7 +79,9 @@ def test_new_discovery_attempt_overrides_older_payload_submission(tmp_path: Path
     service = MailService(database)
     message_id = service.compose("SP2ST", "Testing", "Testing path discovery")
     database.record_attempt(message_id, "relay", "MM0ZFG", "submitted", "queued")
-    database.record_attempt(message_id, "snr_probe", "SP2ST", "submitted", "waiting for RF evidence")
+    database.record_attempt(
+        message_id, "snr_probe", "SP2ST", "submitted", "waiting for RF evidence"
+    )
     database.record_attempt(message_id, "defer", "route", "waiting", "listening for probe response")
     assert service.message_views()[0]["confidence"] == "discovery_in_progress"
     database.close()
@@ -108,7 +114,9 @@ def test_group_messages_are_forced_to_standard_mode(tmp_path: Path) -> None:
 def test_recently_heard_does_not_count_as_a_directed_answer(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
-    database.record_observation(NormalizedEvent("RX.ACTIVITY", "M8YRT CQ", {"FROM": "M8YRT"}, 1_000))
+    database.record_observation(
+        NormalizedEvent("RX.ACTIVITY", "M8YRT CQ", {"FROM": "M8YRT"}, 1_000)
+    )
     assert service.recently_heard("M8YRT", now_ms=1_500, window_ms=10_000)
     assert service.recent_heard_age_ms("M8YRT", now_ms=1_500, window_ms=10_000) == 500
     assert not service.recently_answered("M8YRT", "OH3SPN", now_ms=1_500, window_ms=10_000)
@@ -123,7 +131,9 @@ def test_recently_heard_does_not_count_as_a_directed_answer(tmp_path: Path) -> N
     assert service.recent_heard_age_ms("M8YRT", now_ms=1_500, window_ms=10_000) == 500
     assert service.recent_heard_age_ms("REMOTE", now_ms=1_500, window_ms=10_000) is None
     database.record_observation(
-        NormalizedEvent("RX.DIRECTED.ME", "OH3SPN SNR -10", {"FROM": "M8YRT", "TO": "OH3SPN"}, 2_000)
+        NormalizedEvent(
+            "RX.DIRECTED.ME", "OH3SPN SNR -10", {"FROM": "M8YRT", "TO": "OH3SPN"}, 2_000
+        )
     )
     assert service.recently_answered("M8YRT", "OH3SPN", now_ms=2_500, window_ms=10_000)
     assert service.recent_answered_age_ms("M8YRT", "OH3SPN", now_ms=2_500, window_ms=10_000) == 500
@@ -153,9 +163,12 @@ def test_directed_snr_response_is_fresh_direct_evidence(tmp_path: Path) -> None:
         band="20m",
     )
 
-    assert service.recent_answered_age_ms(
-        "OH3SPN", "M0SPN", now_ms=11_400, window_ms=600_000, band="20m"
-    ) == 1_400
+    assert (
+        service.recent_answered_age_ms(
+            "OH3SPN", "M0SPN", now_ms=11_400, window_ms=600_000, band="20m"
+        )
+        == 1_400
+    )
     database.close()
 
 
@@ -190,7 +203,9 @@ def test_live_activity_graph_requires_recent_evidence_in_both_directions(tmp_pat
     database.close()
 
 
-def test_live_activity_graph_projects_source_only_heartbeat_to_local_station(tmp_path: Path) -> None:
+def test_live_activity_graph_projects_source_only_heartbeat_to_local_station(
+    tmp_path: Path,
+) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
     now = int(time.time() * 1000)
@@ -227,13 +242,22 @@ def test_live_activity_graph_includes_submitted_local_tx_evidence(tmp_path: Path
     service = MailService(database)
     now = int(time.time() * 1000)
     database.record_observation(
-        NormalizedEvent("RX.ACTIVITY", "M0SPN: OH3SPN ACK", {"FROM": "M0SPN", "TO": "OH3SPN"}, now - 1_000),
+        NormalizedEvent(
+            "RX.ACTIVITY", "M0SPN: OH3SPN ACK", {"FROM": "M0SPN", "TO": "OH3SPN"}, now - 1_000
+        ),
         band="20m",
     )
     message_id = service.compose("M0SPN", "test", "body")
     transaction_id = database.begin_transmission_transaction(
-        message_id, "direct", "M0SPN", "M0SPN", ("OH3SPN", "M0SPN"),
-        "hash", 1_000, 30_000, band="20m",
+        message_id,
+        "direct",
+        "M0SPN",
+        "M0SPN",
+        ("OH3SPN", "M0SPN"),
+        "hash",
+        1_000,
+        30_000,
+        band="20m",
     )
     database.mark_transmission_submitted(transaction_id)
 
@@ -257,7 +281,10 @@ def test_station_views_marks_live_js8m_capability(tmp_path: Path) -> None:
     station = service.station_views(band="20m")[0]
     assert station["callsign"] == "F4VLF"
     assert station["js8m"] is True
-    assert all(item["callsign"] != "OH3SPN" for item in service.station_views(band="20m", exclude_callsign="OH3SPN"))
+    assert all(
+        item["callsign"] != "OH3SPN"
+        for item in service.station_views(band="20m", exclude_callsign="OH3SPN")
+    )
     database.close()
 
 
