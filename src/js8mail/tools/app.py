@@ -102,6 +102,12 @@ ROUTE_HOP_PROBE_COOLDOWN_MS = 5 * 60 * 1000
 # the station-wide budget remains the ultimate safety ceiling.
 MESSAGE_BURST_LIMIT_MS = 10 * 60 * 1000
 MESSAGE_TOTAL_LIMIT_MS = 60 * 60 * 1000
+# JS8Call v3.0.3 sends a normal ACK after accepting MSG TO:, but the protocol
+# does not make that ACK an end-to-end custody receipt. Bound automatic offers
+# to one custodian so a missing ACK cannot create an indefinite duplicate
+# store loop. An operator retry remains an explicit override.
+LEGACY_CUSTODY_RETRY_COOLDOWN_MS = 60 * 60 * 1000
+LEGACY_CUSTODY_MAX_AUTOMATIC_OFFERS = 2
 
 
 def capability_response_window_ms(path: tuple[str, ...], speed: object) -> int:
@@ -2677,9 +2683,6 @@ async def run(args: argparse.Namespace) -> None:
                 if message.get("retry_count", 0) >= 3 and database.due_for_retry(
                     str(message["id"])
                 ):
-                    candidate_custodian = next(
-                        (candidate for candidate in promising if candidate != destination), None
-                    )
                     active_custody = {
                         str(item["custodian"]).upper()
                         for item in database.list_custody(str(message["id"]))
@@ -2690,13 +2693,30 @@ async def run(args: argparse.Namespace) -> None:
                         str(item["custodian"]).upper()
                         for item in database.list_custody(str(message["id"]))
                     }
+                    candidate_custodian = None
+                    custody_policy_blocks: list[tuple[str, dict[str, Any]]] = []
+                    for candidate in promising:
+                        candidate_key = candidate.upper()
+                        if candidate_key == destination.upper() or candidate_key in active_custody:
+                            continue
+                        policy = database.legacy_store_offer_policy(
+                            str(message["id"]),
+                            candidate,
+                            retry_cooldown_ms=LEGACY_CUSTODY_RETRY_COOLDOWN_MS,
+                            max_automatic_offers=LEGACY_CUSTODY_MAX_AUTOMATIC_OFFERS,
+                        )
+                        if policy["eligible"]:
+                            candidate_custodian = candidate
+                            break
+                        custody_policy_blocks.append((candidate, policy))
                     # Legacy custodians do not provide a portable end-to-end
                     # receipt. Limit the number of distinct offers and never
                     # offer a second custodian while an earlier one is still
-                    # pending or accepted.
+                    # pending or accepted. A submitted offer without an ACK is
+                    # also retained in durable history, so the same custodian
+                    # cannot be offered the message indefinitely.
                     if (
                         candidate_custodian is not None
-                        and candidate_custodian.upper() not in active_custody
                         and len(custody_history) < 3
                     ):
                         try:
@@ -2732,6 +2752,36 @@ async def run(args: argparse.Namespace) -> None:
                                 str(message["id"]), 60_000, "custodian offer unavailable"
                             )
                         continue
+                    if candidate_custodian is None and custody_policy_blocks:
+                        next_eligible_at_ms = min(
+                            int(policy["next_eligible_at_ms"])
+                            for _, policy in custody_policy_blocks
+                            if policy["next_eligible_at_ms"] is not None
+                        ) if any(
+                            policy["next_eligible_at_ms"] is not None
+                            for _, policy in custody_policy_blocks
+                        ) else None
+                        if next_eligible_at_ms is not None:
+                            now_ms = utc_now_ms()
+                            delay_ms = max(30_000, next_eligible_at_ms - now_ms)
+                            custodian, policy = custody_policy_blocks[0]
+                            database.record_attempt(
+                                str(message["id"]),
+                                "custody_policy",
+                                custodian,
+                                "blocked",
+                                (
+                                    f"{policy['reason']}; automatic offers are bounded to "
+                                    f"{LEGACY_CUSTODY_MAX_AUTOMATIC_OFFERS} per custodian"
+                                ),
+                            )
+                            database.defer_message(
+                                str(message["id"]),
+                                delay_ms,
+                                "legacy custody offer cooldown; continuing discovery without duplicate offer",
+                                increment_retry=False,
+                            )
+                            continue
                 if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(
                     str(message["id"])
                 ):

@@ -232,8 +232,15 @@ multipart, relay, and store handoff. Its response deadline begins at the
 observed TX-to-RX transition when available, and relay deadlines include the
 number of reverse-path hops. A late ACK can therefore be reconciled after a
 message has returned to route discovery. If a custodian ACK deadline expires,
-the store is marked unconfirmed and automatic retry is deferred; JS8Mail does
-not immediately offer the same message to every candidate custodian.
+the store is marked unconfirmed and automatic retry is deferred. Because the
+underlying protocol does not expose a portable end-to-end storage receipt,
+JS8Mail records each submitted legacy offer durably and bounds automatic
+re-offers to two per custodian, with a one-hour cooldown before the second
+offer. It may try another eligible custodian (up to the existing three
+distinct-custodian limit), but it does not repeatedly offer the same message to
+the same station indefinitely. An operator's explicit Retry now is an
+intentional override. A successful standard custodian ACK changes the result
+to `Stored · ACK`; it still does not prove recipient retrieval.
 
 ## Compatibility and safety
 

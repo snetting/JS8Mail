@@ -1130,6 +1130,105 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def legacy_store_offer_policy(
+        self,
+        message_id: str,
+        custodian: str,
+        *,
+        now_ms: int | None = None,
+        retry_cooldown_ms: int,
+        max_automatic_offers: int,
+    ) -> dict[str, Any]:
+        """Return durable retry facts for a standard JS8Call store offer.
+
+        JS8Call's ``MSG TO:`` ACK confirms acceptance by this custodian, but
+        its absence is ambiguous: the frame, the custodian's automatic reply,
+        or the reply itself may have been lost.  Keep this calculation based
+        on durable attempt rows so a daemon restart cannot reset an automatic
+        re-offer loop.
+        """
+        now = utc_now_ms() if now_ms is None else int(now_ms)
+        target = custodian.upper()
+        attempts = [
+            attempt
+            for attempt in self.list_attempts(message_id)
+            if str(attempt["target"]).upper() == target
+        ]
+        submitted = [
+            attempt
+            for attempt in attempts
+            if attempt["action"] == "store" and attempt["status"] == "submitted"
+        ]
+        acknowledged = any(
+            attempt["action"] == "custody_ack"
+            and attempt["status"] in {"received", "confirmed"}
+            for attempt in attempts
+        )
+        last_offer_at_ms = max(
+            (int(attempt["created_at_ms"]) for attempt in submitted),
+            default=None,
+        )
+        last_timeout_at_ms = max(
+            (
+                int(attempt["created_at_ms"])
+                for attempt in attempts
+                if attempt["action"] == "store_timeout"
+            ),
+            default=None,
+        )
+        last_manual_retry_at_ms = max(
+            (
+                int(attempt["created_at_ms"])
+                for attempt in self.list_attempts(message_id)
+                if attempt["action"] == "manual_retry"
+                and attempt["status"] == "requested"
+            ),
+            default=None,
+        )
+        automatic_offer_count = len(submitted)
+        manual_override = (
+            last_manual_retry_at_ms is not None
+            and (last_offer_at_ms is None or last_manual_retry_at_ms >= last_offer_at_ms)
+        )
+        if acknowledged:
+            return {
+                "eligible": False,
+                "reason": "custodian already acknowledged the store offer",
+                "automatic_offer_count": automatic_offer_count,
+                "next_eligible_at_ms": None,
+                "manual_override": False,
+            }
+        if automatic_offer_count == 0 or manual_override:
+            return {
+                "eligible": True,
+                "reason": "no prior acknowledged store offer",
+                "automatic_offer_count": automatic_offer_count,
+                "next_eligible_at_ms": now,
+                "manual_override": manual_override,
+            }
+        if automatic_offer_count >= max_automatic_offers:
+            return {
+                "eligible": False,
+                "reason": "automatic store-offer limit reached; custody remains unconfirmed",
+                "automatic_offer_count": automatic_offer_count,
+                "next_eligible_at_ms": None,
+                "manual_override": False,
+            }
+        last_outcome_at_ms = last_timeout_at_ms or last_offer_at_ms
+        assert last_outcome_at_ms is not None
+        next_eligible_at_ms = last_outcome_at_ms + retry_cooldown_ms
+        return {
+            "eligible": now >= next_eligible_at_ms,
+            "reason": (
+                "waiting for the legacy store-offer cooldown"
+                if now < next_eligible_at_ms
+                else "bounded automatic store-offer retry is due"
+            ),
+            "automatic_offer_count": automatic_offer_count,
+            "next_eligible_at_ms": next_eligible_at_ms,
+            "manual_override": False,
+        }
+
     def upsert_message_part(
         self,
         message_id: str,

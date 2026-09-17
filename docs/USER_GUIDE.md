@@ -979,6 +979,28 @@ outbox shows **Stored · ACK**, not Complete. A plain ACK for an enhanced
 multipart transfer remains hop evidence; only a valid `J8M1 DELIVERED` receipt
 can produce **Complete+**.
 
+### Legacy store offers and missing ACKs
+
+The JS8Call v3.0.3 implementation accepts `C MSG TO:DEST text` into its local
+store and then queues `C ACK` (or the complete reverse relay path followed by
+`ACK`) through its automatic-reply path. This is visible in the [JS8Call
+v3.0.3 command handler](https://github.com/JS8Call-improved/JS8Call-improved/blob/v3.0.3/JS8_Mainwindow/processCommandActivity.cpp).
+That reply can still be suppressed by
+JS8Call's automatic-reply setting, operator-idle protection, an occupied text
+buffer, or radio/API timing. Therefore, a missing ACK is ambiguous: it does
+not prove that the custodian rejected or failed to store the message.
+
+JS8Mail consequently never upgrades a timeout to **Stored**. It shows the
+attempt as **custody unconfirmed** and records the uncertainty. To avoid
+duplicate store spam, automatic legacy offers are limited to two submissions
+per custodian, with a one-hour cooldown before the second submission. Other
+eligible custodians may still be considered within the normal distinct-
+custodian limit. After the automatic limit, the same custodian is not offered
+the message again automatically; use **Retry now** only when you deliberately
+want to repeat the operation. A later custody ACK or JS8Mail delivery receipt
+can still reconcile a late result because the original transmission is kept in
+the durable transaction history.
+
 ## Data, privacy, and recovery
 
 Message bodies stay in the local SQLite database and on the RF path. Ordinary

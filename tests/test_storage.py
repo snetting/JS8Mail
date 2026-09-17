@@ -177,6 +177,63 @@ def test_custody_status_is_durable_and_distinct_from_delivery(tmp_path: Path) ->
     reopened.close()
 
 
+def test_legacy_store_offer_policy_bounds_automatic_reoffers(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.enqueue_message("m1", "DEST", "body")
+    cooldown = 60 * 60 * 1000
+    database.record_attempt("m1", "store", "CUST", "submitted", "queued")
+    now = utc_now_ms()
+
+    waiting = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=now,
+        retry_cooldown_ms=cooldown,
+        max_automatic_offers=2,
+    )
+    assert waiting["eligible"] is False
+    assert waiting["next_eligible_at_ms"] >= now + cooldown - 1_000
+
+    database.record_attempt("m1", "store_timeout", "CUST", "uncertain", "no ACK")
+    due = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=utc_now_ms() + cooldown,
+        retry_cooldown_ms=cooldown,
+        max_automatic_offers=2,
+    )
+    assert due["eligible"] is True
+    database.record_attempt("m1", "store", "CUST", "submitted", "queued")
+    bounded = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=utc_now_ms() + cooldown * 2,
+        retry_cooldown_ms=cooldown,
+        max_automatic_offers=2,
+    )
+    assert bounded["eligible"] is False
+    assert bounded["next_eligible_at_ms"] is None
+    database.close()
+
+
+def test_manual_retry_overrides_legacy_store_cooldown(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.enqueue_message("m1", "DEST", "body")
+    database.record_attempt("m1", "store", "CUST", "submitted", "queued")
+    database.record_attempt("m1", "store_timeout", "CUST", "uncertain", "no ACK")
+    database.record_attempt("m1", "manual_retry", "route", "requested", "operator retry")
+    decision = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=utc_now_ms(),
+        retry_cooldown_ms=60 * 60 * 1000,
+        max_automatic_offers=1,
+    )
+    assert decision["eligible"] is True
+    assert decision["manual_override"] is True
+    database.close()
+
+
 def test_transmission_ack_correlation_survives_route_state_and_reopen(tmp_path: Path) -> None:
     path = tmp_path / "mail.sqlite3"
     database = Database(path)
