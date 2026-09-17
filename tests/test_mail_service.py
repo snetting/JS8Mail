@@ -182,6 +182,69 @@ def test_message_graph_omits_self_links(tmp_path: Path) -> None:
     database.close()
 
 
+def test_message_graph_separates_reported_route_from_delivery_attempt(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("DG3YDE", "test", "body")
+
+    database.record_attempt(
+        message_id,
+        "route_evidence",
+        "M9LOV",
+        "received",
+        "heard DG3YDE at -8 dB, 60.0 minute(s) ago",
+    )
+    database.record_attempt(
+        message_id,
+        "relay",
+        "M9LOV",
+        "submitted",
+        "queued in JS8Call for next TX cycle",
+    )
+    database.record_attempt(
+        message_id,
+        "direct",
+        "DG3YDE",
+        "failed",
+        "no ACK before deadline",
+    )
+
+    graph = service.message_graph(message_id, "OH3SPN")
+    by_pair = {(edge["from"], edge["to"]): edge for edge in graph["edges"]}
+
+    assert by_pair[("M9LOV", "DG3YDE")]["kind"] == "reported"
+    assert by_pair[("OH3SPN", "M9LOV")]["kind"] == "pending"
+    assert by_pair[("OH3SPN", "DG3YDE")]["kind"] == "failed"
+    assert by_pair[("OH3SPN", "M9LOV")]["kind"] != "delivered"
+    assert graph["paths"] == []
+    database.close()
+
+
+def test_message_graph_marks_acknowledged_transmission_delivered(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("M0SPN", "test", "body")
+    transaction_id = database.begin_transmission_transaction(
+        message_id,
+        "direct",
+        "M0SPN",
+        "M0SPN",
+        ("OH3SPN", "M0SPN"),
+        "hash",
+        1_000,
+        30_000,
+    )
+    database.mark_transmission_submitted(transaction_id)
+    database.acknowledge_transmission(transaction_id)
+
+    graph = service.message_graph(message_id, "OH3SPN")
+    edge = next(edge for edge in graph["edges"] if edge["from"] == "OH3SPN")
+    assert edge["to"] == "M0SPN"
+    assert edge["kind"] == "delivered"
+    assert graph["paths"][0]["path"] == ["OH3SPN", "M0SPN"]
+    database.close()
+
+
 def test_live_activity_graph_requires_recent_evidence_in_both_directions(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)

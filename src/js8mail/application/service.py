@@ -267,13 +267,91 @@ class MailService:
     def message_graph(
         self, message_id: str, origin: str, band: str | None = None
     ) -> dict[str, object]:
+        """Build a semantic graph of RF evidence and this message's attempts.
+
+        Observations and route reports are not delivery confirmations.  Keep
+        those concepts separate from durable transmission outcomes so a
+        station that merely reported hearing the destination cannot make an
+        unacknowledged custody attempt appear green.
+        """
         message = self.database.get_message(message_id)
         if message is None:
             raise KeyError(message_id)
         destination = str(message["destination"]).upper()
+        message_state = str(message["state"])
         origin = origin.strip().upper()
         nodes: set[str] = {origin, destination}
         edges: dict[tuple[str, str], dict[str, Any]] = {}
+
+        def edge_for(source: str, target: str) -> dict[str, Any]:
+            key = (source, target)
+            return edges.setdefault(
+                key,
+                {
+                    "from": source,
+                    "to": target,
+                    "kind": "observed",
+                    "count": 0,
+                    "latest": 0,
+                    "snr": None,
+                    "attempts": 0,
+                    "last_action": None,
+                    "last_status": None,
+                    "label": "observed",
+                },
+            )
+
+        # Higher-priority operation outcomes replace passive evidence on the
+        # same pair, while preserving counters and RF SNR information.
+        priority = {
+            "observed": 0,
+            "reported": 1,
+            # A submitted-but-unacknowledged operation is still actionable
+            # evidence, even if an earlier API handoff failed.  Keep it
+            # orange until there is either a durable success or no attempt
+            # was ever submitted at all.
+            "failed": 2,
+            "pending": 3,
+            "delivered": 4,
+        }
+
+        def set_kind(edge: dict[str, Any], kind: str, label: str) -> None:
+            current = str(edge.get("kind", "observed"))
+            if priority.get(kind, 0) >= priority.get(current, 0):
+                edge["kind"] = kind
+                edge["label"] = label
+
+        def add_reported_edge(reporter: str, detail: str, observed_at_ms: int) -> None:
+            # Query-call replies commonly say e.g. "heard DG3YDE at -8 dB".
+            # This is evidence about a remote link, not proof that our own
+            # transmission reached the reporter.
+            match = re.search(
+                r"heard\s+([A-Z0-9/]+)\s+at\s+([+-]?\d+(?:\.\d+)?)\s*dB",
+                detail,
+                re.IGNORECASE,
+            )
+            reported_target = match.group(1).upper() if match else destination
+            try:
+                reported_snr = float(match.group(2)) if match else None
+            except (TypeError, ValueError):
+                reported_snr = None
+            if (
+                reporter.startswith("@")
+                or reported_target.startswith("@")
+                or reporter == reported_target
+            ):
+                return
+            nodes.update((reporter, reported_target))
+            edge = edge_for(reporter, reported_target)
+            edge["latest"] = max(int(edge["latest"]), observed_at_ms)
+            edge["reported_by"] = reporter
+            edge["reported_target"] = reported_target
+            if reported_snr is not None:
+                edge["snr"] = reported_snr
+            label = "reported"
+            if reported_snr is not None:
+                label = f"reported {reported_snr:g} dB"
+            set_kind(edge, "reported", label)
 
         for observation in self.database.recent_observations(500, band=band):
             params = observation["params"]
@@ -286,45 +364,153 @@ class MailService:
             if target.startswith("@") or source.startswith("@") or source == target:
                 continue
             nodes.update((source, target))
-            key = (source, target)
-            edge = edges.setdefault(
-                key,
-                {
-                    "from": source,
-                    "to": target,
-                    "kind": "observed",
-                    "count": 0,
-                    "latest": 0,
-                    "snr": None,
-                },
-            )
+            edge = edge_for(source, target)
             edge["count"] = int(edge["count"]) + 1
             edge["latest"] = max(int(edge["latest"]), int(observation["observed_at_ms"]))
             snr = params.get("SNR")
             if isinstance(snr, (int, float)):
                 edge["snr"] = snr if edge["snr"] is None else max(float(edge["snr"]), float(snr))
 
-        for attempt in self.database.list_attempts(message_id):
+        attempts = self.database.list_attempts(message_id)
+        transactions = self.database.list_transmission_transactions(message_id)
+        paths: list[dict[str, Any]] = []
+
+        for transaction in transactions:
+            try:
+                raw_path = json.loads(str(transaction.get("path_json") or "[]"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raw_path = []
+            path = tuple(
+                str(item).strip().upper()
+                for item in raw_path
+                if str(item).strip()
+            )
+            if len(path) < 2:
+                continue
+            nodes.update(path)
+            tx_status = str(transaction.get("status") or "")
+            operation = str(transaction.get("operation") or "")
+            if tx_status == "acknowledged":
+                kind, label = "delivered", f"{operation} delivered"
+            elif tx_status in {"timed_out", "unconfirmed"} and message_state in {
+                "failed",
+                "expired",
+            }:
+                kind, label = "failed", f"{operation} failed"
+            elif tx_status in {
+                "timed_out",
+                "unconfirmed",
+                "queued",
+                "tx_active",
+                "awaiting_ack",
+            }:
+                kind, label = "pending", f"{operation} pending"
+            else:
+                kind, label = "failed", f"{operation} failed"
+            first_hop = (path[0], path[1])
+            edge = edge_for(*first_hop)
+            edge["attempts"] = int(edge.get("attempts", 0)) + 1
+            edge["last_action"] = operation
+            edge["last_status"] = tx_status
+            edge["attempt_number"] = max(
+                int(edge.get("attempt_number") or 0),
+                int(transaction.get("retry_number") or 0) + 1,
+            )
+            edge["path"] = list(path)
+            set_kind(edge, kind, label)
+            paths.append(
+                {
+                    "path": list(path),
+                    "operation": operation,
+                    "status": tx_status,
+                    "attempt": int(transaction.get("retry_number") or 0) + 1,
+                    "kind": kind,
+                }
+            )
+
+        operation_attempt_numbers: dict[tuple[str, str], int] = {}
+        for attempt_number, attempt in enumerate(attempts, start=1):
+            action = str(attempt["action"]).lower()
             target = str(attempt["target"]).upper()
-            if target.startswith("@") or target == "ROUTE" or target == origin:
+            detail = str(attempt.get("detail") or "")
+            status = str(attempt["status"]).lower()
+            created_at_ms = int(attempt["created_at_ms"])
+            if action == "route_evidence" and status in {"received", "available"}:
+                add_reported_edge(target, detail, created_at_ms)
+                continue
+            if (
+                target.startswith("@")
+                or target == "ROUTE"
+                or target == origin
+                or action in {
+                    "defer",
+                    "route",
+                    "route_evidence_settling",
+                    "snr_probe",
+                    "hearing_probe",
+                    "hearing_query",
+                    "allcall_query_call",
+                    "candidate_query_call",
+                    "capability",
+                    "capability_wait",
+                    "capability_timeout",
+                }
+            ):
                 continue
             nodes.add(target)
-            key = (origin, target)
-            edge = edges.setdefault(
-                key,
-                {
-                    "from": origin,
-                    "to": target,
-                    "kind": "attempted",
-                    "count": 0,
-                    "latest": 0,
-                    "snr": None,
-                },
-            )
-            if attempt["status"] in {"received", "available"}:
-                edge["kind"] = "confirmed"
-            elif edge["kind"] == "observed":
-                edge["kind"] = "attempted"
+            edge = edge_for(origin, target)
+            edge["attempts"] = int(edge.get("attempts", 0)) + 1
+            edge["last_action"] = action
+            edge["last_status"] = status
+            operation_key = (origin, target)
+            operation_attempt_numbers[operation_key] = operation_attempt_numbers.get(operation_key, 0) + 1
+            # Transaction retry numbers are more meaningful than the global
+            # audit-row index.  Do not replace one with a large discovery-log
+            # row number when a durable transaction already supplied it.
+            if not edge.get("attempt_number"):
+                edge["attempt_number"] = operation_attempt_numbers[operation_key]
+            if action in {"delivery_ack", "standard_ack", "hop_ack", "custody_ack"} and status in {
+                "received",
+                "confirmed",
+                "available",
+            }:
+                set_kind(edge, "delivered", f"{action.replace('_', ' ')}")
+            elif status in {"failed", "error"}:
+                set_kind(edge, "failed", f"{action} failed")
+            elif status in {"started", "submitted", "uncertain", "deferred", "waiting"}:
+                set_kind(edge, "pending", f"{action} pending")
+            elif status in {"received", "confirmed", "available"}:
+                set_kind(edge, "delivered", f"{action} delivered")
+
+        # Also expose paths recorded before a transaction was created.  This
+        # is useful after upgrades and for historical route selections.
+        known_paths = {tuple(item["path"]) for item in paths}
+        for path in self.database.message_paths(message_id):
+            normalized = tuple(str(item).upper() for item in path)
+            if len(normalized) >= 2 and normalized not in known_paths:
+                nodes.update(normalized)
+                paths.append(
+                    {
+                        "path": list(normalized),
+                        "operation": "route",
+                        "status": "selected",
+                        "attempt": None,
+                        "kind": "reported",
+                    }
+                )
+
+        # Do not let a long-lived mailbox turn a graph request into a dump of
+        # every historical retry.  The database remains complete; the graph
+        # only needs the most recent route attempts for interpretation.
+        paths = paths[-64:]
+        return {
+            "message_id": message_id,
+            "origin": origin,
+            "destination": destination,
+            "nodes": sorted(nodes),
+            "edges": list(edges.values()),
+            "paths": paths,
+        }
 
         return {
             "message_id": message_id,
