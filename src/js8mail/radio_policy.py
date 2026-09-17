@@ -19,8 +19,9 @@ SPEED_ORDER = (4, 0, 1, 2, 8)
 class AirtimeBudgetExceeded(RuntimeError):
     """A local safety budget, rather than the radio, prevented transmission."""
 
-    def __init__(self, scope: str) -> None:
+    def __init__(self, scope: str, retry_at_ms: int | None = None) -> None:
         self.scope = scope
+        self.retry_at_ms = retry_at_ms
         super().__init__(f"{scope} airtime budget exhausted")
 
 
@@ -102,20 +103,49 @@ class AdaptiveSpeedPolicy:
 
 @dataclass(slots=True)
 class AirtimeBudget:
-    """Rolling accounting for one daemon; callers persist decisions in audit."""
+    """Rolling accounting for one scope; ``message_limit_ms`` is optional.
+
+    A radio-wide budget is a rolling-window safety limit.  A per-message
+    budget may additionally have a lifetime limit.  Keeping the lifetime
+    limit optional prevents a legacy, persisted message counter from turning
+    into a permanent station-wide TX lock.
+    """
 
     window_limit_ms: int = 15 * 60 * 1000
-    message_limit_ms: int = 5 * 60 * 1000
+    message_limit_ms: int | None = 5 * 60 * 1000
     window_used_ms: int = 0
     message_used_ms: int = 0
     window_started_at_ms: int | None = None
+    window_duration_ms: int = 15 * 60 * 1000
 
     def rollover(self, now_ms: int) -> None:
         if self.window_started_at_ms is None:
             self.window_started_at_ms = now_ms
-        elif now_ms - self.window_started_at_ms >= 15 * 60 * 1000:
+        elif now_ms - self.window_started_at_ms >= self.window_duration_ms:
             self.window_started_at_ms = now_ms
             self.window_used_ms = 0
+
+    def next_available_at(self, airtime_ms: int, now_ms: int) -> int | None:
+        """Return the earliest time this budget can admit ``airtime_ms``.
+
+        ``None`` means that the optional lifetime limit can never admit the
+        requested amount.  The returned time is intentionally precise so a
+        scheduler does not convert a short budget wait into a fresh full
+        window delay.
+        """
+        self.rollover(now_ms)
+        if airtime_ms < 0:
+            return None
+        if (
+            self.message_limit_ms is not None
+            and self.message_used_ms + airtime_ms > self.message_limit_ms
+        ):
+            return None
+        if self.window_used_ms + airtime_ms <= self.window_limit_ms:
+            return now_ms
+        if self.window_started_at_ms is None:
+            return now_ms
+        return self.window_started_at_ms + self.window_duration_ms
 
     def can_spend_at(self, airtime_ms: int, now_ms: int) -> bool:
         self.rollover(now_ms)
@@ -129,16 +159,17 @@ class AirtimeBudget:
     def can_spend(self, airtime_ms: int) -> bool:
         if airtime_ms < 0:
             return False
-        return (
-            self.window_used_ms + airtime_ms <= self.window_limit_ms
-            and self.message_used_ms + airtime_ms <= self.message_limit_ms
+        return self.window_used_ms + airtime_ms <= self.window_limit_ms and (
+            self.message_limit_ms is None
+            or self.message_used_ms + airtime_ms <= self.message_limit_ms
         )
 
     def spend(self, airtime_ms: int) -> bool:
         if not self.can_spend(airtime_ms):
             return False
         self.window_used_ms += airtime_ms
-        self.message_used_ms += airtime_ms
+        if self.message_limit_ms is not None:
+            self.message_used_ms += airtime_ms
         return True
 
     def retry_delay_ms(self, retry_count: int, priority: int = 0) -> int:

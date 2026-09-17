@@ -1,6 +1,6 @@
 # JS8Mail enhanced envelope protocol v1
 
-Status: version 1 specification for the early `JS8Mail/0.0.8` implementation.
+Status: version 1 specification for the early `JS8Mail/0.0.8b` implementation.
 
 This is the normative v1 wire specification, not an assertion that every
 JS8Call build exposes every transport feature. The adapter must capability

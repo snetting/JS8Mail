@@ -324,7 +324,8 @@ def complete_rf_train(
         now = utc_now_ms()
         controller.airtime_budget.rollover(now)
         controller.airtime_budget.window_used_ms += extra_ms
-        controller.airtime_budget.message_used_ms += extra_ms
+        if controller.airtime_budget.message_limit_ms is not None:
+            controller.airtime_budget.message_used_ms += extra_ms
         budget = controller.message_budgets.get(str(message_on_air))
         if budget is not None:
             budget.rollover(now)
@@ -587,7 +588,7 @@ document.querySelector('.version-button')?.replaceChildren(document.createTextNo
 
 # Keep the small initial HTML paint in sync with the release metadata that the
 # final script also applies after the page loads.
-PAGE = PAGE.replace("0.0.7", "0.0.8")
+PAGE = PAGE.replace("0.0.7", "0.0.8b").replace("v0.0.8", "v0.0.8b")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1656,7 +1657,9 @@ class Handler(BaseHTTPRequestHandler):
                 "radio.airtime_blocked",
                 {"message_id": message_id, "estimate_ms": airtime_ms, "speed": speed},
             )
-            raise AirtimeBudgetExceeded("rolling")
+            raise AirtimeBudgetExceeded(
+                "rolling", self.airtime_budget.next_available_at(airtime_ms, now)
+            )
         message_budget = None
         if message_id is not None:
             message_budget = self.message_budgets.setdefault(
@@ -1677,19 +1680,22 @@ class Handler(BaseHTTPRequestHandler):
                     "blocked",
                     f"per-message airtime budget exhausted at speed {speed}",
                 )
+                message_limit = message_budget.message_limit_ms
                 scope = (
                     "per-message-total"
-                    if message_budget.message_used_ms + airtime_ms > message_budget.message_limit_ms
+                    if message_limit is not None
+                    and message_budget.message_used_ms + airtime_ms > message_limit
                     else "per-message-window"
                 )
-                raise AirtimeBudgetExceeded(scope)
+                raise AirtimeBudgetExceeded(
+                    scope, message_budget.next_available_at(airtime_ms, now)
+                )
         # A short, independent protocol LED makes API/RF handoff visible even
         # when the radio remains in its normal RX state.
-        # Reserve before handing text to JS8Call. If the daemon dies after
-        # submission but before the next line, the durable counters are still
-        # conservative rather than silently under-counting airtime. A rejected
-        # API submission may over-count slightly, which is safer than a retry
-        # storm or duty-cycle breach.
+        # Reserve before handing text to JS8Call. The reservation is
+        # deliberately conservative if the daemon dies after submission; a
+        # future ledger can reconcile it against observed RF. A definite
+        # preflight failure must not be allowed to consume this reservation.
         if not self.airtime_budget.spend_at(airtime_ms, now):
             raise AirtimeBudgetExceeded("rolling")
         if message_budget is not None and not message_budget.spend_at(airtime_ms, now):
@@ -1746,10 +1752,10 @@ async def run(args: argparse.Namespace) -> None:
     saved_window_start = saved_airtime.get("window_started_at_ms")
     airtime_budget = AirtimeBudget(
         # The radio-wide budget is governed by its rolling duty-cycle
-        # window.  The five-minute ceiling is intentionally reserved for
-        # each individual message budget below; applying it here would
-        # eventually block the entire station after a few unrelated tests.
-        message_limit_ms=15 * 60 * 1000,
+        # window.  Lifetime ceilings belong to individual messages below;
+        # applying one here would eventually block the entire station after
+        # a few unrelated tests and would survive only until restart.
+        message_limit_ms=None,
         window_used_ms=int(saved_airtime.get("window_used_ms") or 0),
         window_started_at_ms=int(saved_window_start) if saved_window_start is not None else None,
     )
@@ -2273,17 +2279,23 @@ async def run(args: argparse.Namespace) -> None:
                             )
                             database.transition_message(str(message["id"]), MessageState.FAILED)
                         else:
+                            retry_at = exc.retry_at_ms
+                            now_ms = utc_now_ms()
+                            if retry_at is None or retry_at <= now_ms:
+                                retry_delay = 60_000
+                            else:
+                                retry_delay = retry_at - now_ms
                             database.record_attempt(
                                 str(message["id"]),
                                 "group_broadcast",
                                 destination,
                                 "deferred",
-                                "rolling airtime budget exhausted; waiting for budget rollover",
+                                "airtime budget exhausted; waiting for the next eligible window",
                             )
                             database.defer_message(
                                 str(message["id"]),
-                                15 * 60 * 1000,
-                                "group broadcast waiting for rolling airtime budget rollover",
+                                retry_delay,
+                                "group broadcast waiting for the next eligible airtime window",
                                 increment_retry=False,
                             )
                     except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:

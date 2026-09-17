@@ -29,6 +29,9 @@ evidence, selective path discovery, alternative routes, bounded retries, and
 time-aware backoff. Internet topology data may enhance local decisions in a
 future service, but it is never required for RF operation.
 
+See the [changelog](docs/CHANGELOG.md) for release notes, including the
+current `0.0.8b` emergency scheduler fix.
+
 ## First start (recommended)
 
 Python 3.12 or newer is required.
