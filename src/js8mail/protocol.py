@@ -14,13 +14,14 @@ from urllib.parse import quote, unquote
 MAX_PARTS = 255
 MAX_PART_BYTES = 4096
 MAX_FRAME_BYTES = 4096
-DISPLAY_VERSION = "JS8Mail/0.0.8"
+DISPLAY_VERSION = "JS8Mail/0.0.8b"
 CAPABILITY_PROTOCOL_VERSION = 1
 CAPABILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
 CAPABILITY_FEATURES = frozenset({"E2E", "MP", "PA", "RR"})
-JS8MAIL_MARKER_RE = re.compile(r"\[JS8MAIL/\d+\.\d+\.\d+\]", re.IGNORECASE)
-JS8MAIL_MARKER_PREFIX_RE = re.compile(r"^\s*\[JS8MAIL/\d+\.\d+\.\d+\]\s*", re.IGNORECASE)
-JS8MAIL_MARKER_SUFFIX_RE = re.compile(r"\s*\[JS8MAIL/\d+\.\d+\.\d+\]\s*$", re.IGNORECASE)
+_DISPLAY_VERSION_RE = r"\d+\.\d+\.\d+(?:[a-z]+\d*)?"
+JS8MAIL_MARKER_RE = re.compile(rf"\[JS8MAIL/{_DISPLAY_VERSION_RE}\]", re.IGNORECASE)
+JS8MAIL_MARKER_PREFIX_RE = re.compile(rf"^\s*\[JS8MAIL/{_DISPLAY_VERSION_RE}\]\s*", re.IGNORECASE)
+JS8MAIL_MARKER_SUFFIX_RE = re.compile(rf"\s*\[JS8MAIL/{_DISPLAY_VERSION_RE}\]\s*$", re.IGNORECASE)
 CAPABILITY_FRAME_RE = re.compile(
     # JS8Call activity fragments can concatenate at a frame boundary, so the
     # separator between the numeric protocol version and the first feature

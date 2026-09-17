@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.0.8b — 2026-09-17
+
+Emergency scheduler fix discovered during supervised testing:
+
+- removed the erroneous station-wide cumulative airtime lifetime cap that
+  could block all queued RF until the daemon restarted;
+- retained the per-message 10-minute burst and 60-minute lifetime limits;
+- calculated the next eligible airtime window for budget deferrals, avoiding
+  unnecessary full-window waits and repeated blocked attempts;
+- accepted beta version markers such as `[JS8MAIL/0.0.8b]`.
+
+Thanks to the operators and on-air testers whose observations exposed this
+failure mode. This is still an early, experimental release.
+
 ## 0.0.8 — 2026-09-17
 
 Approaching the first stable community release. This release improves the

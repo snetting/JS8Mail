@@ -8,7 +8,8 @@ JS8Mail adds a durable mailbox, evidence collection, route selection, custody
 tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
-This document describes the current `0.0.8` implementation. It is useful and
+This document describes the current `0.0.8b` emergency scheduler-fix
+implementation. It is useful and
 radio-capable, and is suitable for supervised on-air use, but it remains early
 and experimental. Operators should monitor transmissions and be ready to pause
 automation if anything behaves unexpectedly. Extensive testing has not revealed
@@ -805,9 +806,12 @@ will remain at a weaker confidence level.
 ## Airtime, speed, and retry protection
 
 The daemon estimates airtime conservatively from JS8Call speed and text length.
-It persists radio airtime counters across restart and maintains a separate
-per-message budget. The rolling radio window and individual-message cap are
-deliberately independent.
+It persists the current radio-window usage across restart and maintains a
+separate per-message budget. The rolling radio window and individual-message
+cap are deliberately independent. The station-wide budget has no cumulative
+lifetime cap: an old `message_used_ms` value from earlier builds is retained
+only as legacy diagnostic data and cannot permanently lock the station after a
+restart or across rolling windows.
 
 Speed evidence is recorded per directed link. The adaptive policy is cautious:
 
@@ -837,7 +841,8 @@ most 10 minutes in its rolling per-message burst window (the accounting
 cadence is 15 minutes) and at most 60 minutes cumulatively over its lifetime.
 The station-wide rolling budget is independent and is persisted in SQLite
 across daemon restarts. A rolling-window block defers transmission until the
-window rolls over; reaching the message lifetime ceiling marks that message
+actual next eligible window boundary, rather than blindly waiting a new full
+15 minutes. Reaching the message lifetime ceiling marks that message
 Failed rather than retrying forever. These are local policy blocks, not
 evidence that the radio is busy, and they do not prevent other messages from
 being considered when their own budgets permit.
