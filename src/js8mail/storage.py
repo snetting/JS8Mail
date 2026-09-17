@@ -1138,14 +1138,16 @@ class Database:
         now_ms: int | None = None,
         retry_cooldown_ms: int,
         max_automatic_offers: int,
+        quarantine_ms: int = 24 * 60 * 60 * 1000,
     ) -> dict[str, Any]:
         """Return durable retry facts for a standard JS8Call store offer.
 
         JS8Call's ``MSG TO:`` ACK confirms acceptance by this custodian, but
         its absence is ambiguous: the frame, the custodian's automatic reply,
-        or the reply itself may have been lost.  Keep this calculation based
-        on durable attempt rows so a daemon restart cannot reset an automatic
-        re-offer loop.
+        or the reply itself may have been lost. Keep this calculation based on
+        durable attempt rows so a daemon restart cannot reset an automatic
+        re-offer loop. After two unanswered offers, the result becomes a
+        time-limited, exponentially escalating quarantine.
         """
         now = utc_now_ms() if now_ms is None else int(now_ms)
         target = custodian.upper()
@@ -1176,6 +1178,12 @@ class Database:
             ),
             default=None,
         )
+        timeout_count = sum(
+            1
+            for attempt in attempts
+            if attempt["action"] == "store_timeout"
+            and attempt["status"] in {"uncertain", "failed"}
+        )
         last_manual_retry_at_ms = max(
             (
                 int(attempt["created_at_ms"])
@@ -1197,6 +1205,7 @@ class Database:
                 "automatic_offer_count": automatic_offer_count,
                 "next_eligible_at_ms": None,
                 "manual_override": False,
+                "quarantine_until_ms": None,
             }
         if automatic_offer_count == 0 or manual_override:
             return {
@@ -1205,14 +1214,32 @@ class Database:
                 "automatic_offer_count": automatic_offer_count,
                 "next_eligible_at_ms": now,
                 "manual_override": manual_override,
+                "quarantine_until_ms": None,
             }
-        if automatic_offer_count >= max_automatic_offers:
+        if timeout_count >= max_automatic_offers and last_timeout_at_ms is not None:
+            # Escalate repeated unanswered offers without permanently
+            # blacklisting a station. The first quarantine is one day; later
+            # failures double it. A manual retry remains an override.
+            quarantine_until_ms = last_timeout_at_ms + quarantine_ms * 2 ** (
+                timeout_count - max_automatic_offers
+            )
+            if now < quarantine_until_ms:
+                return {
+                    "eligible": False,
+                    "reason": "custodian quarantined after repeated unanswered offers",
+                    "automatic_offer_count": automatic_offer_count,
+                    "next_eligible_at_ms": quarantine_until_ms,
+                    "manual_override": False,
+                    "quarantine_until_ms": quarantine_until_ms,
+                }
+        if automatic_offer_count >= max_automatic_offers and timeout_count < max_automatic_offers:
             return {
                 "eligible": False,
-                "reason": "automatic store-offer limit reached; custody remains unconfirmed",
+                "reason": "second store offer is still awaiting its response deadline",
                 "automatic_offer_count": automatic_offer_count,
                 "next_eligible_at_ms": None,
                 "manual_override": False,
+                "quarantine_until_ms": None,
             }
         last_outcome_at_ms = last_timeout_at_ms or last_offer_at_ms
         assert last_outcome_at_ms is not None
@@ -1227,7 +1254,57 @@ class Database:
             "automatic_offer_count": automatic_offer_count,
             "next_eligible_at_ms": next_eligible_at_ms,
             "manual_override": False,
+            "quarantine_until_ms": None,
         }
+
+    def message_route_failure_policies(
+        self,
+        message_id: str,
+        *,
+        now_ms: int | None = None,
+        failure_threshold: int = 2,
+        quarantine_ms: int = 24 * 60 * 60 * 1000,
+    ) -> dict[tuple[str, ...], dict[str, Any]]:
+        """Return durable quarantine state for unanswered relay paths.
+
+        Only completed relay transactions that timed out count. Local API
+        errors, radio-busy deferrals, airtime blocks, and incomplete TX are
+        deliberately excluded because they say nothing about the remote
+        relay. Quarantine is exact-path scoped so a relay remains usable for
+        a different destination.
+        """
+        now = utc_now_ms() if now_ms is None else int(now_ms)
+        rows = self.connection.execute(
+            "SELECT path_json, status, tx_finished_at_ms, ack_deadline_ms "
+            "FROM transmission_transactions WHERE message_id=? AND operation='relay'",
+            (message_id,),
+        ).fetchall()
+        failures: dict[tuple[str, ...], list[int]] = {}
+        for row in rows:
+            if str(row["status"]) != "timed_out":
+                continue
+            try:
+                path = tuple(str(item).upper() for item in json.loads(row["path_json"]))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if len(path) < 3:
+                continue
+            failure_at = int(row["ack_deadline_ms"] or row["tx_finished_at_ms"] or 0)
+            failures.setdefault(path, []).append(failure_at)
+        result: dict[tuple[str, ...], dict[str, Any]] = {}
+        for path, failure_times in failures.items():
+            if len(failure_times) < failure_threshold:
+                continue
+            last_failure = max(failure_times)
+            quarantine_until = last_failure + quarantine_ms * 2 ** (
+                len(failure_times) - failure_threshold
+            )
+            result[path] = {
+                "blocked": now < quarantine_until,
+                "failure_count": len(failure_times),
+                "quarantine_until_ms": quarantine_until,
+            }
+        return result
 
     def upsert_message_part(
         self,

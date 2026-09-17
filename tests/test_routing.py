@@ -54,6 +54,17 @@ def test_attempted_path_is_penalized_but_can_be_reused_and_stale_evidence_decays
     assert stale.action == RouteAction.DEFER
 
 
+def test_blocked_path_is_skipped_until_quarantine_expires() -> None:
+    graph = TemporalGraph()
+    graph.add(link("A", "B", 0.95))
+    graph.add(link("B", "C", 0.95))
+    graph.add(link("A", "D", 0.65))
+    graph.add(link("D", "C", 0.65))
+    blocked = {("A", "B", "C")}
+    plan = RouteEngine(graph).choose("A", "C", now_ms=NOW, blocked_paths=blocked)
+    assert plan.path == ("A", "D", "C")
+
+
 def test_replans_from_last_proven_custodian_when_relay_disappears() -> None:
     graph = TemporalGraph()
     graph.add(link("ORIGIN", "RELAY", 0.95, available=False))

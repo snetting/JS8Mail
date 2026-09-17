@@ -992,16 +992,21 @@ not prove that the custodian rejected or failed to store the message.
 
 JS8Mail consequently never upgrades a timeout to **Stored**. It shows the
 attempt as **custody unconfirmed** and records the uncertainty. To avoid
-duplicate store spam, automatic legacy offers are limited to two submissions
-per custodian, with a one-hour cooldown before the second submission. Other
-eligible custodians may still be considered within the normal distinct-
-custodian limit, and route discovery resumes after a short two-minute defer
-following a timeout. The one-hour cooldown never blocks another path. After
-the automatic limit, the same custodian is not offered the message again
-automatically; use **Retry now** only when you deliberately want to repeat the
-operation. A later custody ACK or JS8Mail delivery receipt can still reconcile
-a late result because the original transmission is kept in the durable
-transaction history.
+duplicate store spam, one ambiguous timeout permits one further automatic
+offer after a short two-minute cooldown; alternate routes and custodians are
+considered first. Two unanswered offers quarantine that custodian for 24 hours,
+with longer exponential quarantine after repeated failures. This is scoped to
+that custodian and never blocks another path. A later custody ACK or JS8Mail
+delivery receipt can still reconcile a late result because the original
+transmission is kept in the durable transaction history. **Retry now** remains
+an explicit operator override.
+
+Relay paths have a matching protection: two completed relay transactions that
+time out quarantine the exact path for 24 hours, escalating after repeated
+failures. Local/API errors, radio-busy deferrals, airtime blocks, and
+incomplete transmissions do not penalize the remote relay, because they do not
+prove that the relay refused anything. The relay may still be used for other
+destinations or after the quarantine expires.
 
 ## Data, privacy, and recovery
 

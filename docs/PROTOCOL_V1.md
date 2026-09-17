@@ -234,16 +234,22 @@ number of reverse-path hops. A late ACK can therefore be reconciled after a
 message has returned to route discovery. If a custodian ACK deadline expires,
 the store is marked unconfirmed and automatic retry is deferred. Because the
 underlying protocol does not expose a portable end-to-end storage receipt,
-JS8Mail records each submitted legacy offer durably and bounds automatic
-re-offers to two per custodian, with a one-hour cooldown before the second
-offer. That cooldown applies only to repeating the same custodian offer: after
-a timeout, route discovery continues after a short two-minute defer, and an
-alternate route or custodian can be tried without waiting an hour. It may try
-another eligible custodian (up to the existing three distinct-custodian
-limit), but it does not repeatedly offer the same message to the same station
-indefinitely. An operator's explicit Retry now is an intentional override. A
-successful standard custodian ACK changes the result to `Stored · ACK`; it
-still does not prove recipient retrieval.
+JS8Mail records each submitted legacy offer durably. After one ambiguous
+timeout it allows one further automatic offer after a short two-minute
+cooldown; alternate routes and custodians are considered first. Two unanswered
+offers quarantine that custodian for 24 hours, with longer exponential
+quarantine for repeated failures. This restriction is per custodian: it does
+not block a different route or custodian. An operator's explicit Retry now is
+an intentional override. A successful standard custodian ACK changes the
+result to `Stored · ACK`; it still does not prove recipient retrieval.
+
+Relay paths use a similar but more conservative rule. Two completed relay
+transactions that time out quarantine the exact origin-to-destination path
+for 24 hours, escalating on repeated failures. Local API errors, radio-busy
+deferrals, airtime blocks, incomplete transmissions, and other failures before
+RF completion do not count against the remote relay. A relay is therefore not
+globally banned merely because one destination or one propagation interval
+failed.
 
 ## Compatibility and safety
 
