@@ -236,11 +236,14 @@ the store is marked unconfirmed and automatic retry is deferred. Because the
 underlying protocol does not expose a portable end-to-end storage receipt,
 JS8Mail records each submitted legacy offer durably and bounds automatic
 re-offers to two per custodian, with a one-hour cooldown before the second
-offer. It may try another eligible custodian (up to the existing three
-distinct-custodian limit), but it does not repeatedly offer the same message to
-the same station indefinitely. An operator's explicit Retry now is an
-intentional override. A successful standard custodian ACK changes the result
-to `Stored · ACK`; it still does not prove recipient retrieval.
+offer. That cooldown applies only to repeating the same custodian offer: after
+a timeout, route discovery continues after a short two-minute defer, and an
+alternate route or custodian can be tried without waiting an hour. It may try
+another eligible custodian (up to the existing three distinct-custodian
+limit), but it does not repeatedly offer the same message to the same station
+indefinitely. An operator's explicit Retry now is an intentional override. A
+successful standard custodian ACK changes the result to `Stored · ACK`; it
+still does not prove recipient retrieval.
 
 ## Compatibility and safety
 

@@ -106,8 +106,11 @@ MESSAGE_TOTAL_LIMIT_MS = 60 * 60 * 1000
 # does not make that ACK an end-to-end custody receipt. Bound automatic offers
 # to one custodian so a missing ACK cannot create an indefinite duplicate
 # store loop. An operator retry remains an explicit override.
+# This cooldown applies only to repeating the same custodian offer. It must
+# never delay discovery of another route or custodian.
 LEGACY_CUSTODY_RETRY_COOLDOWN_MS = 60 * 60 * 1000
 LEGACY_CUSTODY_MAX_AUTOMATIC_OFFERS = 2
+LEGACY_CUSTODY_ALTERNATE_DISCOVERY_DELAY_MS = 2 * 60 * 1000
 
 
 def capability_response_window_ms(path: tuple[str, ...], speed: object) -> int:
@@ -2233,8 +2236,8 @@ async def run(args: argparse.Namespace) -> None:
                         database.transition_message(message_id, MessageState.WAITING_ROUTE)
                     database.defer_message(
                         message_id,
-                        15 * 60 * 1000,
-                        "custodian ACK absent; waiting before another store offer",
+                        LEGACY_CUSTODY_ALTERNATE_DISCOVERY_DELAY_MS,
+                        "custodian ACK absent; discovering another route or custodian",
                         increment_retry=False,
                     )
                 else:
@@ -2694,7 +2697,6 @@ async def run(args: argparse.Namespace) -> None:
                         for item in database.list_custody(str(message["id"]))
                     }
                     candidate_custodian = None
-                    custody_policy_blocks: list[tuple[str, dict[str, Any]]] = []
                     for candidate in promising:
                         candidate_key = candidate.upper()
                         if candidate_key == destination.upper() or candidate_key in active_custody:
@@ -2708,7 +2710,6 @@ async def run(args: argparse.Namespace) -> None:
                         if policy["eligible"]:
                             candidate_custodian = candidate
                             break
-                        custody_policy_blocks.append((candidate, policy))
                     # Legacy custodians do not provide a portable end-to-end
                     # receipt. Limit the number of distinct offers and never
                     # offer a second custodian while an earlier one is still
@@ -2752,36 +2753,11 @@ async def run(args: argparse.Namespace) -> None:
                                 str(message["id"]), 60_000, "custodian offer unavailable"
                             )
                         continue
-                    if candidate_custodian is None and custody_policy_blocks:
-                        next_eligible_at_ms = min(
-                            int(policy["next_eligible_at_ms"])
-                            for _, policy in custody_policy_blocks
-                            if policy["next_eligible_at_ms"] is not None
-                        ) if any(
-                            policy["next_eligible_at_ms"] is not None
-                            for _, policy in custody_policy_blocks
-                        ) else None
-                        if next_eligible_at_ms is not None:
-                            now_ms = utc_now_ms()
-                            delay_ms = max(30_000, next_eligible_at_ms - now_ms)
-                            custodian, policy = custody_policy_blocks[0]
-                            database.record_attempt(
-                                str(message["id"]),
-                                "custody_policy",
-                                custodian,
-                                "blocked",
-                                (
-                                    f"{policy['reason']}; automatic offers are bounded to "
-                                    f"{LEGACY_CUSTODY_MAX_AUTOMATIC_OFFERS} per custodian"
-                                ),
-                            )
-                            database.defer_message(
-                                str(message["id"]),
-                                delay_ms,
-                                "legacy custody offer cooldown; continuing discovery without duplicate offer",
-                                increment_retry=False,
-                            )
-                            continue
+                    # A previously offered custodian may be cooling down or
+                    # have reached the automatic limit. That restriction is
+                    # local to that custodian: do not wait for its cooldown,
+                    # because the destination may become reachable through a
+                    # different route while the message is still active.
                 if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(
                     str(message["id"])
                 ):

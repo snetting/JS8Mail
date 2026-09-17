@@ -995,11 +995,13 @@ attempt as **custody unconfirmed** and records the uncertainty. To avoid
 duplicate store spam, automatic legacy offers are limited to two submissions
 per custodian, with a one-hour cooldown before the second submission. Other
 eligible custodians may still be considered within the normal distinct-
-custodian limit. After the automatic limit, the same custodian is not offered
-the message again automatically; use **Retry now** only when you deliberately
-want to repeat the operation. A later custody ACK or JS8Mail delivery receipt
-can still reconcile a late result because the original transmission is kept in
-the durable transaction history.
+custodian limit, and route discovery resumes after a short two-minute defer
+following a timeout. The one-hour cooldown never blocks another path. After
+the automatic limit, the same custodian is not offered the message again
+automatically; use **Retry now** only when you deliberately want to repeat the
+operation. A later custody ACK or JS8Mail delivery receipt can still reconcile
+a late result because the original transmission is kept in the durable
+transaction history.
 
 ## Data, privacy, and recovery
 
