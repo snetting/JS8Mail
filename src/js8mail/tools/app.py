@@ -2251,12 +2251,41 @@ async def run(args: argparse.Namespace) -> None:
                 # delivery operation. Do this before route discovery so a
                 # queued group post can never wait for an ACK or generate
                 # QUERY CALL traffic for the group.
-                if destination.startswith("@") and message["state"] in {
-                    MessageState.QUEUED,
-                    MessageState.WAITING_ROUTE,
-                }:
+                if (
+                    destination.startswith("@")
+                    and message["state"]
+                    in {
+                        MessageState.QUEUED,
+                        MessageState.WAITING_ROUTE,
+                    }
+                    and database.due_for_retry(str(message["id"]))
+                ):
                     try:
                         await controller.transmit(str(message["id"]))
+                    except AirtimeBudgetExceeded as exc:
+                        if exc.scope == "per-message-total":
+                            database.record_attempt(
+                                str(message["id"]),
+                                "group_broadcast",
+                                destination,
+                                "failed",
+                                "per-message airtime budget exhausted",
+                            )
+                            database.transition_message(str(message["id"]), MessageState.FAILED)
+                        else:
+                            database.record_attempt(
+                                str(message["id"]),
+                                "group_broadcast",
+                                destination,
+                                "deferred",
+                                "rolling airtime budget exhausted; waiting for budget rollover",
+                            )
+                            database.defer_message(
+                                str(message["id"]),
+                                15 * 60 * 1000,
+                                "group broadcast waiting for rolling airtime budget rollover",
+                                increment_retry=False,
+                            )
                     except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                         database.record_attempt(
                             str(message["id"]),
