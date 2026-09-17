@@ -564,11 +564,16 @@ document.head.insertAdjacentHTML('beforeend',"<style>#status .pill:nth-child(3){
 new MutationObserver(()=>updateBandStatus()).observe(document.getElementById('status'),{childList:true});
 function movePauseControl(){let bar=document.getElementById('status'),band=document.getElementById('status-band'),button=bar?.querySelector('button');if(bar&&band&&button&&band.nextElementSibling!==button)band.after(button)}new MutationObserver(movePauseControl).observe(document.getElementById('status'),{childList:true});setInterval(movePauseControl,3000);movePauseControl();
 async function updateProtocolLeds(){try{let s=await api('/api/status'),now=Date.now(),dcd=document.getElementById('led-dcd'),bar=document.getElementById('radio-leds'),js8=document.getElementById('led-js8');if(dcd)dcd.className='led'+(Number(s.dcd_until_ms||0)>now?' on-dcd':'');if(!js8&&bar){js8=document.createElement('span');js8.id='led-js8';js8.className='led';js8.textContent='JS8';bar.appendChild(js8)}if(js8)js8.className='led'+(Number(s.js8_activity_until_ms||0)>now?' on-js8':'')}catch(e){}}
-let protocolLedStyle=document.createElement('style');protocolLedStyle.textContent='.led.on-js8{background:#d9d2ff;color:#4b2c82}';document.head.appendChild(protocolLedStyle);updateProtocolLeds();setInterval(updateProtocolLeds,250);
+let protocolLedStyle=document.createElement('style');protocolLedStyle.textContent='.led.on-js8{background:#d9d2ff;color:#4b2c82}';document.head.appendChild(protocolLedStyle);updateProtocolLeds();setInterval(updateProtocolLeds,1000);
 const refreshWithoutOpenOutbox=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);if(!document.querySelector('#messages details[open]'))await refreshMailbox();await updateRadioLeds();restoreExpanded()};refresh=refreshWithoutOpenOutbox;
 const standardInboxRenderer=renderInbox;renderInbox=items=>standardInboxRenderer(items.filter(x=>!x.group_name));
 const cataloguedGroupRenderer=renderGroups;renderGroups=items=>{let observed=items.filter(x=>Number(x.seen_count)>0).map(x=>x.name);let added=observed.filter(x=>!EMERGENCY_GROUPS.includes(x));EMERGENCY_GROUPS.push(...added);cataloguedGroupRenderer(items);EMERGENCY_GROUPS.splice(EMERGENCY_GROUPS.length-added.length,added.length)};
-refresh().then(addMessageControls);refreshStations();setInterval(()=>{refresh().then(addMessageControls);refreshStations()},3000);
+// Keep refreshes single-flight. A long API response must never start another
+// full Outbox render on top of the previous one.
+let mailboxRefreshInFlight=false,stationsRefreshInFlight=false;
+async function refreshMailboxPage(){if(mailboxRefreshInFlight)return;mailboxRefreshInFlight=true;try{await refresh();await addMessageControls()}catch(e){let box=document.getElementById('messages');if(box&&box.textContent.trim()==='Loading…')box.textContent='Outbox temporarily unavailable; retrying…'}finally{mailboxRefreshInFlight=false}}
+async function refreshStationsPage(){if(stationsRefreshInFlight)return;stationsRefreshInFlight=true;try{await refreshStations()}catch(_e){}finally{stationsRefreshInFlight=false}}
+refreshMailboxPage();refreshStationsPage();setInterval(refreshMailboxPage,3000);setInterval(refreshStationsPage,5000);
 // Apply the unread row decoration after the final mailbox renderer wrapper.
 const finalInboxRenderer=renderInbox;renderInbox=items=>{finalInboxRenderer(items);let rows=[...document.querySelectorAll('#inbox tr')].slice(1);(window.inboxItems||[]).forEach((item,index)=>{if(!item.is_read&&rows[index])rows[index].classList.add('inbox-new')})};
 const inboxBulkSelection=new Set;
@@ -691,7 +696,11 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, self.service.database.list_groups())
         elif path == "/api/messages":
             active_id = self.status.get("tx_message_id")
-            views = self.service.message_views()
+            query = parse_qs(urlparse(self.path).query)
+            history = query.get("history", [""])[0].strip().lower()
+            # The live UI gets a bounded recent timeline. Full durable history
+            # remains in SQLite and can be requested explicitly for diagnostics.
+            views = self.service.message_views(attempt_limit=None if history == "all" else 80)
             for view in views:
                 view["tx_active"] = bool(active_id and view.get("id") == active_id)
             self.reply(200, views)

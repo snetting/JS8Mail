@@ -200,14 +200,32 @@ class MailService:
             if bool(policy["blocked"])
         }
 
-    def message_views(self) -> list[dict[str, object]]:
+    def message_views(self, *, attempt_limit: int | None = 80) -> list[dict[str, object]]:
+        """Return mailbox rows without expanding unbounded attempt history.
+
+        Attempt history remains durable in SQLite and is still used by graph
+        and diagnostic code. The normal mailbox refresh only needs a bounded
+        recent window; sending thousands of rows to the browser every few
+        seconds can otherwise make a long-lived retry loop unusable.
+        """
         views: list[dict[str, object]] = []
         for message in self.database.list_messages():
             view = dict(message)
-            view["attempts"] = self.database.list_attempts(str(message["id"]))
-            view["custody"] = self.database.list_custody(str(message["id"]))
-            view["transmissions"] = self.database.list_transmission_transactions(str(message["id"]))
-            attempts = view["attempts"]
+            all_attempts = self.database.list_attempts(str(message["id"]))
+            view["attempts_total"] = len(all_attempts)
+            if attempt_limit is None:
+                attempts = all_attempts
+            else:
+                bounded_limit = max(1, int(attempt_limit))
+                attempts = all_attempts[-bounded_limit:]
+            view["attempts_truncated"] = len(attempts) < len(all_attempts)
+            view["attempts"] = attempts
+            custody = self.database.list_custody(str(message["id"]))
+            transmissions = self.database.list_transmission_transactions(str(message["id"]))
+            view["custody"] = custody[-80:]
+            view["transmissions"] = transmissions[-80:]
+            # Confidence still uses the complete durable history.
+            attempts = all_attempts
             state = str(message["state"])
             if state == "cancelled":
                 view["confidence"] = "cancelled"
