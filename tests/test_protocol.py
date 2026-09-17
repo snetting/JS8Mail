@@ -74,7 +74,7 @@ def test_capability_advertisement_is_versioned_and_bounded() -> None:
 
 def test_mailbox_filters_protocol_headers_but_keeps_user_payload() -> None:
     assert clean_user_message("[JS8MAIL/0.0.6] STANDARD E2E") == "STANDARD E2E"
-    assert clean_user_message("STANDARD E2E [JS8MAIL/0.0.8b]") == "STANDARD E2E"
+    assert clean_user_message("STANDARD E2E [JS8MAIL/0.0.8c]") == "STANDARD E2E"
     assert is_js8mail_wire_frame("J8M1 CAP 1 E2E,MP,PA")
     assert is_js8mail_wire_frame("MSGJ8M1 D M0SPNOH3SPN 4560 1/1 TEST")
     assert is_js8mail_wire_frame("J8M1 DELIVERED 4560 123 OH3SPN")
