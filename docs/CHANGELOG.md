@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.8c — Outbox and delivery-safety follow-up
+
+- repeated Outbox timeline entries and repeated status blocks are now shown as
+  compact `Repeated ×N` summaries while the full attempt history remains
+  durable;
+- custodians receive one short retry opportunity, then enter an escalating
+  24-hour-or-longer quarantine after unanswered store offers;
+- exact relay paths are quarantined after repeated completed RF timeouts, while
+  local handoff and radio-busy failures are not attributed to remote stations;
+- alternate route discovery continues without waiting for a same-custodian
+  cooldown.
+
+This remains early and experimental. Thanks to the operators and on-air testers
+who helped identify these reliability issues.
+
 ## 0.0.8b — emergency scheduler fix
 
 This small follow-up release addresses a serious airtime-accounting defect

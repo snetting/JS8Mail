@@ -470,7 +470,7 @@ async def test_opportunistic_unknown_peer_sends_plain_message_without_capability
 
     await handler.transmit(message_id)
 
-    assert radio.sent == ["N0CALL MSG first contact: hello ordinary station [JS8Mail/0.0.8b]"]
+    assert radio.sent == ["N0CALL MSG first contact: hello ordinary station [JS8Mail/0.0.8c]"]
     assert not any(
         attempt["action"] == "capability_wait" for attempt in database.list_attempts(message_id)
     )

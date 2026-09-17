@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.8c — 2026-09-17
+
+Outbox and delivery-safety follow-up:
+
+- compacted repeated Outbox timeline entries, including repeated multi-line
+  status blocks, while retaining the complete durable history;
+- preferred untried custodians after an ambiguous store timeout;
+- quarantined custodians after two unanswered offers, with escalating
+  quarantine windows for repeated failures;
+- quarantined exact relay paths after two completed RF timeouts without
+  penalizing local/API, busy-radio, airtime, or incomplete-TX failures;
+- kept alternate route discovery moving instead of waiting for a same-custodian
+  cooldown.
+
+This remains early, experimental radio software. Thanks to the operators and
+on-air testers whose reports continue to improve its reliability.
+
 ## 0.0.8b — 2026-09-17
 
 Emergency scheduler fix discovered during supervised testing:
