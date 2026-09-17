@@ -118,6 +118,7 @@ class MailService:
         destination: str,
         now_ms: int | None = None,
         attempted_paths: set[tuple[str, ...]] | None = None,
+        blocked_paths: set[tuple[str, ...]] | None = None,
         band: str | None = None,
     ) -> RoutePlan:
         now = utc_now_ms() if now_ms is None else now_ms
@@ -136,7 +137,11 @@ class MailService:
 
         if band == "":
             return RouteEngine(graph).choose(
-                origin, destination, now_ms=now, attempted_paths=attempted_paths
+                origin,
+                destination,
+                now_ms=now,
+                attempted_paths=attempted_paths,
+                blocked_paths=blocked_paths,
             )
         for link in self.database.temporal_link_views(5000):
             if band is not None and str(link.get("band", "")).lower() != band.strip().lower():
@@ -177,8 +182,23 @@ class MailService:
                 )
             )
         return RouteEngine(graph).choose(
-            origin, destination, now_ms=now, attempted_paths=attempted_paths
+            origin,
+            destination,
+            now_ms=now,
+            attempted_paths=attempted_paths,
+            blocked_paths=blocked_paths,
         )
+
+    def blocked_message_paths(
+        self, message_id: str, *, now_ms: int | None = None
+    ) -> set[tuple[str, ...]]:
+        return {
+            tuple(path)
+            for path, policy in self.database.message_route_failure_policies(
+                message_id, now_ms=now_ms
+            ).items()
+            if bool(policy["blocked"])
+        }
 
     def message_views(self) -> list[dict[str, object]]:
         views: list[dict[str, object]] = []

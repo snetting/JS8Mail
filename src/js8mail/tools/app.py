@@ -102,6 +102,14 @@ ROUTE_HOP_PROBE_COOLDOWN_MS = 5 * 60 * 1000
 # the station-wide budget remains the ultimate safety ceiling.
 MESSAGE_BURST_LIMIT_MS = 10 * 60 * 1000
 MESSAGE_TOTAL_LIMIT_MS = 60 * 60 * 1000
+# JS8Call v3.0.3 sends a normal ACK after accepting MSG TO:, but the protocol
+# does not make that ACK an end-to-end custody receipt. Allow one short retry
+# after an ambiguous offer, then quarantine the same custodian for a day. The
+# quarantine is per custodian and an operator retry remains an override.
+LEGACY_CUSTODY_RETRY_COOLDOWN_MS = 2 * 60 * 1000
+LEGACY_CUSTODY_MAX_AUTOMATIC_OFFERS = 2
+LEGACY_CUSTODY_ALTERNATE_DISCOVERY_DELAY_MS = 2 * 60 * 1000
+LEGACY_CUSTODY_FAILURE_QUARANTINE_MS = 24 * 60 * 60 * 1000
 
 
 def capability_response_window_ms(path: tuple[str, ...], speed: object) -> int:
@@ -904,6 +912,7 @@ class Handler(BaseHTTPRequestHandler):
                 origin,
                 destination,
                 attempted_paths=self.service.database.attempted_message_paths(message_id),
+                blocked_paths=self.service.blocked_message_paths(message_id),
                 band=str(self.status.get("band", "")),
             )
         if plan is not None and getattr(plan, "action", None) == "defer":
@@ -2227,8 +2236,8 @@ async def run(args: argparse.Namespace) -> None:
                         database.transition_message(message_id, MessageState.WAITING_ROUTE)
                     database.defer_message(
                         message_id,
-                        15 * 60 * 1000,
-                        "custodian ACK absent; waiting before another store offer",
+                        LEGACY_CUSTODY_ALTERNATE_DISCOVERY_DELAY_MS,
+                        "custodian ACK absent; discovering another route or custodian",
                         increment_retry=False,
                     )
                 else:
@@ -2459,6 +2468,7 @@ async def run(args: argparse.Namespace) -> None:
                             database.transition_message(
                                 str(message["id"]), MessageState.WAITING_ROUTE
                             )
+                            selected_route_cache.pop(str(message["id"]), None)
                             database.wake_message_for_route(str(message["id"]))
                             continue
                 direct_age_ms = fresh_direct_response_age_ms(
@@ -2474,12 +2484,14 @@ async def run(args: argparse.Namespace) -> None:
                 )
                 message_id = str(message["id"])
                 cached_route = selected_route_cache.get(message_id)
+                blocked_paths = service.blocked_message_paths(message_id, now_ms=now_wall_ms)
                 retained_plan: RoutePlan | None = None
                 if cached_route is not None:
                     candidate_plan, selected_at_ms, selected_band = cached_route
                     if (
                         selected_band == str(status.get("band", ""))
                         and now_wall_ms - selected_at_ms < ROUTE_HOP_PROBE_FRESH_MS
+                        and candidate_plan.path not in blocked_paths
                     ):
                         retained_plan = candidate_plan
                     else:
@@ -2600,6 +2612,7 @@ async def run(args: argparse.Namespace) -> None:
                         str(status.get("callsign", "")),
                         destination,
                         attempted_paths=database.attempted_message_paths(str(message["id"])),
+                        blocked_paths=blocked_paths,
                         band=str(status.get("band", "")),
                     )
                     if len(plan.path) >= 2:
@@ -2677,9 +2690,6 @@ async def run(args: argparse.Namespace) -> None:
                 if message.get("retry_count", 0) >= 3 and database.due_for_retry(
                     str(message["id"])
                 ):
-                    candidate_custodian = next(
-                        (candidate for candidate in promising if candidate != destination), None
-                    )
                     active_custody = {
                         str(item["custodian"]).upper()
                         for item in database.list_custody(str(message["id"]))
@@ -2690,13 +2700,38 @@ async def run(args: argparse.Namespace) -> None:
                         str(item["custodian"]).upper()
                         for item in database.list_custody(str(message["id"]))
                     }
+                    untried_custodians: list[str] = []
+                    retry_custodians: list[str] = []
+                    for candidate in promising:
+                        candidate_key = candidate.upper()
+                        if candidate_key == destination.upper() or candidate_key in active_custody:
+                            continue
+                        policy = database.legacy_store_offer_policy(
+                            str(message["id"]),
+                            candidate,
+                            retry_cooldown_ms=LEGACY_CUSTODY_RETRY_COOLDOWN_MS,
+                            max_automatic_offers=LEGACY_CUSTODY_MAX_AUTOMATIC_OFFERS,
+                            quarantine_ms=LEGACY_CUSTODY_FAILURE_QUARANTINE_MS,
+                        )
+                        if policy["eligible"]:
+                            if int(policy["automatic_offer_count"]) == 0:
+                                untried_custodians.append(candidate)
+                            else:
+                                retry_custodians.append(candidate)
+                    # Prefer a custodian that has not seen this message yet.
+                    # A second offer is still allowed when no new candidate is
+                    # known, but it should not crowd out route diversity.
+                    candidate_custodian = next(
+                        iter(untried_custodians or retry_custodians), None
+                    )
                     # Legacy custodians do not provide a portable end-to-end
                     # receipt. Limit the number of distinct offers and never
                     # offer a second custodian while an earlier one is still
-                    # pending or accepted.
+                    # pending or accepted. A submitted offer without an ACK is
+                    # also retained in durable history, so repeated failures
+                    # quarantine that custodian instead of creating a loop.
                     if (
                         candidate_custodian is not None
-                        and candidate_custodian.upper() not in active_custody
                         and len(custody_history) < 3
                     ):
                         try:
@@ -2732,6 +2767,11 @@ async def run(args: argparse.Namespace) -> None:
                                 str(message["id"]), 60_000, "custodian offer unavailable"
                             )
                         continue
+                    # A previously offered custodian may be cooling down or
+                    # have reached the automatic limit. That restriction is
+                    # local to that custodian: do not wait for its cooldown,
+                    # because the destination may become reachable through a
+                    # different route while the message is still active.
                 if message["state"] == MessageState.WAITING_ROUTE and not database.due_for_retry(
                     str(message["id"])
                 ):

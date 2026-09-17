@@ -177,6 +177,125 @@ def test_custody_status_is_durable_and_distinct_from_delivery(tmp_path: Path) ->
     reopened.close()
 
 
+def test_legacy_store_offer_policy_bounds_automatic_reoffers(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.enqueue_message("m1", "DEST", "body")
+    cooldown = 2 * 60 * 1000
+    quarantine = 24 * 60 * 60 * 1000
+    database.record_attempt("m1", "store", "CUST", "submitted", "queued")
+    now = utc_now_ms()
+
+    waiting = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=now,
+        retry_cooldown_ms=cooldown,
+        max_automatic_offers=2,
+        quarantine_ms=quarantine,
+    )
+    assert waiting["eligible"] is False
+    assert waiting["next_eligible_at_ms"] >= now + cooldown - 1_000
+
+    database.record_attempt("m1", "store_timeout", "CUST", "uncertain", "no ACK")
+    due = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=utc_now_ms() + cooldown,
+        retry_cooldown_ms=cooldown,
+        max_automatic_offers=2,
+        quarantine_ms=quarantine,
+    )
+    assert due["eligible"] is True
+    database.record_attempt("m1", "store", "CUST", "submitted", "queued")
+    bounded = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=utc_now_ms() + cooldown * 2,
+        retry_cooldown_ms=cooldown,
+        max_automatic_offers=2,
+        quarantine_ms=quarantine,
+    )
+    assert bounded["eligible"] is False
+    assert bounded["next_eligible_at_ms"] is None
+    database.record_attempt("m1", "store_timeout", "CUST", "uncertain", "no ACK")
+    quarantined = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=utc_now_ms(),
+        retry_cooldown_ms=cooldown,
+        max_automatic_offers=2,
+        quarantine_ms=quarantine,
+    )
+    assert quarantined["eligible"] is False
+    assert quarantined["reason"].startswith("custodian quarantined")
+    assert quarantined["next_eligible_at_ms"] is not None
+    after_quarantine = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=int(quarantined["next_eligible_at_ms"]) + 1,
+        retry_cooldown_ms=cooldown,
+        max_automatic_offers=2,
+        quarantine_ms=quarantine,
+    )
+    assert after_quarantine["eligible"] is True
+    database.close()
+
+
+def test_manual_retry_overrides_legacy_store_cooldown(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.enqueue_message("m1", "DEST", "body")
+    database.record_attempt("m1", "store", "CUST", "submitted", "queued")
+    database.record_attempt("m1", "store_timeout", "CUST", "uncertain", "no ACK")
+    database.record_attempt("m1", "manual_retry", "route", "requested", "operator retry")
+    decision = database.legacy_store_offer_policy(
+        "m1",
+        "CUST",
+        now_ms=utc_now_ms(),
+        retry_cooldown_ms=60 * 60 * 1000,
+        max_automatic_offers=1,
+        quarantine_ms=24 * 60 * 60 * 1000,
+    )
+    assert decision["eligible"] is True
+    assert decision["manual_override"] is True
+    database.close()
+
+
+def test_relay_route_quarantine_uses_only_completed_timeouts(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.enqueue_message("m1", "DEST", "body")
+    path = ("ORIGIN", "RELAY", "DEST")
+    first = database.begin_transmission_transaction(
+        "m1", "relay", "RELAY", "DEST", path, "hash-1", 1_000, 1_000
+    )
+    database.mark_transmission_submitted(first)
+    database.connection.execute(
+        "UPDATE transmission_transactions SET status='timed_out', ack_deadline_ms=? WHERE id=?",
+        (1_000, first),
+    )
+    second = database.begin_transmission_transaction(
+        "m1", "relay", "RELAY", "DEST", path, "hash-2", 1_000, 1_000
+    )
+    database.mark_transmission_submitted(second)
+    database.connection.execute(
+        "UPDATE transmission_transactions SET status='timed_out', ack_deadline_ms=? WHERE id=?",
+        (2_000, second),
+    )
+    database.connection.commit()
+    policy = database.message_route_failure_policies(
+        "m1", now_ms=2_001, quarantine_ms=86_400_000
+    )
+    assert policy[path]["blocked"] is True
+    assert policy[path]["failure_count"] == 2
+
+    busy = database.begin_transmission_transaction(
+        "m1", "relay", "RELAY", "DEST", path, "hash-3", 1_000, 1_000
+    )
+    database.mark_transmission_unconfirmed(busy)
+    database.connection.commit()
+    assert database.message_route_failure_policies("m1", now_ms=2_001)[path]["failure_count"] == 2
+    database.close()
+
+
 def test_transmission_ack_correlation_survives_route_state_and_reopen(tmp_path: Path) -> None:
     path = tmp_path / "mail.sqlite3"
     database = Database(path)

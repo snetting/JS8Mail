@@ -90,9 +90,11 @@ class RouteEngine:
         *,
         now_ms: int,
         attempted_paths: set[tuple[str, ...]] | None = None,
+        blocked_paths: set[tuple[str, ...]] | None = None,
     ) -> RoutePlan:
         origin, destination = origin.upper(), destination.upper()
         attempted = attempted_paths or set()
+        blocked = {tuple(item.upper() for item in path) for path in (blocked_paths or set())}
         paths: list[RoutePlan] = []
         explored = 0
         max_explored = 10_000
@@ -105,6 +107,8 @@ class RouteEngine:
             if self.max_hops is not None and len(path) - 1 > self.max_hops:
                 return
             if node == destination:
+                if path in blocked:
+                    return
                 weakest = min(scores, default=0.0)
                 # Prefer fresh alternatives, but do not permanently blacklist a
                 # route: propagation and custodian availability can change.

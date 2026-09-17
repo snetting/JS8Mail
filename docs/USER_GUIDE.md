@@ -979,6 +979,35 @@ outbox shows **Stored · ACK**, not Complete. A plain ACK for an enhanced
 multipart transfer remains hop evidence; only a valid `J8M1 DELIVERED` receipt
 can produce **Complete+**.
 
+### Legacy store offers and missing ACKs
+
+The JS8Call v3.0.3 implementation accepts `C MSG TO:DEST text` into its local
+store and then queues `C ACK` (or the complete reverse relay path followed by
+`ACK`) through its automatic-reply path. This is visible in the [JS8Call
+v3.0.3 command handler](https://github.com/JS8Call-improved/JS8Call-improved/blob/v3.0.3/JS8_Mainwindow/processCommandActivity.cpp).
+That reply can still be suppressed by
+JS8Call's automatic-reply setting, operator-idle protection, an occupied text
+buffer, or radio/API timing. Therefore, a missing ACK is ambiguous: it does
+not prove that the custodian rejected or failed to store the message.
+
+JS8Mail consequently never upgrades a timeout to **Stored**. It shows the
+attempt as **custody unconfirmed** and records the uncertainty. To avoid
+duplicate store spam, one ambiguous timeout permits one further automatic
+offer after a short two-minute cooldown; alternate routes and custodians are
+considered first. Two unanswered offers quarantine that custodian for 24 hours,
+with longer exponential quarantine after repeated failures. This is scoped to
+that custodian and never blocks another path. A later custody ACK or JS8Mail
+delivery receipt can still reconcile a late result because the original
+transmission is kept in the durable transaction history. **Retry now** remains
+an explicit operator override.
+
+Relay paths have a matching protection: two completed relay transactions that
+time out quarantine the exact path for 24 hours, escalating after repeated
+failures. Local/API errors, radio-busy deferrals, airtime blocks, and
+incomplete transmissions do not penalize the remote relay, because they do not
+prove that the relay refused anything. The relay may still be used for other
+destinations or after the quarantine expires.
+
 ## Data, privacy, and recovery
 
 Message bodies stay in the local SQLite database and on the RF path. Ordinary
