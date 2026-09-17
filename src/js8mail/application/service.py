@@ -380,11 +380,7 @@ class MailService:
                 raw_path = json.loads(str(transaction.get("path_json") or "[]"))
             except (TypeError, ValueError, json.JSONDecodeError):
                 raw_path = []
-            path = tuple(
-                str(item).strip().upper()
-                for item in raw_path
-                if str(item).strip()
-            )
+            path = tuple(str(item).strip().upper() for item in raw_path if str(item).strip())
             if len(path) < 2:
                 continue
             nodes.update(path)
@@ -442,7 +438,8 @@ class MailService:
                 target.startswith("@")
                 or target == "ROUTE"
                 or target == origin
-                or action in {
+                or action
+                in {
                     "defer",
                     "route",
                     "route_evidence_settling",
@@ -463,7 +460,9 @@ class MailService:
             edge["last_action"] = action
             edge["last_status"] = status
             operation_key = (origin, target)
-            operation_attempt_numbers[operation_key] = operation_attempt_numbers.get(operation_key, 0) + 1
+            operation_attempt_numbers[operation_key] = (
+                operation_attempt_numbers.get(operation_key, 0) + 1
+            )
             # Transaction retry numbers are more meaningful than the global
             # audit-row index.  Do not replace one with a large discovery-log
             # row number when a durable transaction already supplied it.

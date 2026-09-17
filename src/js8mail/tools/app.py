@@ -3107,8 +3107,7 @@ async def run(args: argparse.Namespace) -> None:
                     # letting the activity assembler own this fragment.
                     activity_mirror = (
                         not reassembled_activity_event
-                        and
-                        event.event_type == "RX.DIRECTED"
+                        and event.event_type == "RX.DIRECTED"
                         and event.params.get("BITS") is not None
                         and bool(
                             re.match(
