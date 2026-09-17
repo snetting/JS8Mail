@@ -1,6 +1,7 @@
 name: Windows bundle
 
 on:
+  workflow_dispatch:
   schedule:
     # Nightly at 02:17 UTC; the job skips itself when main has not changed.
     - cron: "17 2 * * *"

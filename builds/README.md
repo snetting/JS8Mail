@@ -38,7 +38,9 @@ nightly at 02:17 UTC and checks whether `main` has changed since the last
 successful Windows build. If there were changes—including one or more merged
 feature branches—it builds once; otherwise it skips the Windows runner.
 Feature-branch pushes do not start a build, and daytime pushes are coalesced
-into the next nightly build.
+into the next nightly build. A maintainer can also start it immediately from
+the Actions page with **Run workflow**; the manual run uses the same main-branch
+checkout and produces the same artifact.
 
 This repository intentionally does not commit generated `.exe` files. They
 are platform-specific, large, and reproducible from the script and workflow.
