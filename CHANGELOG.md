@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.0.8 — 2026-09-17
+
+Approaching the first stable community release. This release improves the
+operator's understanding of route evidence and makes the message graph useful
+for reviewing what was actually observed versus what JS8Mail attempted:
+
+- Added semantic message-route graph edges for delivered, pending, failed,
+  reported, and aged/observed evidence, with compact latest-route details.
+- Kept remote route reports separate from local delivery attempts, avoiding a
+  false impression that a complete path succeeded merely because a relay
+  reported hearing the destination.
+- Improved graph readability with straight edges, collision-aware labels,
+  hop badges, labels drawn above edges, and node circles sized for long
+  callsigns.
+- Color-coded the Live RF Activity legend to match reciprocal, active one-way,
+  aged one-way, and JS8Mail evidence links.
+- No database migration is required for this release; existing observations,
+  attempts, transactions, and path history remain usable.
+- Completed standard JS8Call activity streams now reach normal inbox handling
+  after reassembly; the activity mirror guard no longer discards a reconstructed
+  final `RX.DIRECTED` event, so temporary partial entries can become complete.
+
+Special thanks to F4LPU for reporting the overlapping route labels and small
+callsign circles in the message graph. Thanks also to everyone who helped with
+the local and on-air tests that exposed the edge cases behind this release.
+
+This remains early-development experimental radio software, but the project
+is approaching a first stable release for wider supervised community testing.
+
 ## 0.0.7 — 2026-09-16
 
 Approaching the first community-testable release. This release includes the

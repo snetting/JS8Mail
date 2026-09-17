@@ -8,7 +8,7 @@ JS8Mail adds a durable mailbox, evidence collection, route selection, custody
 tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
-This document describes the current `0.0.7` implementation. It is useful and
+This document describes the current `0.0.8` implementation. It is useful and
 radio-capable, and is suitable for supervised on-air use, but it remains early
 and experimental. Operators should monitor transmissions and be ready to pause
 automation if anything behaves unexpectedly. Extensive testing has not revealed
@@ -608,6 +608,15 @@ so partially received activity streams, `J8M1 CAP` negotiations, enhanced data,
 receipts, and ordinary decoded traffic remain visible. The full durable
 outbox/audit timeline remains the authoritative place for every attempt and
 state transition.
+
+Standard JS8Call mail is reassembled from JS8Call activity fragments when a
+long message is exposed that way. A temporary Partial inbox item is expected
+while continuation frames are arriving. JS8Mail only upgrades it to Complete
+after the final activity/direct-message event is seen; a missing final flag is
+reported as partial rather than guessed complete. When JS8Call emits both an
+activity copy and a reconstructed final directed event, the copy is ignored
+only to avoid duplication—the reconstructed event is still processed as the
+authoritative inbox message.
 
 The graph view uses these colours:
 
