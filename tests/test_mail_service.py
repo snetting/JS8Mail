@@ -74,6 +74,31 @@ def test_message_confidence_describes_latest_unconfirmed_operation(tmp_path: Pat
     database.close()
 
 
+def test_plain_ack_for_enhanced_message_is_not_labelled_standard(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("F4LPU", "Test", "Enhanced body", enhanced_mode="opportunistic")
+    database.upsert_message_part(
+        message_id,
+        1,
+        1,
+        "Enhanced body",
+        direction="outgoing",
+        peer="F4LPU",
+    )
+    database.record_attempt(message_id, "multipart", "F4LPU", "submitted", "queued")
+    database.record_attempt(
+        message_id,
+        "standard_ack",
+        "F4LPU",
+        "received",
+        "JS8Call ACK for enhanced frame",
+    )
+
+    assert service.message_views()[0]["confidence"] == "enhanced_acknowledged"
+    database.close()
+
+
 def test_new_discovery_attempt_overrides_older_payload_submission(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)

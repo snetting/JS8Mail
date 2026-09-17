@@ -226,6 +226,13 @@ class MailService:
             view["transmissions"] = transmissions[-80:]
             # Confidence still uses the complete durable history.
             attempts = all_attempts
+            enhanced_outgoing = bool(
+                self.database.list_message_parts(
+                    str(message["id"]),
+                    direction="outgoing",
+                    peer=str(message["destination"]),
+                )
+            )
             state = str(message["state"])
             if state == "cancelled":
                 view["confidence"] = "cancelled"
@@ -248,7 +255,13 @@ class MailService:
                 attempt["action"] in {"hop_ack", "standard_ack"} and attempt["status"] == "received"
                 for attempt in attempts
             ):
-                view["confidence"] = "radio_acknowledged"
+                # A plain JS8Call ACK can acknowledge an enhanced JS8Mail
+                # frame without proving that the JS8Mail peer reassembled
+                # the message. Do not expose that as "Standard" in the UI;
+                # the sender still needs a JS8Mail receipt.
+                view["confidence"] = (
+                    "enhanced_acknowledged" if enhanced_outgoing else "radio_acknowledged"
+                )
             else:
                 latest_attempt = max(
                     attempts,
