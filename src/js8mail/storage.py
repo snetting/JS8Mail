@@ -1028,6 +1028,11 @@ class Database:
             "UPDATE messages SET next_attempt_at_ms = NULL, updated_at_ms = ? WHERE id = ?",
             (now, message_id),
         )
+        self.connection.execute(
+            "UPDATE transmission_transactions SET status='unconfirmed' "
+            "WHERE message_id=? AND status IN ('queued','tx_active','awaiting_ack')",
+            (message_id,),
+        )
         self.connection.commit()
         self.audit(
             "message.automatic_retry_held",

@@ -1234,6 +1234,19 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             raise
+        current = self.service.database.get_message(message_id)
+        if current is not None and current["state"] == MessageState.ACKNOWLEDGED:
+            self.service.database.mark_transmission_unconfirmed(transaction_id)
+            if self.active_transaction_id == transaction_id:
+                self.active_transaction_id = None
+            self.service.database.record_attempt(
+                message_id,
+                action,
+                target,
+                "held",
+                "remaining frames suppressed after automatic ACK hold",
+            )
+            return
         self.service.database.mark_transmission_submitted(transaction_id)
         self.service.database.record_attempt(
             message_id, action, target, "submitted", "queued in JS8Call for next TX cycle"
@@ -2380,6 +2393,39 @@ async def run(args: argparse.Namespace) -> None:
                         for item in transactions
                         if item["status"] in {"queued", "tx_active", "awaiting_ack"}
                     ]
+                    attempts = database.list_attempts(str(message["id"]))
+                    enhanced_message = bool(
+                        database.list_message_parts(
+                            str(message["id"]),
+                            direction="outgoing",
+                            peer=destination,
+                        )
+                    )
+                    direct_submissions = [
+                        attempt
+                        for attempt in attempts
+                        if attempt["action"] in {"direct", "multipart"}
+                        and attempt["status"] == "submitted"
+                    ]
+                    final_peer_ack_count = (
+                        distinct_ack_count(attempts, destination) if enhanced_message else 0
+                    )
+                    if (
+                        enhanced_message
+                        and direct_submissions
+                        and final_peer_ack_count >= ENHANCED_ACK_RETRY_LIMIT
+                    ):
+                        database.record_attempt(
+                            str(message["id"]),
+                            "receipt_unconfirmed",
+                            destination,
+                            "uncertain",
+                            "JS8Call accepted the message, but no JS8Mail receipt arrived "
+                            f"after {final_peer_ack_count} ACKs; automatic retries held",
+                        )
+                        database.hold_after_js8call_ack(str(message["id"]))
+                        selected_route_cache.pop(str(message["id"]), None)
+                        continue
                     if active_transactions:
                         # A new message or a discovery tick must never fill a
                         # receive window belonging to this transaction.
@@ -2401,20 +2447,6 @@ async def run(args: argparse.Namespace) -> None:
                         continue
                 direct_expired = False
                 if message["state"] == MessageState.IN_PROGRESS:
-                    attempts = database.list_attempts(str(message["id"]))
-                    direct_submissions = [
-                        attempt
-                        for attempt in attempts
-                        if attempt["action"] in {"direct", "multipart"}
-                        and attempt["status"] == "submitted"
-                    ]
-                    enhanced_message = bool(
-                        database.list_message_parts(
-                            str(message["id"]),
-                            direction="outgoing",
-                            peer=destination,
-                        )
-                    )
                     has_followup = any(
                         (
                             attempt["action"] == "delivery_ack"
@@ -2423,25 +2455,6 @@ async def run(args: argparse.Namespace) -> None:
                         and attempt["status"] in {"received", "confirmed"}
                         for attempt in attempts
                     )
-                    final_peer_ack_count = (
-                        distinct_ack_count(attempts, destination) if enhanced_message else 0
-                    )
-                    if (
-                        enhanced_message
-                        and direct_submissions
-                        and final_peer_ack_count >= ENHANCED_ACK_RETRY_LIMIT
-                    ):
-                        database.record_attempt(
-                            str(message["id"]),
-                            "receipt_unconfirmed",
-                            destination,
-                            "uncertain",
-                            "JS8Call accepted the message, but no JS8Mail receipt arrived "
-                            f"after {final_peer_ack_count} ACKs; automatic retries held",
-                        )
-                        database.hold_after_js8call_ack(str(message["id"]))
-                        selected_route_cache.pop(str(message["id"]), None)
-                        continue
                     if direct_submissions and not has_followup:
                         relevant_tx = next(
                             (
