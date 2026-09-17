@@ -14,6 +14,7 @@ from js8mail.tools.app import (
     capability_response_window_ms,
     complete_rf_train,
     delivery_path_for_receipt,
+    distinct_ack_count,
     fresh_direct_response_age_ms,
     queue_marker_capability_response,
     reconcile_part_receipt,
@@ -32,6 +33,16 @@ class FakeRadio:
 
     async def set_speed(self, speed: int) -> None:
         return
+
+
+def test_distinct_ack_count_coalesces_duplicate_decodes() -> None:
+    attempts = [
+        {"action": "standard_ack", "status": "received", "target": "F4LPU", "created_at_ms": 1000},
+        {"action": "standard_ack", "status": "received", "target": "F4LPU", "created_at_ms": 1001},
+        {"action": "standard_ack", "status": "received", "target": "F4LPU", "created_at_ms": 40_000},
+        {"action": "standard_ack", "status": "received", "target": "OTHER", "created_at_ms": 50_000},
+    ]
+    assert distinct_ack_count(attempts, "F4LPU") == 2
 
 
 def test_capability_timing_accounts_for_return_hops() -> None:

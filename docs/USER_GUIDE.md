@@ -598,6 +598,7 @@ The outbox deliberately distinguishes these states:
 | Frames observed | JS8Call produced a TX frame; remote decoding is unproven. |
 | Standard | An addressed station acknowledged ordinary JS8Call delivery; JS8Mail end-to-end delivery is unproven. |
 | Stored at custodian | A custodian acknowledged a store operation; recipient retrieval is still pending. This stops automatic re-offering; the operator can retain it or start a fresh retry deliberately. |
+| Acknowledged | JS8Call accepted an enhanced message, but no JS8Mail end-to-end receipt arrived after the bounded retry policy. Automatic retries are held; the operator may retry manually. |
 | Delivered / Complete | An ordinary/known delivery conclusion supported by local evidence. |
 | Complete+ | A JS8Mail destination sent an end-to-end delivery receipt. |
 | Read | Only available for an explicitly enabled read receipt. |
@@ -978,6 +979,13 @@ that the `MSG TO:` store operation was accepted for later collection, so the
 outbox shows **Stored · ACK**, not Complete. A plain ACK for an enhanced
 multipart transfer remains hop evidence; only a valid `J8M1 DELIVERED` receipt
 can produce **Complete+**.
+
+To prevent an enhanced message from retransmitting indefinitely when the
+destination's JS8Call accepts it but its JS8Mail receipt is lost, JS8Mail
+allows one retry and then holds automatic retries after two distinct final-peer
+ordinary ACK opportunities. The outbox shows **Acknowledged · JS8Call accepted
+· JS8Mail receipt unconfirmed**. The operator can use **Retry now** if a later
+receipt is still expected; the original message ID is retained.
 
 ### Legacy store offers and missing ACKs
 

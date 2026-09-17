@@ -1020,6 +1020,20 @@ class Database:
         )
         self.connection.commit()
 
+    def hold_after_js8call_ack(self, message_id: str) -> None:
+        """Stop automatic retries after repeated ACKs without a JS8Mail receipt."""
+        self.transition_message(message_id, "acknowledged")
+        now = utc_now_ms()
+        self.connection.execute(
+            "UPDATE messages SET next_attempt_at_ms = NULL, updated_at_ms = ? WHERE id = ?",
+            (now, message_id),
+        )
+        self.connection.commit()
+        self.audit(
+            "message.automatic_retry_held",
+            {"message_id": message_id, "reason": "js8call_ack_without_js8mail_receipt"},
+        )
+
     def list_messages(self, state: str | None = None) -> list[dict[str, Any]]:
         query = "SELECT * FROM messages"
         parameters: tuple[str, ...] = ()

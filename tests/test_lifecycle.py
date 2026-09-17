@@ -4,6 +4,8 @@ from js8mail.application.lifecycle import MessageState, can_transition
 def test_lifecycle_allows_planning_and_rejects_terminal_revival() -> None:
     assert can_transition(MessageState.QUEUED, MessageState.WAITING_ROUTE)
     assert can_transition(MessageState.IN_PROGRESS, MessageState.DELIVERED)
+    assert can_transition(MessageState.IN_PROGRESS, MessageState.ACKNOWLEDGED)
+    assert can_transition(MessageState.ACKNOWLEDGED, MessageState.QUEUED)
     assert not can_transition(MessageState.DELIVERED, MessageState.QUEUED)
 
 

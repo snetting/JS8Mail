@@ -12,6 +12,7 @@ class MessageState(StrEnum):
     WAITING_APPROVAL = "waiting_approval"
     WAITING_OPPORTUNITY = "waiting_opportunity"
     IN_PROGRESS = "in_progress"
+    ACKNOWLEDGED = "acknowledged"
     STORED = "stored"
     DELIVERED = "delivered"
     FAILED = "failed"
@@ -76,10 +77,15 @@ def can_transition(current: MessageState, target: MessageState) -> bool:
         },
         MessageState.IN_PROGRESS: {
             MessageState.WAITING_ROUTE,
+            MessageState.ACKNOWLEDGED,
             MessageState.STORED,
             MessageState.DELIVERED,
             MessageState.FAILED,
             MessageState.EXPIRED,
+            MessageState.CANCELLED,
+        },
+        MessageState.ACKNOWLEDGED: {
+            MessageState.QUEUED,
             MessageState.CANCELLED,
         },
     }

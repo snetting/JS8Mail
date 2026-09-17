@@ -99,6 +99,21 @@ def test_plain_ack_for_enhanced_message_is_not_labelled_standard(tmp_path: Path)
     database.close()
 
 
+def test_acknowledged_message_can_be_manually_requeued(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("F4LPU", "Test", "Enhanced body", enhanced_mode="opportunistic")
+    database.transition_message(message_id, "waiting_route")
+    database.transition_message(message_id, "in_progress")
+    database.hold_after_js8call_ack(message_id)
+
+    assert database.get_message(message_id)["state"] == "acknowledged"  # type: ignore[index]
+    assert service.message_views()[0]["confidence"] == "enhanced_acknowledged_stopped"
+    service.retry(message_id)
+    assert database.get_message(message_id)["state"] == "queued"  # type: ignore[index]
+    database.close()
+
+
 def test_new_discovery_attempt_overrides_older_payload_submission(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)

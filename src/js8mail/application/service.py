@@ -67,6 +67,7 @@ class MailService:
             return
         state = MessageState(str(message["state"]))
         if state in {
+            MessageState.ACKNOWLEDGED,
             MessageState.STORED,
             MessageState.DELIVERED,
             MessageState.FAILED,
@@ -80,8 +81,12 @@ class MailService:
         message = self.database.get_message(message_id)
         if message is None:
             raise KeyError(message_id)
-        if message["state"] not in {MessageState.FAILED, MessageState.CANCELLED}:
-            raise ValueError("only failed or cancelled messages can be retried")
+        if message["state"] not in {
+            MessageState.ACKNOWLEDGED,
+            MessageState.FAILED,
+            MessageState.CANCELLED,
+        }:
+            raise ValueError("only acknowledged, failed, or cancelled messages can be retried")
         self.database.connection.execute(
             "UPDATE messages SET state = ?, updated_at_ms = ? WHERE id = ?",
             (MessageState.QUEUED, utc_now_ms(), message_id),
@@ -93,8 +98,12 @@ class MailService:
         message = self.database.get_message(message_id)
         if message is None:
             raise KeyError(message_id)
-        if message["state"] not in {MessageState.QUEUED, MessageState.WAITING_ROUTE}:
-            raise ValueError("only queued or waiting messages can be retried now")
+        if message["state"] not in {
+            MessageState.ACKNOWLEDGED,
+            MessageState.QUEUED,
+            MessageState.WAITING_ROUTE,
+        }:
+            raise ValueError("only acknowledged, queued, or waiting messages can be retried now")
         self.database.connection.execute(
             "UPDATE messages SET state = ?, next_attempt_at_ms = NULL, updated_at_ms = ? WHERE id = ?",
             (MessageState.QUEUED, utc_now_ms(), message_id),
@@ -240,6 +249,8 @@ class MailService:
                 view["confidence"] = "delivery_failed"
             elif state == "expired":
                 view["confidence"] = "expired"
+            elif state == "acknowledged":
+                view["confidence"] = "enhanced_acknowledged_stopped"
             elif state == "delivered" and str(message["destination"]).upper().startswith("@"):
                 view["confidence"] = "broadcast_submitted"
             elif state == "stored":
