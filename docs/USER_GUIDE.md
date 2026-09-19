@@ -8,7 +8,7 @@ JS8Mail adds a durable mailbox, evidence collection, route selection, custody
 tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
-This document describes the current `0.0.8c` outbox and custody-route safeguard
+This document describes the current `0.0.8d` outbox, custody-route, and stored-message collection safeguard
 implementation. It is useful and
 radio-capable, and is suitable for supervised on-air use, but it remains early
 and experimental. Operators should monitor transmissions and be ready to pause
@@ -17,6 +17,23 @@ unexpected transmit loops, but future changes or unforeseen glitches cannot be
 guaranteed away. In particular, a route score is evidence-based advice, not a
 guarantee that a station is listening now. Always operate within your licence,
 local band plan, power limits, and the expectations of other operators.
+
+### Collecting messages held by a JS8Call custodian
+
+When a periodic `QUERY MSGS` reaches a station holding a persistent JS8Call
+message, JS8Call may answer with a line such as `MM0ZFG: OH3SPN YES MSG ID
+431`. The numeric ID is local to that custodian, so JS8Mail queues the
+targeted `MM0ZFG QUERY MSG 431` request. It does not transmit from inside the
+receive callback: the normal scheduler waits for a safe JS8Call handoff, leaving
+room for the response and any outstanding RX/TX train to settle.
+
+Duplicate announcements are coalesced. A failed or partial collection remains
+pending for a bounded number of later opportunities; a complete message clears
+the pending item and is placed in the mailbox. Pending retrieval state is
+reconstructed from the audit log after a daemon restart, so restarting JS8Mail
+does not lose a message that JS8Call has already announced. The UI and audit
+timeline distinguish a retrieval that was requested from one that was actually
+received.
 
 ## What JS8Mail is for
 

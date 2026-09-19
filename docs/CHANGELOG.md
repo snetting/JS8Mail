@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.0.8d — reliable stored-message collection
+
+- recognizes JS8Call `YES MSG ID N` replies from both structured API events and
+  human-readable activity lines such as `MM0ZFG: OH3SPN YES MSG ID 431`;
+- queues the corresponding targeted `QUERY MSG N` outside the receive callback,
+  so a reply is not lost while JS8Call is settling an RX/TX train;
+- coalesces duplicate announcements, retries collection a bounded number of
+  times, and keeps partial retrievals eligible for completion;
+- restores pending collection jobs after a JS8Mail restart and records clear
+  pending, submitted, failed, partial, completed, and exhausted audit events;
+- bounds a blocked JS8Call handoff so stored-message collection cannot freeze
+  the discovery scheduler.
+
+This remains early and experimental. Thanks to the operators and on-air testers
+who continue to expose real-world JS8Call timing and store-and-forward cases.
+
 ## 0.0.8c — Outbox and delivery-safety follow-up
 
 - repeated Outbox timeline entries and repeated status blocks are now shown as

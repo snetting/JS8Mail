@@ -27,7 +27,7 @@ from js8mail.discovery import (
     call_query,
     correlate_query_call_response,
     messages_query,
-    parse_messages_available,
+    parse_messages_available_context,
     parse_query_call_response,
     retrieve_message_query,
     snr_query,
@@ -454,7 +454,7 @@ PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=
 body{font:15px system-ui;max-width:1250px;margin:2em auto;padding:0 1em;background:#f5f7f9;color:#18222d}.topbar{position:sticky;top:0;z-index:10;background:#f5f7f9;padding:.35em 0 .5em}.topline{display:flex;justify-content:space-between;align-items:center;gap:1em}.topline h1{margin:.2em 0}.version-button{white-space:nowrap;background:#334155;font-size:12px}
  .workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:1em;align-items:stretch}.workspace section{margin:0;min-width:0}.workspace>section{min-height:260px}.inbox-panel{max-height:360px;overflow:auto}.live-panel{min-height:300px}.live-panel svg{width:100%;min-height:280px;background:#fbfcfd;border-radius:6px}.stations-panel{grid-column:2;grid-row:2 / span 2}.groups-panel{grid-column:1}#messages th:nth-child(2),#messages td:nth-child(2){width:8em}#messages th:nth-child(4),#messages td:nth-child(4){width:17em;white-space:nowrap}.inbox-bulk-bar{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;align-items:center;gap:.45em;padding:.45em .55em;margin-bottom:.5em;background:#f7f9fb;border:1px solid #d9e0e7;border-radius:6px}.inbox-bulk-bar label{display:inline-flex;align-items:center;gap:.35em;white-space:nowrap;font-weight:600}.inbox-bulk-bar button{margin:0;padding:.35em .6em}.inbox-bulk-bar button:disabled{opacity:.45;cursor:not-allowed}.inbox-bulk-count{color:#53606d;white-space:nowrap}.inbox-select-cell{width:2.25em;text-align:center;vertical-align:middle}.inbox-select-cell input{width:auto;margin:0;transform:scale(1.1);accent-color:#1769aa}.inbox-row-selected{background:#e0f2fe!important;box-shadow:inset 3px 0 #1769aa}.inbox-row-selected .inbox-select-cell{background:#bae6fd}@media(max-width:800px){.workspace{display:block}.workspace>section{margin:1em 0}.stations-panel{grid-column:auto;grid-row:auto}#messages th:nth-child(4),#messages td:nth-child(4){width:auto;white-space:normal}}
 section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em;margin:1em 0}input,textarea,select{box-sizing:border-box;width:100%;padding:.5em;margin:.25em 0 .7em}textarea{height:110px}button{background:#1769aa;color:#fff;border:0;border-radius:5px;padding:.5em .8em;margin:.2em;cursor:pointer}.danger{background:#a33}.pill{display:inline-block;padding:.3em .6em;border-radius:1em;background:#e8edf2;margin:.2em}.ok{background:#d8f3dc}.warn{background:#fff1c2}.state-pill{display:inline-block;padding:.3em .6em;border-radius:1em;margin:.2em;font-weight:600;white-space:nowrap}.state-in-progress{background:#dbeafe;color:#174ea6}.state-acknowledged{background:#fff1c2;color:#7a4b00}.state-complete{background:#d8f3dc;color:#176b35}.state-complete-plus{background:#b7f0d0;color:#075c38}.state-failed{background:#ffd9d9;color:#8b1e1e}.state-cancelled,.state-expired{background:#e8edf2;color:#53606d}#status .pill:nth-child(3){display:none}.mono{font:12px monospace;white-space:pre-wrap;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}svg{display:block;max-width:100%;height:auto}td,th{text-align:left;border-bottom:1px solid #e4e9ee;padding:.5em;vertical-align:top;overflow-wrap:anywhere}#messages th:nth-child(4),#messages td:nth-child(4){width:18em;white-space:normal}.outbox-actions{display:flex;flex-wrap:wrap;gap:.3em;align-items:flex-start}.outbox-actions button{margin:0;padding:.4em .55em;white-space:nowrap}details summary{cursor:pointer;padding:.25em 0}details summary::marker{color:#1769aa}
-</style><div class=topbar><div class=topline><h1>JS8Mail</h1><button class=version-button onclick="showVersionInfo()">v0.0.8c · Updates</button></div><p>Resilient radio mail for reliable offline comms · by <a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN</a> <button onclick="useStation('OH3SPN')">Compose to OH3SPN</button></p><section><div id=status>Loading…</div><div id=radio-leds class=leds><span id=led-rx class='led on-rx'>RX</span><span id=led-dcd class='led'>DCD</span><span id=led-tx class='led'>TX</span><span id=led-err class='led'>ERR</span><span id=led-js8 class='led'>JS8</span></div></section></div><style>.leds{display:inline-flex;gap:.3em;margin-left:.5em;vertical-align:middle}.led{padding:.25em .5em;border-radius:1em;background:#e8edf2;color:#53606d;font-size:12px;font-weight:600}.led.on-rx{background:#d8f3dc;color:#176b35}.led.on-tx{background:#ffd9d9;color:#8b1e1e}.led.on-dcd{background:#fff1c2;color:#785500}.led.on-err{background:#8b1e1e;color:white}#status .pill:nth-child(3){display:none}</style>
+</style><div class=topbar><div class=topline><h1>JS8Mail</h1><button class=version-button onclick="showVersionInfo()">v0.0.8d · Updates</button></div><p>Resilient radio mail for reliable offline comms · by <a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN</a> <button onclick="useStation('OH3SPN')">Compose to OH3SPN</button></p><section><div id=status>Loading…</div><div id=radio-leds class=leds><span id=led-rx class='led on-rx'>RX</span><span id=led-dcd class='led'>DCD</span><span id=led-tx class='led'>TX</span><span id=led-err class='led'>ERR</span><span id=led-js8 class='led'>JS8</span></div></section></div><style>.leds{display:inline-flex;gap:.3em;margin-left:.5em;vertical-align:middle}.led{padding:.25em .5em;border-radius:1em;background:#e8edf2;color:#53606d;font-size:12px;font-weight:600}.led.on-rx{background:#d8f3dc;color:#176b35}.led.on-tx{background:#ffd9d9;color:#8b1e1e}.led.on-dcd{background:#fff1c2;color:#785500}.led.on-err{background:#8b1e1e;color:white}#status .pill:nth-child(3){display:none}</style>
 <section class=system-panel><h2>System sending mode</h2><p><label>Default JS8M sending mode <select name=enhanced_mode id=default-enhanced-mode title='Default for new messages'><option value=opportunistic>Opportunistic (recommended)</option><option value=standard>Standard JS8Call</option><option value=required>Required JS8M</option></select></label></p><small>This is the default for new directed messages. Standard uses ordinary JS8Call immediately; Opportunistic sends marked ordinary mail to unknown peers and seeks capability with a delayed CAP response, while using JS8M for known capable stations; Required waits for a JS8M capability response. Group broadcasts always use Standard.</small></section>
 <div class=workspace><section class=compose-panel><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select>Message mode<select name=enhanced_mode title='Override the default for this message'><option value=''>Use system default</option><option value=standard>Standard JS8Call</option><option value=opportunistic>Opportunistic</option><option value=required>Required JS8M</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section class=live-panel><h2>Live RF Activity <small id=live-graph-meta></small></h2><div id=live-graph><p>Waiting for active-band observations.</p></div></section>
@@ -468,7 +468,7 @@ section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em
 function formatAttemptDetail(value){return String(value??'').replace(/delivered_at=(\\d{10,})/g,(_,raw)=>{let date=new Date(Number(raw));if(Number.isNaN(date.getTime()))return `delivered_at=${raw}`;let local=new Intl.DateTimeFormat(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'}).format(date);let utc=date.toISOString().replace('T',' ').replace(/\\.\\d{3}Z$/,' UTC');return `delivered_at=${local} / ${utc}`})}
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(u,o){let r=await fetch(u,o),j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j}
-function showVersionInfo(){let modal=document.getElementById('version-modal');if(!modal){modal=document.createElement('div');modal.id='version-modal';modal.innerHTML='<div class="modal-card" role="dialog" aria-modal="true"><button class="danger modal-close" onclick="closeVersionInfo()">Close</button><h2>JS8Mail v0.0.8c</h2><p>Recent improvements in this release:</p><ul><li>Reassembles long standard and JS8Mail messages from JS8Call activity frames.</li><li>Uses JS8Call first/last frame flags and keeps partial messages visible when a section is missing.</li><li>Separates interleaved receive streams and refuses ambiguous or out-of-order completion.</li><li>Improves live RF evidence rendering and forwarded-message origin handling.</li><li>Opportunistic mode actively learns JS8M capability from marked first contact, while Standard mode remains a complete one-message opt-out.</li><li>Group broadcasts omit the JS8Mail marker to save airtime; capability records last seven days and refresh with valid JS8M evidence.</li><li>Thanks to the operators who helped with the local two-station and on-air testing behind this release.</li></ul><p><small>Early development release · experimental RF software.</small></p></div>';document.body.appendChild(modal)}modal.style.display='flex'}function closeVersionInfo(){let modal=document.getElementById('version-modal');if(modal)modal.style.display='none'}
+function showVersionInfo(){let modal=document.getElementById('version-modal');if(!modal){modal=document.createElement('div');modal.id='version-modal';modal.innerHTML='<div class="modal-card" role="dialog" aria-modal="true"><button class="danger modal-close" onclick="closeVersionInfo()">Close</button><h2>JS8Mail v0.0.8d</h2><p>Recent improvements in this release:</p><ul><li>Reassembles long standard and JS8Mail messages from JS8Call activity frames.</li><li>Uses JS8Call first/last frame flags and keeps partial messages visible when a section is missing.</li><li>Separates interleaved receive streams and refuses ambiguous or out-of-order completion.</li><li>Improves live RF evidence rendering and forwarded-message origin handling.</li><li>Opportunistic mode actively learns JS8M capability from marked first contact, while Standard mode remains a complete one-message opt-out.</li><li>Group broadcasts omit the JS8Mail marker to save airtime; capability records last seven days and refresh with valid JS8M evidence.</li><li>Thanks to the operators who helped with the local two-station and on-air testing behind this release.</li></ul><p><small>Early development release · experimental RF software.</small></p></div>';document.body.appendChild(modal)}modal.style.display='flex'}function closeVersionInfo(){let modal=document.getElementById('version-modal');if(modal)modal.style.display='none'}
 const confidenceName={new:'New · waiting for discovery',uncertain:'No delivery evidence',discovery_in_progress:'Discovery in progress',submitted_to_js8call:'Queued in JS8Call · awaiting TX',awaiting_delivery_ack:'TX submitted · awaiting delivery ACK',awaiting_custodian_ack:'Store offer submitted · awaiting custodian ACK',delivery_uncertain:'Delivery unconfirmed · retry pending',stored_at_custodian:'Delivered to custodian',radio_acknowledged:'Standard',enhanced_acknowledged:'JS8Call ACK · awaiting JS8Mail receipt',enhanced_acknowledged_stopped:'JS8Call accepted · JS8Mail receipt unconfirmed',delivered_to_js8mail:'Delivered to JS8Mail client',broadcast_submitted:'Broadcast complete · no ACK expected',cancelled:'Cancelled',delivery_failed:'Delivery failed',expired:'Expired'};
 function statePill(x){if(x.tx_active)return `<span class='state-pill state-failed'>In progress · TX</span>`;if(x.confidence==='delivered_to_js8mail')return `<span class='state-pill state-complete-plus'>Complete+</span>`;if(x.state==='delivered')return `<span class='state-pill state-complete'>Complete</span>`;if(x.state==='stored')return `<span class='state-pill state-complete'>Stored</span>`;if(x.state==='acknowledged')return `<span class='state-pill state-acknowledged'>Acknowledged</span>`;if(['failed','expired','cancelled'].includes(x.state))return `<span class='state-pill state-${esc(x.state)}'>${esc(x.state[0].toUpperCase()+x.state.slice(1))}</span>`;if(x.state==='queued'&&!(x.attempts||[]).length)return `<span class='state-pill state-in-progress'>New</span>`;if(['in_progress','waiting_route','queued'].includes(x.state))return `<span class='state-pill state-in-progress'>In progress</span>`;return `<span class='state-pill'>${esc(x.state)}</span>`}
 function relativeAge(seconds){seconds=Math.max(0,Number(seconds)||0);if(seconds<60)return `${Math.round(seconds)}s ago`;if(seconds<600)return `${Math.floor(seconds/60)}m ${Math.floor(seconds%60)}s ago`;if(seconds<3600)return `${Math.floor(seconds/60)}m ago`;if(seconds<86400)return `${Math.floor(seconds/3600)}h ago`;return `${Math.floor(seconds/86400)}d ago`}function evidenceLabel(value){return value==='direct'?'Direct':value==='reported_target'?'Remote':value==='remote_report'?'Reported':value}
@@ -613,15 +613,15 @@ const moveInboxCapabilityHint=renderInbox;renderInbox=items=>{moveInboxCapabilit
 const ensureInboxCapabilityDot=renderInbox;renderInbox=items=>{ensureInboxCapabilityDot(items);let rows=[...document.querySelectorAll('#inbox tr[data-inbox-row]')];(items||[]).forEach((item,index)=>{if(!item?.peer_js8m||!rows[index])return;let sender=rows[index].children[1],dot=sender?.querySelector('.inbox-capability-known');if(!sender)return;if(!dot){dot=document.createElement('span');dot.className='inbox-capability-known';dot.setAttribute('aria-label','JS8Mail capable');dot.setAttribute('role','img');dot.textContent='●';sender.append(' ',dot)}dot.title='JS8Mail capable'})};
 const inboxMessageWithSubject=showInboxMessage;showInboxMessage=async item=>{await inboxMessageWithSubject(item);let content=document.getElementById('message-modal-content');if(!content||content.querySelector('[data-message-subject]'))return;let subject=document.createElement('p');subject.dataset.messageSubject='true';subject.innerHTML=`<b>Subject:</b> ${esc(item?.subject||'(no subject)')}`;let first=content.querySelector('p');if(first)first.before(subject);else content.prepend(subject)};
 // Keep the release label and update popup in sync with the package version.
-document.querySelector('.version-button')?.replaceChildren(document.createTextNode('v0.0.8c · Updates'));
-const showReleaseInfo=showVersionInfo;showVersionInfo=()=>{showReleaseInfo();let title=document.querySelector('#version-modal h2');if(title)title.textContent='JS8Mail v0.0.8c';let list=document.querySelector('#version-modal ul');if(list)list.innerHTML='<li>Reassembles standard and JS8Mail activity frames, including bare multiframe receipts.</li><li>Preserves partial multipart mail and correlates selective acknowledgements and final delivery receipts.</li><li>Serializes TX trains, protects RX response windows, and retains routes across busy-radio deferrals.</li><li>Improves inbox selection, stable compact previews, protocol labels, and active-band RF evidence.</li><li>Adds semantic message-route graph outcomes, compact latest-route details, collision-aware labels, and readable sizing for long callsigns.</li><li>Color-codes Live RF Activity labels to match reciprocal, active one-way, aged, and JS8Mail evidence links.</li><li>Opportunistic mode actively learns JS8M capability from marked first contact, while Standard mode remains a complete one-message opt-out.</li><li>Group broadcasts now omit the JS8Mail marker to save airtime; capability records remain valid for seven days and refresh with valid JS8M evidence.</li><li>Special thanks to F4LPU for the message-graph readability report, and to everyone who helped with the local and on-air testing behind this release.</li>'};
-document.querySelector('.version-button')?.replaceChildren(document.createTextNode('v0.0.8c · Updates'));
+document.querySelector('.version-button')?.replaceChildren(document.createTextNode('v0.0.8d · Updates'));
+const showReleaseInfo=showVersionInfo;showVersionInfo=()=>{showReleaseInfo();let title=document.querySelector('#version-modal h2');if(title)title.textContent='JS8Mail v0.0.8d';let list=document.querySelector('#version-modal ul');if(list)list.innerHTML='<li>Reassembles standard and JS8Mail activity frames, including bare multiframe receipts.</li><li>Preserves partial multipart mail and correlates selective acknowledgements and final delivery receipts.</li><li>Serializes TX trains, protects RX response windows, and retains routes across busy-radio deferrals.</li><li>Improves inbox selection, stable compact previews, protocol labels, and active-band RF evidence.</li><li>Adds semantic message-route graph outcomes, compact latest-route details, collision-aware labels, and readable sizing for long callsigns.</li><li>Color-codes Live RF Activity labels to match reciprocal, active one-way, aged, and JS8Mail evidence links.</li><li>Opportunistic mode actively learns JS8M capability from marked first contact, while Standard mode remains a complete one-message opt-out.</li><li>Group broadcasts now omit the JS8Mail marker to save airtime; capability records remain valid for seven days and refresh with valid JS8M evidence.</li><li>Queues stored-message retrieval after a JS8Call YES MSG ID response, retries safely outside the receive callback, and restores pending collection after daemon restart.</li><li>Special thanks to F4LPU for the message-graph readability report, and to everyone who helped with the local and on-air testing behind this release.</li>'};
+document.querySelector('.version-button')?.replaceChildren(document.createTextNode('v0.0.8d · Updates'));
 const addSchedulerUpdates=showVersionInfo;showVersionInfo=()=>{addSchedulerUpdates();let list=document.querySelector('#version-modal ul');if(list)list.insertAdjacentHTML('afterbegin','<li>Emergency scheduler fix removes a permanent station-wide airtime lock that could block all queued RF until restart.</li><li>Budget waits now wake at the next eligible window instead of blindly delaying another full 15 minutes; per-message safety limits remain active.</li>')};
 </script>"""
 
 # Keep the small initial HTML paint in sync with the release metadata that the
 # final script also applies after the page loads.
-PAGE = PAGE.replace("0.0.7", "0.0.8c")
+PAGE = PAGE.replace("0.0.7", "0.0.8d")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1898,10 +1898,62 @@ async def run(args: argparse.Namespace) -> None:
     # MID is only locally unique; the sender is part of the reassembly key.
     reassembly: dict[tuple[str, str], MultipartAccumulator] = {}
     pending_call_queries: list[PendingCallQuery] = []
-    # (custodian, JS8Call message id) -> (next retry time, retry count).
+    # (custodian, JS8Call message id) -> (next retry time, submitted count).
+    # This is intentionally reconstructed from audit events on startup: a
+    # QUERY MSG request must survive a daemon restart even though the remote
+    # JS8Call store is separate from our mailbox database.
     pending_retrievals: dict[tuple[str, int], tuple[int, int]] = {}
-    max_retrieval_retries = 3
+    completed_retrievals: set[tuple[str, int]] = set()
+    max_retrieval_attempts = 4
     retrieval_retry_delay_ms = 45_000
+
+    def retrieval_key_from_payload(payload: dict[str, Any]) -> tuple[str, int] | None:
+        custodian = str(payload.get("custodian", "")).strip().upper()
+        try:
+            stored_id = int(payload.get("js8call_message_id"))
+        except (TypeError, ValueError):
+            return None
+        if not custodian or not 0 <= stored_id <= 2_147_483_647:
+            return None
+        return custodian, stored_id
+
+    def restore_pending_retrievals(now_ms: int) -> None:
+        """Recover retrievals that were announced or submitted before restart."""
+        latest: dict[tuple[str, int], tuple[int, str, int]] = {}
+        since_ms = now_ms - 7 * 24 * 60 * 60 * 1000
+        events: list[tuple[int, str, dict[str, Any]]] = []
+        for event_type in (
+            "inbox.retrieval_pending",
+            "inbox.retrieval_submitted",
+            "inbox.retrieval_failed",
+            "inbox.retrieval_completed",
+            "inbox.retrieval_exhausted",
+        ):
+            for event in database.recent_audit_events(event_type, since_ms):
+                events.append((int(event["created_at_ms"]), event_type, event["payload"]))
+        for created_at_ms, event_type, payload in sorted(events):
+            key = retrieval_key_from_payload(payload)
+            if key is None:
+                continue
+            try:
+                attempts = int(payload.get("attempt", 0))
+            except (TypeError, ValueError):
+                attempts = 0
+            latest[key] = (created_at_ms, event_type, max(0, attempts))
+        for key, (created_at_ms, event_type, attempts) in latest.items():
+            if event_type == "inbox.retrieval_completed":
+                completed_retrievals.add(key)
+                continue
+            if event_type == "inbox.retrieval_exhausted":
+                continue
+            # A submitted request may have been in flight when the daemon
+            # stopped. Re-send it promptly after the new JS8Call connection is
+            # ready; a duplicate QUERY MSG is safe and the remote store will
+            # remove the item after one successful retrieval.
+            due_at = min(now_ms, created_at_ms + retrieval_retry_delay_ms)
+            pending_retrievals[key] = (due_at, min(attempts, max_retrieval_attempts - 1))
+
+    restore_pending_retrievals(utc_now_ms())
     capability_last_sent: dict[str, int] = {}
     pending_capability_advertisements: dict[str, int] = {}
     pending_capability_reasons: dict[str, str] = {}
@@ -2150,6 +2202,86 @@ async def run(args: argparse.Namespace) -> None:
             scheduler.record(key, now)
             return False
 
+    def queue_message_retrieval(custodian: str, stored_id: int, reason: str) -> None:
+        """Queue a targeted QUERY MSG without blocking the RX event handler."""
+        key = (custodian.strip().upper(), int(stored_id))
+        if not key[0] or not 0 <= key[1] <= 2_147_483_647:
+            return
+        # JS8Call message IDs are local to a custodian but stable for the
+        # lifetime of its persistent store. Once we have assembled that ID,
+        # a repeated YES announcement must not make us fetch the same mail
+        # every time the custodian answers a broad QUERY MSGS.
+        if key in completed_retrievals:
+            database.audit(
+                "inbox.retrieval_duplicate_suppressed",
+                {
+                    "custodian": key[0],
+                    "js8call_message_id": key[1],
+                    "reason": reason,
+                },
+            )
+            return
+        if key in pending_retrievals:
+            return
+        pending_retrievals[key] = (utc_now_ms(), 0)
+        database.audit(
+            "inbox.retrieval_pending",
+            {
+                "custodian": key[0],
+                "js8call_message_id": key[1],
+                "attempt": 0,
+                "reason": reason,
+            },
+        )
+
+    async def service_pending_retrievals(now_wall_ms: int) -> None:
+        """Submit queued retrievals during normal scheduler opportunities."""
+        for key, (due_at_ms, submitted_count) in list(pending_retrievals.items()):
+            if now_wall_ms < due_at_ms:
+                continue
+            custodian, stored_id = key
+            if submitted_count >= max_retrieval_attempts:
+                database.audit(
+                    "inbox.retrieval_exhausted",
+                    {
+                        "custodian": custodian,
+                        "js8call_message_id": stored_id,
+                        "attempt": submitted_count,
+                    },
+                )
+                pending_retrievals.pop(key, None)
+                continue
+            try:
+                # Never let a stale JS8Call TX train hold the discovery loop
+                # indefinitely.  The retrieval remains pending and will be
+                # retried on the next scheduler opportunity.
+                await asyncio.wait_for(
+                    controller.send_rf(retrieve_message_query(custodian, stored_id)),
+                    timeout=30,
+                )
+            except (TimeoutError, ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
+                pending_retrievals[key] = (now_wall_ms + 30_000, submitted_count)
+                database.audit(
+                    "inbox.retrieval_failed",
+                    {
+                        "custodian": custodian,
+                        "js8call_message_id": stored_id,
+                        "attempt": submitted_count,
+                        "reason": str(exc) or type(exc).__name__,
+                    },
+                )
+                continue
+            attempt = submitted_count + 1
+            pending_retrievals[key] = (now_wall_ms + retrieval_retry_delay_ms, attempt)
+            database.audit(
+                "inbox.retrieval_submitted",
+                {
+                    "custodian": custodian,
+                    "js8call_message_id": stored_id,
+                    "attempt": attempt,
+                },
+            )
+
     async def discovery_loop() -> None:
         inbox_key = "inbox:broadcast"
         last_prune_at_ms = 0
@@ -2173,6 +2305,7 @@ async def run(args: argparse.Namespace) -> None:
                 except (ConnectionError, OSError, RuntimeError):
                     pass
                 last_context_refresh_at_ms = now_wall_ms
+            await service_pending_retrievals(now_wall_ms)
             now = int(asyncio.get_running_loop().time() * 1000)
             if inbox_scheduler.due(inbox_key, now):
                 await submit_query(
@@ -3375,32 +3508,39 @@ async def run(args: argparse.Namespace) -> None:
                                     "failed",
                                     "unable to serve request",
                                 )
-                    available_id = parse_messages_available(
-                        frame.wire_text if frame is not None else ""
+                    availability_text = (
+                        frame.wire_text
+                        if frame is not None
+                        else str(event.params.get("TEXT", event.value))
                     )
-                    if available_id is not None and isinstance(source, str):
-                        retrieval_key = (source.upper(), available_id)
-                        if retrieval_key not in pending_retrievals:
-                            try:
-                                await controller.send_rf(
-                                    retrieve_message_query(source, available_id)
-                                )
-                                pending_retrievals[retrieval_key] = (utc_now_ms(), 1)
-                                database.audit(
-                                    "inbox.retrieval_submitted",
-                                    {
-                                        "custodian": source.upper(),
-                                        "js8call_message_id": available_id,
-                                    },
-                                )
-                            except (ConnectionError, RuntimeError):
-                                database.audit(
-                                    "inbox.retrieval_failed",
-                                    {
-                                        "custodian": source.upper(),
-                                        "js8call_message_id": available_id,
-                                    },
-                                )
+                    availability = parse_messages_available_context(availability_text)
+                    if availability is not None:
+                        announced_source, announced_destination, available_id = availability
+                        responder = (
+                            source.upper()
+                            if isinstance(source, str) and source
+                            else announced_source
+                        )
+                        if not responder:
+                            responder = str(event.params.get("FROM", "")).strip().upper() or None
+                        destination = (
+                            frame.destination
+                            if frame is not None
+                            else announced_destination
+                        )
+                        if not destination:
+                            destination = str(event.params.get("TO", "")).strip().upper() or None
+                        if (
+                            responder
+                            and destination
+                            and destination.upper()
+                            in {local_call, "@ALLCALL"}
+                        ):
+                            queue_message_retrieval(
+                                responder,
+                                available_id,
+                                "JS8Call reported a stored message in response to QUERY MSGS",
+                            )
                     capability_text = frame.payload if frame is not None else str(event.value)
                     capability = (
                         parse_capability(capability_text)
@@ -3666,41 +3806,34 @@ async def run(args: argparse.Namespace) -> None:
                         if partial and matching_retrievals:
                             retrieval_key, (next_retry_at, retry_count) = matching_retrievals[0]
                             now = utc_now_ms()
-                            if retry_count < max_retrieval_retries and now >= next_retry_at:
-                                retry_at = now + retrieval_retry_delay_ms
-                                pending_retrievals[retrieval_key] = (retry_at, retry_count + 1)
-
-                                async def retry_partial_retrieval(
-                                    custodian: str = source.upper(),
-                                    stored_id: int = retrieval_key[1],
-                                    message_id: str = legacy_id,
-                                    attempt: int = retry_count + 1,
-                                ) -> None:
-                                    await asyncio.sleep(retrieval_retry_delay_ms / 1000)
-                                    try:
-                                        await controller.send_rf(
-                                            retrieve_message_query(custodian, stored_id)
-                                        )
-                                        database.record_attempt(
-                                            message_id,
-                                            "inbox_retrieval",
-                                            custodian,
-                                            "submitted",
-                                            f"re-requested JS8Call message {stored_id} after partial decode (attempt {attempt})",
-                                        )
-                                    except (ConnectionError, RuntimeError):
-                                        database.audit(
-                                            "inbox.retrieval_retry_failed",
-                                            {
-                                                "custodian": custodian,
-                                                "js8call_message_id": stored_id,
-                                            },
-                                        )
-
-                                asyncio.create_task(retry_partial_retrieval())
+                            if retry_count < max_retrieval_attempts and now >= next_retry_at:
+                                pending_retrievals[retrieval_key] = (
+                                    now + retrieval_retry_delay_ms,
+                                    retry_count,
+                                )
+                                database.audit(
+                                    "inbox.retrieval_partial",
+                                    {
+                                        "custodian": retrieval_key[0],
+                                        "js8call_message_id": retrieval_key[1],
+                                        "attempt": retry_count,
+                                        "message_id": legacy_id,
+                                        "detail": "partial retrieval retained; scheduler will request the complete message again",
+                                    },
+                                )
                         elif not partial:
                             for retrieval_key in tuple(pending_retrievals):
                                 if retrieval_key[0] == source.upper():
+                                    database.audit(
+                                        "inbox.retrieval_completed",
+                                        {
+                                            "custodian": retrieval_key[0],
+                                            "js8call_message_id": retrieval_key[1],
+                                            "attempt": pending_retrievals[retrieval_key][1],
+                                            "message_id": legacy_id,
+                                        },
+                                    )
+                                    completed_retrievals.add(retrieval_key)
                                     pending_retrievals.pop(retrieval_key, None)
                     query_response = parse_query_call_response(
                         frame.wire_text if frame is not None else ""

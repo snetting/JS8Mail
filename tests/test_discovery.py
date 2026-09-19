@@ -8,6 +8,7 @@ from js8mail.discovery import (
     hearing_query,
     messages_query,
     parse_messages_available,
+    parse_messages_available_context,
     parse_query_call_response,
     retrieve_message_query,
     snr_query,
@@ -34,6 +35,15 @@ def test_standard_query_forms_are_bounded_and_normalized() -> None:
     )
     assert parse_query_call_response("OH3SPN NO") is None
     assert parse_messages_available("OH3SPN YES MSG ID 42 ♢") == 42
+
+
+def test_stored_message_announcement_preserves_custodian_and_recipient() -> None:
+    assert parse_messages_available_context("MM0ZFG: OH3SPN YES MSG ID 431 ♢") == (
+        "MM0ZFG",
+        "OH3SPN",
+        431,
+    )
+    assert parse_messages_available_context("YES MSG ID 431") == (None, None, 431)
 
 
 def test_compact_yes_without_repeated_recipient_is_valid() -> None:

@@ -30,7 +30,7 @@ time-aware backoff. Internet topology data may enhance local decisions in a
 future service, but it is never required for RF operation.
 
 See the [changelog](docs/CHANGELOG.md) for release notes, including the
-current `0.0.8c` outbox and custody-route safeguards.
+current `0.0.8d` outbox, custody-route, and stored-message collection safeguards.
 
 ## First start (recommended)
 

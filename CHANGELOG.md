@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.8d — 2026-09-19
+
+- fixed automatic collection after `YES MSG ID N` announcements, including
+  structured and human-readable JS8Call activity forms;
+- queued targeted retrieval outside the receive callback, with bounded retries,
+  partial-message recovery, duplicate suppression, and restart restoration;
+- documented the collection lifecycle and audit states.
+
 ## 0.0.8c — 2026-09-17
 
 Outbox and delivery-safety follow-up:

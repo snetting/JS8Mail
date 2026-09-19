@@ -151,17 +151,38 @@ def retrieve_message_query(custodian: str, message_id: int) -> str:
 
 def parse_messages_available(text: str) -> int | None:
     """Parse JS8Call's ``YES MSG ID N`` custodian response."""
+    parsed = parse_messages_available_context(text)
+    return parsed[2] if parsed is not None else None
+
+
+def parse_messages_available_context(text: str) -> tuple[str | None, str | None, int] | None:
+    """Parse a stored-message announcement and its optional display context.
+
+    JS8Call API variants expose the responder/destination either as structured
+    fields or in display text such as ``MM0ZFG: OH3SPN YES MSG ID 431``.  The
+    numeric ID alone is not enough for retrieval because it is local to the
+    custodian's JS8Call inbox.
+    """
     cleaned = re.sub(r"\s*[♢◊]\s*$", "", text.strip())
-    fields = cleaned.split()
-    # The API's TEXT/value may include the addressed callsign before YES.
-    for index in range(max(0, len(fields) - 4), len(fields) - 2):
-        if fields[index : index + 3] == ["YES", "MSG", "ID"]:
-            fields = fields[index:]
-            break
-    if len(fields) < 4 or fields[:3] != ["YES", "MSG", "ID"]:
+    match = re.search(
+        r"(?:(?P<source>[A-Z0-9/]{1,16})\s*:\s*)?"
+        r"(?:(?P<destination>[A-Z0-9/]{1,16})\s+)?"
+        r"YES\s+MSG\s+ID\s+(?P<message_id>\d+)\b",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if match is None:
         return None
     try:
-        value = int(fields[3])
+        value = int(match.group("message_id"))
     except ValueError:
         return None
-    return value if 0 <= value <= 2_147_483_647 else None
+    if not 0 <= value <= 2_147_483_647:
+        return None
+    source = match.group("source")
+    destination = match.group("destination")
+    return (
+        source.upper() if source else None,
+        destination.upper() if destination else None,
+        value,
+    )
