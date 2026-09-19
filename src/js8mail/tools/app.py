@@ -2260,7 +2260,11 @@ async def run(args: argparse.Namespace) -> None:
                     timeout=30,
                 )
             except (TimeoutError, ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
-                pending_retrievals[key] = (now_wall_ms + 30_000, submitted_count)
+                # Base the backoff on the end of the handoff attempt. A
+                # timeout can consume the whole 30 seconds; using the loop's
+                # old timestamp would make the item immediately eligible and
+                # create a tight retry loop while JS8Call remains busy.
+                pending_retrievals[key] = (utc_now_ms() + 30_000, submitted_count)
                 database.audit(
                     "inbox.retrieval_failed",
                     {
