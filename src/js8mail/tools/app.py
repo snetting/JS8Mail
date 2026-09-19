@@ -655,7 +655,7 @@ const addSchedulerUpdates=showVersionInfo;showVersionInfo=()=>{addSchedulerUpdat
 
 # Keep the small initial HTML paint in sync with the release metadata that the
 # final script also applies after the page loads.
-PAGE = PAGE.replace("0.0.7", "0.0.8d")
+PAGE = PAGE.replace("0.0.7", "0.0.9").replace("0.0.8d", "0.0.9")
 
 
 class Handler(BaseHTTPRequestHandler):

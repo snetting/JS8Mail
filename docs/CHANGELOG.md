@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.9 — reliability milestone
+
+- bounds autonomous TX deferral to three consecutive unrelated receive slots;
+  traffic addressed to this station remains protected for the full message;
+- reports meaningful JS8Call handoff reasons in the Outbox instead of bare
+  `RuntimeError` names;
+- renders expanded Outbox history in a stable full-width detail row;
+- presents station evidence as `Direct` and `Remote` while retaining reporter
+  evidence internally for routing decisions;
+- carries forward the durable stored-message collection and restart-recovery
+  fixes from 0.0.8d.
+
+This remains early and experimental. Thanks to the operators and on-air testers
+who continue to expose real-world JS8Call timing and store-and-forward cases.
+
 ## 0.0.8d — reliable stored-message collection
 
 - recognizes JS8Call `YES MSG ID N` replies from both structured API events and

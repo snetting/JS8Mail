@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.0.9 — 2026-09-19
+
+This development milestone consolidates the recent reliability work before the
+first stable community release:
+
+- bounded autonomous TX deferral to three consecutive unrelated receive slots;
+  traffic addressed to this station remains protected for the full message;
+- clarified Outbox radio-handoff reasons instead of exposing generic
+  `RuntimeError` labels, and kept selected routes while JS8Call is busy;
+- moved expanded Outbox timelines and full content into a stable full-width
+  detail row to reduce wrapping and layout movement;
+- simplified station evidence labels to `Direct` and `Remote` while retaining
+  the underlying reporter evidence for route scoring;
+- retained the stored-message collection, duplicate suppression, and restart
+  recovery improvements from the previous development milestone.
+
+This remains early, experimental software. Thanks to the operators and
+on-air testers who continue to expose real-world JS8Call timing and routing
+cases.
+
 ## 0.0.8d — 2026-09-19
 
 - fixed automatic collection after `YES MSG ID N` announcements, including

@@ -8,7 +8,7 @@ JS8Mail adds a durable mailbox, evidence collection, route selection, custody
 tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
-This document describes the current `0.0.8d` outbox, custody-route, and stored-message collection safeguard
+This document describes the current `0.0.9` outbox, custody-route, scheduler, and stored-message collection safeguard
 implementation. It is useful and
 radio-capable, and is suitable for supervised on-air use, but it remains early
 and experimental. Operators should monitor transmissions and be ready to pause
