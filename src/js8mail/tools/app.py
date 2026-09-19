@@ -81,11 +81,11 @@ CAPABILITY_RESPONSE_DEADLINE_MS = 4 * 60 * 1000
 AUTOMATED_TX_GAP_MS = 30 * 1000
 AUTOMATED_RX_WINDOW_MS = 60 * 1000
 # A decode event can arrive shortly after the RF frame that caused it. Keep
-# autonomous traffic out of two normal JS8Call receive windows, even when the
-# API has not yet classified the stream as a directed message. Do not extend
-# this hold for every unrelated decode on a busy band; directed-message
-# protection is tracked separately and remains authoritative.
-RX_ACTIVITY_GUARD_MS = 2 * 15 * 1000
+# autonomous traffic out of one normal JS8Call receive window at a time, but
+# allow at most three consecutive unrelated receive slots before permitting
+# our queued TX. This prevents a busy band from extending the RX hold forever.
+RX_ACTIVITY_GUARD_MS = 15 * 1000
+MAX_RX_ACTIVITY_GUARD_SLOTS = 3
 QUERY_RESPONSE_MAX_MS = 3 * 60 * 1000
 LATE_QUERY_CONTEXT_MS = 15 * 60 * 1000
 CAPABILITY_MAX_RESPONSE_MS = 12 * 60 * 1000
@@ -98,6 +98,35 @@ ACK_DUPLICATE_WINDOW_MS = 30 * 1000
 # but it is not sufficient justification for submitting a long relay payload.
 # Require a fresh answer from the first hop before spending that airtime.
 ROUTE_HOP_PROBE_FRESH_MS = 10 * 60 * 1000
+
+
+def radio_exception_reason(exc: BaseException) -> str:
+    """Return an operator-facing handoff reason instead of a bare exception name."""
+    detail = str(exc).strip()
+    if detail:
+        return detail
+    if isinstance(exc, RuntimeError):
+        return "JS8Call handoff unavailable"
+    return type(exc).__name__
+
+
+def update_rx_activity_guard(
+    last_activity_ms: int,
+    guard_slots: int,
+    now_ms: int,
+    current_until_ms: int,
+) -> tuple[int, int]:
+    """Advance a bounded generic RX hold without extending it per decode."""
+    if last_activity_ms and now_ms - last_activity_ms < RX_ACTIVITY_GUARD_MS:
+        return current_until_ms, guard_slots
+    if (
+        not last_activity_ms
+        or now_ms - last_activity_ms >= RX_ACTIVITY_GUARD_MS * MAX_RX_ACTIVITY_GUARD_SLOTS
+    ):
+        guard_slots = 0
+    if guard_slots >= MAX_RX_ACTIVITY_GUARD_SLOTS:
+        return current_until_ms, guard_slots
+    return now_ms + RX_ACTIVITY_GUARD_MS, guard_slots + 1
 ROUTE_HOP_PROBE_COOLDOWN_MS = 5 * 60 * 1000
 # A message may use a bounded burst, then continue in later rolling windows.
 # The total is intentionally larger than the three-day default message TTL;
@@ -410,6 +439,9 @@ def complete_rf_train(
     status["tx_message_id"] = None
     status["tx_reserved_ms"] = 0
     status["tx_train_pending"] = False
+    status["incoming_activity_until_ms"] = 0
+    status["last_rx_activity_ms"] = 0
+    status["rx_activity_guard_slots"] = 0
     train.reset()
     return True
 
@@ -514,6 +546,8 @@ async function refresh(){let s=await api('/api/status'),statusHtml=`<span class=
 const EMERGENCY_GROUPS=['@JS8MAIL','@EMCOMM','@ARES','@RACES','@RAYNET','@NTS','@SKYWARN','@WX','@AMRRON'];function useGroup(group){document.querySelector('#compose input[name=destination]').value=group;document.querySelector('#compose input[name=destination]').focus()}function renderGroups(items){let groups=items.filter(x=>x.name!=='@HB'&&EMERGENCY_GROUPS.includes(x.name));document.getElementById('groups').innerHTML=groups.length?'<table><tr><th>Group</th><th>Purpose</th><th>Seen</th><th>Subscription</th><th>Action</th></tr>'+groups.map(x=>`<tr class="${x.subscribed?'group-subscribed':'group-unsubscribed'}"><td><b>${esc(x.name)}</b></td><td>${esc(x.description||'emergency group')}</td><td>${x.seen_count?esc(relativeAge((Date.now()-x.last_seen_at_ms)/1000)):'not yet observed'}</td><td><span class="pill group-subscription ${x.subscribed?'subscribed':'unsubscribed'}">${x.subscribed?'Subscribed':'Not subscribed'}</span></td><td><button onclick="useGroup('${esc(x.name)}')">Compose</button><button onclick="actGroup('${esc(x.name)}','${x.subscribed?'unsubscribe':'subscribe'}')">${x.subscribed?'Unsubscribe':'Subscribe'}</button></td></tr>`).join('')+'</table>':'<p>No emergency groups recorded.</p>'}function renderAlerts(items){let alerts=items.filter(x=>x.group_name);window.groupAlertItems=alerts;document.getElementById('alerts').innerHTML=alerts.length?alerts.map((x,i)=>`<article><b>${esc(x.group_name)} · ${esc(x.sender)}</b> <span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts}</span><div class=mono>${esc(x.body)}</div><small>${esc(new Date(x.updated_at_ms).toLocaleString())} · ${esc(x.path||'')}</small><br><button class=danger onclick='deleteInboxMessage(groupAlertItems[${i}])'>Remove</button></article>`).join(''):'<p>No group alerts received.</p>'}
 const refreshMailbox=refresh;refresh=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);return refreshMailbox()};const updateRadioLeds=async()=>{let s=await api('/api/status'),activity=s.connected?(s.radio_activity||'RX'):'ERR';document.querySelectorAll('#radio-leds .led').forEach(x=>x.className='led');let led=document.getElementById('led-'+activity.toLowerCase());if(led)led.className='led on-'+activity.toLowerCase()};const refreshWithRadioState=refresh;refresh=async()=>{await refreshWithRadioState();await updateRadioLeds()};
 async function actGroup(group,action){try{await api(`/api/groups/${encodeURIComponent(group)}/${action}`,{method:'POST'});refresh()}catch(e){alert(e)}}
+function syncOutboxHistory(){if(!document.getElementById('outbox-history-style')){let style=document.createElement('style');style.id='outbox-history-style';style.textContent='#messages details > .mono,#messages details > .message-full{display:none!important}.outbox-history-row td{background:#f7f9fb;padding:.65em .5em}.outbox-history-row .message-full{margin-top:.6em}';document.head.appendChild(style)}document.querySelectorAll('#messages details[data-id]').forEach(detail=>{let row=detail.closest('tr');if(!row)return;let next=row.nextElementSibling;if(detail.open){if(!next||!next.classList.contains('outbox-history-row')||next.dataset.forId!==detail.dataset.id){if(next&&next.classList.contains('outbox-history-row'))next.remove();let history=document.createElement('tr');history.className='outbox-history-row';history.dataset.forId=detail.dataset.id;let cell=document.createElement('td');cell.colSpan=4;let timeline=detail.querySelector(':scope > .mono');let full=detail.querySelector(':scope > .message-full');if(timeline){let copy=timeline.cloneNode(true);copy.style.display='block';cell.append(copy)}if(full){let copy=full.cloneNode(true);copy.style.display='block';cell.append(copy)}history.append(cell);row.after(history)}}else if(next&&next.classList.contains('outbox-history-row'))next.remove()})}
+document.addEventListener('toggle',e=>{if(e.target.matches?.('#messages details'))setTimeout(syncOutboxHistory,0)},true);syncOutboxHistory();setInterval(syncOutboxHistory,1000);
 async function deleteInboxMessage(item){if(!item||!confirm('Delete this local inbox message?'))return;try{await api(`/api/inbox/${encodeURIComponent(item.sender)}/${encodeURIComponent(item.message_id)}/delete`,{method:'POST'});refresh()}catch(e){alert(e)}}
 async function act(id,a,button){if(button){button.disabled=true}try{await api(`/api/messages/${encodeURIComponent(id)}/${a}`,{method:'POST'});await refresh()}catch(e){if(button){button.disabled=false}await refresh().catch(()=>{});let message=e instanceof Error?e.message:String(e);let event=document.getElementById('control-events');if(event){event.textContent=`Action failed: ${message}`;event.className='error'}else{alert(message)}}}
 async function togglePause(){try{let s=await api('/api/status');await api(`/api/control/${s.paused?'resume':'pause'}`,{method:'POST'});refresh()}catch(e){alert(e)}}
@@ -1141,7 +1175,7 @@ class Handler(BaseHTTPRequestHandler):
                     "capability",
                     destination,
                     "deferred",
-                    f"JS8Call unavailable or busy: {type(exc).__name__}",
+                    f"JS8Call unavailable or busy: {radio_exception_reason(exc)}",
                 )
                 self.service.database.defer_message(
                     message_id,
@@ -1209,7 +1243,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.active_transaction_id == transaction_id:
                 self.active_transaction_id = None
             self.service.database.record_attempt(
-                message_id, action, target, "failed", str(exc) or type(exc).__name__
+                message_id, action, target, "failed", radio_exception_reason(exc)
             )
             raise
         except Exception as exc:
@@ -1221,7 +1255,7 @@ class Handler(BaseHTTPRequestHandler):
                 action,
                 target,
                 "failed",
-                f"local error {type(exc).__name__}: {str(exc)[:240]}",
+                f"local error {radio_exception_reason(exc)[:240]}",
             )
             self.service.database.audit(
                 "message.transmit_unexpected_error",
@@ -1425,10 +1459,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.active_transaction_id == transaction_id:
                 self.active_transaction_id = None
             self.service.database.record_attempt(
-                message_id, "store", custodian, "failed", type(exc).__name__
+                message_id, "store", custodian, "failed", radio_exception_reason(exc)
             )
             self.service.database.upsert_custody(
-                message_id, custodian, "failed", type(exc).__name__
+                message_id, custodian, "failed", radio_exception_reason(exc)
             )
             raise
         except Exception as exc:
@@ -1436,10 +1470,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.active_transaction_id == transaction_id:
                 self.active_transaction_id = None
             self.service.database.record_attempt(
-                message_id, "store", custodian, "failed", type(exc).__name__
+                message_id, "store", custodian, "failed", radio_exception_reason(exc)
             )
             self.service.database.upsert_custody(
-                message_id, custodian, "failed", type(exc).__name__
+                message_id, custodian, "failed", radio_exception_reason(exc)
             )
             raise
         self.service.database.mark_transmission_submitted(transaction_id)
@@ -1491,7 +1525,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 await self.transmit(message_id)
             except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
-                detail = str(exc) or type(exc).__name__
+                detail = radio_exception_reason(exc)
                 self.service.database.record_attempt(
                     message_id,
                     "direct",
@@ -1526,7 +1560,7 @@ class Handler(BaseHTTPRequestHandler):
                 "snr_probe",
                 destination,
                 "deferred",
-                f"JS8Call unavailable or busy: {type(exc).__name__}",
+                f"JS8Call unavailable or busy: {radio_exception_reason(exc)}",
             )
         else:
             self.service.database.record_attempt(
@@ -1600,7 +1634,7 @@ class Handler(BaseHTTPRequestHandler):
             await self.send_rf(probe, message_id)
         except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
             self.service.database.record_attempt(
-                message_id, "route_probe", first_hop, "deferred", type(exc).__name__
+                message_id, "route_probe", first_hop, "deferred", radio_exception_reason(exc)
             )
             self.service.database.transition_message(message_id, MessageState.WAITING_ROUTE)
             self.service.database.defer_message(
@@ -1831,6 +1865,7 @@ async def run(args: argparse.Namespace) -> None:
         "incoming_directed_completion_guard_until_ms": 0,
         "incoming_activity_until_ms": 0,
         "last_rx_activity_ms": 0,
+        "rx_activity_guard_slots": 0,
         "active_transaction_id": None,
         "tx_train_pending": False,
         "pending_capability_message_id": None,
@@ -2075,7 +2110,7 @@ async def run(args: argparse.Namespace) -> None:
                     "label": "JS8Mail discovery · delivery confirmation",
                     "target": original,
                     "status": "deferred",
-                    "detail": f"Waiting to return capability: {type(exc).__name__}.",
+                    "detail": f"Waiting to return capability: {radio_exception_reason(exc)}.",
                     "path": path_text,
                     "message_id": message_id,
                 },
@@ -2492,7 +2527,7 @@ async def run(args: argparse.Namespace) -> None:
                             "group_broadcast",
                             destination,
                             "deferred",
-                            f"broadcast handoff unavailable: {type(exc).__name__}",
+                            f"broadcast handoff unavailable: {radio_exception_reason(exc)}",
                         )
                         database.defer_message(
                             str(message["id"]),
@@ -2520,7 +2555,7 @@ async def run(args: argparse.Namespace) -> None:
                             "prepare",
                             destination,
                             "deferred",
-                            str(exc) or type(exc).__name__,
+                            radio_exception_reason(exc),
                         )
                     continue
                 if message["state"] == MessageState.IN_PROGRESS:
@@ -2781,7 +2816,7 @@ async def run(args: argparse.Namespace) -> None:
                                 "direct",
                                 destination,
                                 "deferred",
-                                f"local/API handoff deferred: {str(exc) or type(exc).__name__}",
+                                f"local/API handoff deferred: {radio_exception_reason(exc)}",
                             )
                             receiving_message = "receiving a directed message" in str(exc)
                             retry_delay = 60_000
@@ -2868,10 +2903,26 @@ async def run(args: argparse.Namespace) -> None:
                                 "relay",
                                 plan.path[1],
                                 "deferred",
-                                f"route selected but TX was unavailable: {type(exc).__name__}",
+                                f"route selected but TX was unavailable: {radio_exception_reason(exc)}",
                             )
+                            reason = radio_exception_reason(exc)
+                            retry_delay = 60_000
+                            if "receiving a directed message" in reason:
+                                retry_delay = max(
+                                    5_000,
+                                    int(status.get("incoming_directed_until_ms", 0) or 0)
+                                    - utc_now_ms(),
+                                )
+                            elif "recently decoded RF activity" in reason:
+                                retry_delay = max(
+                                    5_000,
+                                    int(status.get("incoming_activity_until_ms", 0) or 0)
+                                    - utc_now_ms(),
+                                )
                             database.defer_message(
-                                str(message["id"]), 60_000, "selected route could not be submitted"
+                                str(message["id"]),
+                                retry_delay,
+                                f"selected route deferred: {reason}",
                             )
                         continue
                 promising = service.promising_stations(
@@ -2958,7 +3009,7 @@ async def run(args: argparse.Namespace) -> None:
                                 "store",
                                 candidate_custodian,
                                 "deferred",
-                                type(exc).__name__,
+                                radio_exception_reason(exc),
                             )
                             database.defer_message(
                                 str(message["id"]), 60_000, "custodian offer unavailable"
@@ -3116,13 +3167,12 @@ async def run(args: argparse.Namespace) -> None:
                         # decodes cannot starve the scheduler indefinitely.
                         now_activity_ms = utc_now_ms()
                         last_activity_ms = int(status.get("last_rx_activity_ms", 0) or 0)
-                        if (
-                            not last_activity_ms
-                            or now_activity_ms - last_activity_ms >= RX_ACTIVITY_GUARD_MS
-                        ):
-                            status["incoming_activity_until_ms"] = (
-                                now_activity_ms + RX_ACTIVITY_GUARD_MS
-                            )
+                        status["incoming_activity_until_ms"], status["rx_activity_guard_slots"] = update_rx_activity_guard(
+                            last_activity_ms,
+                            int(status.get("rx_activity_guard_slots", 0) or 0),
+                            now_activity_ms,
+                            int(status.get("incoming_activity_until_ms", 0) or 0),
+                        )
                         status["last_rx_activity_ms"] = now_activity_ms
                     if event.event_type == "RX.ACTIVITY":
                         bits = event.params.get("BITS")
@@ -3308,6 +3358,7 @@ async def run(args: argparse.Namespace) -> None:
                         if ptt_on:
                             status["incoming_activity_until_ms"] = 0
                             status["last_rx_activity_ms"] = 0
+                            status["rx_activity_guard_slots"] = 0
                             status["tx_train_pending"] = True
                             if tx_settle_task is not None:
                                 tx_settle_task.cancel()

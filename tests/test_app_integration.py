@@ -19,6 +19,7 @@ from js8mail.tools.app import (
     queue_marker_capability_response,
     reconcile_part_receipt,
     route_evidence_settling_window_ms,
+    update_rx_activity_guard,
 )
 
 
@@ -33,6 +34,30 @@ class FakeRadio:
 
     async def set_speed(self, speed: int) -> None:
         return
+
+
+def test_rx_activity_guard_is_bounded_and_resets_after_quiet() -> None:
+    until, slots = update_rx_activity_guard(0, 0, 1_000, 0)
+    assert until == 16_000
+    assert slots == 1
+
+    # Decodes inside the current receive slot do not extend it.
+    assert update_rx_activity_guard(1_000, slots, 5_000, until) == (until, 1)
+
+    until, slots = update_rx_activity_guard(1_000, slots, 17_000, until)
+    assert until == 32_000
+    assert slots == 2
+    until, slots = update_rx_activity_guard(17_000, slots, 33_000, until)
+    assert until == 48_000
+    assert slots == 3
+
+    # A fourth consecutive slot cannot keep autonomous TX suppressed.
+    assert update_rx_activity_guard(33_000, slots, 49_000, until) == (until, 3)
+
+    # A quiet period starts a fresh bounded receive burst.
+    until, slots = update_rx_activity_guard(49_000, slots, 95_000, until)
+    assert until == 110_000
+    assert slots == 1
 
 
 def test_distinct_ack_count_coalesces_duplicate_decodes() -> None:
