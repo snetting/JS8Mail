@@ -1,6 +1,9 @@
 name: Windows bundle
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
   schedule:
     # Nightly at 02:17 UTC; the job skips itself when main has not changed.
