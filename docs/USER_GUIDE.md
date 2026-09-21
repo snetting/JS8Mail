@@ -8,8 +8,8 @@ JS8Mail adds a durable mailbox, evidence collection, route selection, custody
 tracking, enhanced-peer receipts, multipart recovery, and an operator-facing
 web interface.
 
-This document describes the current `0.0.9` outbox, custody-route, scheduler, and stored-message collection safeguard
-implementation. It is useful and
+This document describes the current `0.1.0` outbox, custody-route, scheduler,
+stored-message collection, and network route-hints implementation. It is useful and
 radio-capable, and is suitable for supervised on-air use, but it remains early
 and experimental. Operators should monitor transmissions and be ready to pause
 automation if anything behaves unexpectedly. Extensive testing has not revealed
@@ -34,6 +34,21 @@ reconstructed from the audit log after a daemon restart, so restarting JS8Mail
 does not lose a message that JS8Call has already announced. The UI and audit
 timeline distinguish a retrieval that was requested from one that was actually
 received.
+
+Retrieval correlation is deliberately conservative: JS8Mail allows only one
+`QUERY MSG <id>` response window per custodian. A normal directed message from
+that station does not complete unrelated pending IDs. A retrieval is marked
+complete only when a matching query was handed to JS8Call and the response
+arrived inside its bounded response window; otherwise it is retried or
+eventually exhausted according to the normal retrieval budget. This prevents
+an old message or an unrelated custodian transmission from permanently
+suppression of collection. Historical completion records from older builds that
+have no matching query submission are automatically re-armed on restart.
+
+For a genuinely correlated stored collection, the opened inbox view shows the
+custodian path followed by the custodian's local JS8Call message ID, for
+example `OH3SPN→MM0ZFG · MSG ID 431`. The ID is local to that custodian and is
+an analysis aid, not a globally unique JS8Mail message identifier.
 
 ## What JS8Mail is for
 
@@ -384,8 +399,12 @@ Discovery proceeds from cheap and targeted evidence toward broader evidence:
 The query scheduler has its own cooldown separate from each message's retry
 timer. Therefore a message can become due while a particular query is still
 cooling down; the UI may show that the query was skipped or blocked while the
-message remains queued. This prevents a fleet of queued messages from turning
-into a broadcast beacon.
+message remains queued. The expanded outbox timeline explains why a query was
+blocked, for example `query cooldown active; next attempt in 120s`, another
+`@ALLCALL` query awaiting its response window, `JS8Call API disconnected`, or
+an RF handoff blocked because JS8Call is receiving/transmitting or a local
+airtime policy is full. This prevents a fleet of queued messages from turning
+into a broadcast beacon while making the reason visible to the operator.
 
 `QUERY CALL` replies are deliberately compact. For example:
 
@@ -554,6 +573,45 @@ JS8Mail. The daemon does not emit unsolicited periodic CAP beacons. These
 rules avoid filling quiet periods or colliding with another station's next TX
 train.
 
+### Optional network route hints
+
+JS8Mail uses the separate `js8mail-route-hints` service by default as a small
+helper for multi-hop discovery. The web UI switch is an explicit opt-out; a
+different endpoint can be selected with:
+
+```sh
+./js8mail --route-hints-url http://js8mail.oh3spn.fi:8787
+```
+
+The web UI exposes one **Network route hints** switch, enabled by default.
+When enabled, JS8Mail shares short-lived, band-scoped claims such as “I heard
+Y” or “I observed X addressing Y”, and can retrieve similar hints for a
+destination whose local evidence is unknown or stale. No personal messages,
+mailbox contents, message identifiers, complete local history, or delivery
+receipts are shared—only short-lived observability of heard stations and
+paths.
+
+Network hints are advisory only. A remote claim is lower-confidence than local
+RF evidence and never authorizes a full payload without the normal local route
+validation. Local RF evidence takes priority when the same path is also known
+locally. Pulls follow the message retry/backoff cadence, so a fresh hint can
+wake a waiting message without creating a polling storm. Useful local claims
+are published every 10 minutes. HTTP failures and
+timeouts are recorded in the status indicator and do not stop JS8Mail or block
+ordinary RF routing. The Outbox records when hints were received and applied.
+
+When an outgoing message graph contains a path known only through the network
+service, it is shown with a purple dashed edge and a `NET` label. These edges
+are advisory route hints, not RF confirmations. If the same edge is confirmed
+locally, the local RF interpretation remains the primary one.
+
+The service keeps only expiring evidence and should normally be placed behind
+HTTPS/reverse proxying. The reference container listens on port `8787`, uses a
+persistent `/data` volume for its small SQLite database, and automatically
+deletes expired rows. The service uses a concurrent HTTP front end; SQLite
+serializes writes while indexed callsign/band/expiry queries can run safely in
+parallel. See the separate route-hints repository for deployment instructions.
+
 Any JS8Mail listener that decodes a complete CAP—whether the exchange is
 addressed to it or merely overheard—stores the advertising callsign, protocol
 version, and feature list. A partial or ambiguous CAP is retained in Recent
@@ -643,9 +701,12 @@ The graph view uses these colours:
 - orange: an attempted message edge;
 - green: a confirmed edge/receipt.
 
-The graph is an evidence view, not a promise that every grey edge is an
-available relay. A future UI improvement should separate “global observations”
-from “paths actually attempted for this message” even more explicitly.
+Purple dashed `NET` edges are advisory paths learned from the optional network
+route-hints service. Local RF evidence takes priority over duplicate network
+claims. Passive RF and network evidence older than 48 hours is removed from the
+message graph, while recent attempted/current paths remain visible. The full
+attempt and audit history remains durable in the Outbox/database, even when the
+visual graph is bounded for readability.
 
 The **Live RF Activity** graph is built from both decoded RX traffic and
 submitted/settled local TX transactions. JS8Call's TX tone events do not
@@ -981,10 +1042,12 @@ remain queued until its expiry unless the operator cancels it.
 
 ### The graph looks crowded or shows unfamiliar stations
 
-Grey links are recent local evidence across the observation window, not all
-links attempted by the selected message. Orange links are attempts. Green
-links are confirmed evidence. A self-test is not a useful RF path and is
-excluded from current graph rendering.
+Grey links are recent local evidence, not all links attempted by the selected
+message. Orange links are attempts. Green links are confirmed evidence. Purple
+dashed links are network hints, not RF confirmation. A self-test is not a
+useful RF path and is excluded from current graph rendering. Older unrelated
+evidence fades from the graph, while the Outbox timeline retains the complete
+history.
 
 ### A standard ACK says `ACK`
 

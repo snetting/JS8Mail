@@ -26,11 +26,14 @@ carefully qualified: submission to JS8Call, a hop acknowledgement, custodian
 storage, and end-to-end JS8Mail delivery are different facts. Routing is
 progressive: a short direct reachability probe comes first, then current RF
 evidence, selective path discovery, alternative routes, bounded retries, and
-time-aware backoff. Internet topology data may enhance local decisions in a
-future service, but it is never required for RF operation.
+time-aware backoff. An optional, separate JS8Mail route-hints service can
+enhance local decisions with short-lived band-scoped reports from other
+stations. It is enabled by default and can be switched off in the UI. It never
+carries message content and is never required for RF operation.
 
 See the [changelog](docs/CHANGELOG.md) for release notes, including the
-current `0.0.9` outbox, custody-route, scheduler, and stored-message collection safeguards.
+current `0.1.0` outbox, custody-route, scheduler, stored-message collection,
+and network route-hints safeguards.
 
 ## First start (recommended)
 
@@ -75,6 +78,23 @@ The local mailbox can also be started directly with explicit options:
 ```sh
 ./js8mail --host 127.0.0.1 --port 2442 --ui-port 8765 --tx-mode automatic
 ```
+
+Network-assisted route discovery uses the JS8Mail route-hints service by
+default. It can be switched off in the web UI, or pointed at another service
+with `--route-hints-url`; the client remains usable if the service is
+unavailable:
+
+```sh
+./js8mail --route-hints-url http://js8mail.oh3spn.fi:8787
+```
+
+The web UI provides the final on/off switch. Route hints are advisory,
+band-scoped, short-lived evidence used to wake discovery; they are not proof
+of a usable route or delivery. No personal messages, mailbox contents,
+message identifiers, or delivery receipts are shared—only short-lived
+observations about heard stations and observed paths. Useful local claims are
+published every 10 minutes. Network-only paths in an outgoing-message graph
+are shown as purple dashed `NET` edges; local RF evidence takes priority.
 
 Automatic submission hands text to JS8Call; the UI reports only delivery
 evidence actually observed. JS8Mail is suitable for supervised on-air use.

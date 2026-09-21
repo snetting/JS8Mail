@@ -71,6 +71,7 @@ from js8mail.radio_policy import (
     estimate_airtime_ms,
 )
 from js8mail.reassembly import ActivityAssembler, ActivityFragment
+from js8mail.route_hints import RouteHintsClient, claims_from_observations
 from js8mail.rf_timing import TX_TRAIN_QUIET_MS, TxTrain
 from js8mail.routing import RouteAction, RoutePlan
 from js8mail.storage import Database
@@ -484,18 +485,23 @@ def reconcile_part_receipt(
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>JS8Mail</title><style>
 body{font:15px system-ui;max-width:1250px;margin:2em auto;padding:0 1em;background:#f5f7f9;color:#18222d}.topbar{position:sticky;top:0;z-index:10;background:#f5f7f9;padding:.35em 0 .5em}.topline{display:flex;justify-content:space-between;align-items:center;gap:1em}.topline h1{margin:.2em 0}.version-button{white-space:nowrap;background:#334155;font-size:12px}
- .workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:1em;align-items:stretch}.workspace section{margin:0;min-width:0}.workspace>section{min-height:260px}.inbox-panel{max-height:360px;overflow:auto}.live-panel{min-height:300px}.live-panel svg{width:100%;min-height:280px;background:#fbfcfd;border-radius:6px}.stations-panel{grid-column:2;grid-row:2 / span 2}.groups-panel{grid-column:1}#messages th:nth-child(2),#messages td:nth-child(2){width:8em}#messages th:nth-child(4),#messages td:nth-child(4){width:17em;white-space:nowrap}.inbox-bulk-bar{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;align-items:center;gap:.45em;padding:.45em .55em;margin-bottom:.5em;background:#f7f9fb;border:1px solid #d9e0e7;border-radius:6px}.inbox-bulk-bar label{display:inline-flex;align-items:center;gap:.35em;white-space:nowrap;font-weight:600}.inbox-bulk-bar button{margin:0;padding:.35em .6em}.inbox-bulk-bar button:disabled{opacity:.45;cursor:not-allowed}.inbox-bulk-count{color:#53606d;white-space:nowrap}.inbox-select-cell{width:2.25em;text-align:center;vertical-align:middle}.inbox-select-cell input{width:auto;margin:0;transform:scale(1.1);accent-color:#1769aa}.inbox-row-selected{background:#e0f2fe!important;box-shadow:inset 3px 0 #1769aa}.inbox-row-selected .inbox-select-cell{background:#bae6fd}@media(max-width:800px){.workspace{display:block}.workspace>section{margin:1em 0}.stations-panel{grid-column:auto;grid-row:auto}#messages th:nth-child(4),#messages td:nth-child(4){width:auto;white-space:normal}}
-section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em;margin:1em 0}input,textarea,select{box-sizing:border-box;width:100%;padding:.5em;margin:.25em 0 .7em}textarea{height:110px}button{background:#1769aa;color:#fff;border:0;border-radius:5px;padding:.5em .8em;margin:.2em;cursor:pointer}.danger{background:#a33}.pill{display:inline-block;padding:.3em .6em;border-radius:1em;background:#e8edf2;margin:.2em}.ok{background:#d8f3dc}.warn{background:#fff1c2}.state-pill{display:inline-block;padding:.3em .6em;border-radius:1em;margin:.2em;font-weight:600;white-space:nowrap}.state-in-progress{background:#dbeafe;color:#174ea6}.state-acknowledged{background:#fff1c2;color:#7a4b00}.state-complete{background:#d8f3dc;color:#176b35}.state-complete-plus{background:#b7f0d0;color:#075c38}.state-failed{background:#ffd9d9;color:#8b1e1e}.state-cancelled,.state-expired{background:#e8edf2;color:#53606d}#status .pill:nth-child(3){display:none}.mono{font:12px monospace;white-space:pre-wrap;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}svg{display:block;max-width:100%;height:auto}td,th{text-align:left;border-bottom:1px solid #e4e9ee;padding:.5em;vertical-align:top;overflow-wrap:anywhere}#messages th:nth-child(4),#messages td:nth-child(4){width:18em;white-space:normal}.outbox-actions{display:flex;flex-wrap:wrap;gap:.3em;align-items:flex-start}.outbox-actions button{margin:0;padding:.4em .55em;white-space:nowrap}details summary{cursor:pointer;padding:.25em 0}details summary::marker{color:#1769aa}
-</style><div class=topbar><div class=topline><h1>JS8Mail</h1><button class=version-button onclick="showVersionInfo()">v0.0.8d · Updates</button></div><p>Resilient radio mail for reliable offline comms · by <a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN</a> <button onclick="useStation('OH3SPN')">Compose to OH3SPN</button></p><section><div id=status>Loading…</div><div id=radio-leds class=leds><span id=led-rx class='led on-rx'>RX</span><span id=led-dcd class='led'>DCD</span><span id=led-tx class='led'>TX</span><span id=led-err class='led'>ERR</span><span id=led-js8 class='led'>JS8</span></div></section></div><style>.leds{display:inline-flex;gap:.3em;margin-left:.5em;vertical-align:middle}.led{padding:.25em .5em;border-radius:1em;background:#e8edf2;color:#53606d;font-size:12px;font-weight:600}.led.on-rx{background:#d8f3dc;color:#176b35}.led.on-tx{background:#ffd9d9;color:#8b1e1e}.led.on-dcd{background:#fff1c2;color:#785500}.led.on-err{background:#8b1e1e;color:white}#status .pill:nth-child(3){display:none}</style>
-<section class=system-panel><h2>System sending mode</h2><p><label>Default JS8M sending mode <select name=enhanced_mode id=default-enhanced-mode title='Default for new messages'><option value=opportunistic>Opportunistic (recommended)</option><option value=standard>Standard JS8Call</option><option value=required>Required JS8M</option></select></label></p><small>This is the default for new directed messages. Standard uses ordinary JS8Call immediately; Opportunistic sends marked ordinary mail to unknown peers and seeks capability with a delayed CAP response, while using JS8M for known capable stations; Required waits for a JS8M capability response. Group broadcasts always use Standard.</small></section>
+ .workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:1em;align-items:stretch}.workspace section{margin:0;min-width:0}.workspace>section{min-height:260px}.inbox-panel{max-height:460px;overflow:auto}.live-panel{min-height:300px}.live-panel svg{width:100%;min-height:280px;background:#fbfcfd;border-radius:6px}.stations-panel{grid-column:2;grid-row:2 / span 2}.groups-panel{grid-column:1}#messages th:nth-child(2),#messages td:nth-child(2){width:8em}#messages th:nth-child(4),#messages td:nth-child(4){width:17em;white-space:nowrap}.inbox-bulk-bar,.outbox-bulk-bar{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;align-items:center;gap:.45em;padding:.45em .55em;margin-bottom:.5em;background:#f7f9fb;border:1px solid #d9e0e7;border-radius:6px}.inbox-bulk-bar label,.outbox-bulk-bar label{display:inline-flex;align-items:center;gap:.35em;white-space:nowrap;font-weight:600}.inbox-bulk-bar button,.outbox-bulk-bar button{margin:0;padding:.35em .6em}.inbox-bulk-bar button:disabled,.outbox-bulk-bar button:disabled{opacity:.45;cursor:not-allowed}.inbox-bulk-count,.outbox-bulk-count{color:#53606d;white-space:nowrap}.inbox-select-cell{width:2.25em;text-align:center;vertical-align:middle}.inbox-select-cell input{width:auto;margin:0;transform:scale(1.1);accent-color:#1769aa}.inbox-row-selected{background:#e0f2fe!important;box-shadow:inset 3px 0 #1769aa}.inbox-row-selected .inbox-select-cell{background:#bae6fd}@media(max-width:800px){.workspace{display:block}.workspace>section{margin:1em 0}.stations-panel{grid-column:auto;grid-row:auto}#messages th:nth-child(4),#messages td:nth-child(4){width:auto;white-space:normal}}
+section{background:white;border:1px solid #d9e0e7;border-radius:10px;padding:1em;margin:1em 0}input,textarea,select{box-sizing:border-box;width:100%;padding:.5em;margin:.25em 0 .7em}textarea{height:110px}button{background:#1769aa;color:#fff;border:0;border-radius:5px;padding:.5em .8em;margin:.2em;cursor:pointer}.danger{background:#a33}.pill{display:inline-block;padding:.3em .6em;border-radius:1em;background:#e8edf2;margin:.2em}.ok{background:#d8f3dc}.warn{background:#fff1c2}.state-pill{display:inline-block;padding:.3em .6em;border-radius:1em;margin:.2em;font-weight:600;white-space:nowrap}.state-in-progress{background:#dbeafe;color:#174ea6}.state-acknowledged{background:#fff1c2;color:#7a4b00}.state-complete{background:#d8f3dc;color:#176b35}.state-complete-plus{background:#b7f0d0;color:#075c38}.state-failed{background:#ffd9d9;color:#8b1e1e}.state-cancelled,.state-expired{background:#e8edf2;color:#53606d}#status .pill:nth-child(3){display:none}.mono{font:12px monospace;white-space:pre-wrap;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}svg{display:block;max-width:100%;height:auto}td,th{text-align:left;border-bottom:1px solid #e4e9ee;padding:.5em;vertical-align:top;overflow-wrap:anywhere}#messages th:nth-child(4),#messages td:nth-child(4){width:18em;white-space:normal}.outbox-actions{display:flex;flex-wrap:wrap;gap:.3em;align-items:flex-start}.outbox-actions button{margin:0;padding:.4em .55em;white-space:nowrap}.outbox-refresh-note{display:block;font-size:.78em;font-weight:400;color:#53606d;margin-top:.15em}details summary{cursor:pointer;padding:.25em 0}details summary::marker{color:#1769aa}
+ </style><div class=topbar><div class=topline><h1>JS8Mail</h1><button class=version-button onclick="showVersionInfo()">v0.0.8d · Updates</button></div><p>Resilient radio mail for reliable offline comms · by <a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN</a> <button onclick="useStation('OH3SPN')">Compose to OH3SPN</button></p><section><div id=status>Loading…</div><div id=radio-leds class=leds><span id=led-rx class='led on-rx'>RX</span><span id=led-dcd class='led'>DCD</span><span id=led-tx class='led'>TX</span><span id=led-err class='led'>ERR</span><span id=led-js8 class='led'>JS8</span><span id=led-net class='led'>NET</span></div></section></div><style>.leds{display:inline-flex;gap:.3em;margin-left:.5em;vertical-align:middle}.led{padding:.25em .5em;border-radius:1em;background:#e8edf2;color:#53606d;font-size:12px;font-weight:600}.led.on-rx{background:#d8f3dc;color:#176b35}.led.on-tx{background:#ffd9d9;color:#8b1e1e}.led.on-dcd{background:#fff1c2;color:#785500}.led.on-err{background:#8b1e1e;color:white}.led.on-js8{background:#d9d2ff;color:#4b2c82}.led.on-net{background:#d8f3dc;color:#176b35}.led.on-net-warn{background:#fff1c2;color:#785500}.led.on-net-error{background:#8b1e1e;color:white}.operating-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1em}.operating-options>div{min-width:0}.operating-options>div>label{display:block}.setting-control{display:flex;align-items:center;gap:.25em;white-space:nowrap}.operating-options small{display:block;margin-top:.35em}#status .pill:nth-child(3){display:none}@media(max-width:700px){.operating-options{grid-template-columns:1fr}}</style>
+<style>#default-enhanced-mode{width:auto;min-width:0;max-width:100%}</style>
+<style>.inbox-panel #inbox table{table-layout:auto}.inbox-panel #inbox th:nth-child(1),.inbox-panel #inbox td:nth-child(1){width:2.5em}.inbox-panel #inbox th:nth-child(2),.inbox-panel #inbox td:nth-child(2){width:10em}.inbox-panel #inbox th:nth-child(3),.inbox-panel #inbox td:nth-child(3){width:9em}.inbox-panel #inbox th:nth-child(4),.inbox-panel #inbox td:nth-child(4){width:auto}.inbox-panel #inbox th:nth-child(5),.inbox-panel #inbox td:nth-child(5){width:12em}.inbox-panel #inbox th:nth-child(6),.inbox-panel #inbox td:nth-child(6){width:9em;white-space:nowrap}</style>
+<style>.groups-panel table{table-layout:fixed}.groups-panel th,.groups-panel td{overflow-wrap:normal;word-break:normal}.groups-panel th:nth-child(1),.groups-panel td:nth-child(1){width:16%;white-space:nowrap}.groups-panel th:nth-child(2),.groups-panel td:nth-child(2){width:28%;white-space:normal}.groups-panel th:nth-child(3),.groups-panel td:nth-child(3){width:18%;white-space:normal}.groups-panel th:nth-child(4),.groups-panel td:nth-child(4){width:20%;white-space:nowrap}.groups-panel th:nth-child(5),.groups-panel td:nth-child(5){width:18%;white-space:nowrap;vertical-align:top}.groups-panel td:last-child button{display:block;white-space:nowrap;margin:.2em 0}</style>
+<style>.workspace{grid-template-columns:repeat(20,minmax(0,1fr))}.workspace .compose-panel{grid-column:span 11;grid-row:1}.workspace .live-panel{grid-column:span 9;grid-row:1}.workspace .inbox-panel{grid-column:1 / -1;grid-row:2}.workspace .stations-panel{grid-column:1 / span 10;grid-row:3}.workspace .groups-panel{grid-column:11 / -1;grid-row:3}.outbox-refresh-note{font:400 13px/1.3 system-ui;color:#64748b;margin-left:.5em}.site-footer{display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid #d9e0e7;border-radius:8px;padding:.45em .7em;margin:1em 0;color:#53606d;font-size:.9em}.site-footer a{display:inline-flex;align-items:center;gap:.35em;color:#1769aa;text-decoration:none}.site-footer a:hover{text-decoration:underline}.site-footer svg{display:block;width:1em;height:1em;fill:currentColor}.site-footer>:not(:first-child){display:none}@media(max-width:800px){.workspace{display:block;grid-template-columns:none}.workspace .inbox-panel,.workspace .stations-panel,.workspace .groups-panel{grid-column:auto;grid-row:auto}}</style>
+<section class=system-panel><h2>Operating mode</h2><div class=operating-options><div><label>Default sending mode <select name=enhanced_mode id=default-enhanced-mode title='Default for new messages'><option value=opportunistic>Opportunistic (recommended)</option><option value=standard>Standard JS8Call</option><option value=required>Required JS8M</option></select></label><small>For new directed messages. Group broadcasts always use Standard.</small></div><div><label>Network route hints</label><span class=setting-control><input type=checkbox id=route-hints-enabled style='width:auto;margin-right:.4em'> Enable <span id=route-hints-state class='pill'>disabled</span></span><small>Optional multi-hop helper. Shares short-lived RF evidence to improve route discovery. No personal messages or mailbox data are shared. JS8Mail continues normally if the service is unavailable.</small></div></div></section>
 <div class=workspace><section class=compose-panel><h2>Compose</h2><form id=compose>Destination<input name=destination maxlength=16 required placeholder=N0CALL>Subject<input name=subject maxlength=120>Message<textarea name=body maxlength=4096 required></textarea>Priority<select name=priority><option value=0>Normal</option><option value=1>High</option><option value=2>Urgent</option><option value=3>Emergency</option></select>Message mode<select name=enhanced_mode title='Override the default for this message'><option value=''>Use system default</option><option value=standard>Standard JS8Call</option><option value=opportunistic>Opportunistic</option><option value=required>Required JS8M</option></select><button>Queue locally</button></form><span id=result></span></section>
 <section class=live-panel><h2>Live RF Activity <small id=live-graph-meta></small></h2><div id=live-graph><p>Waiting for active-band observations.</p></div></section>
 <section class=inbox-panel><h2>Inbox</h2><div id=inbox>Loading…</div></section>
 <section class=stations-panel><h2>Recently heard stations</h2><input id=station-search type=search placeholder='Filter callsigns or evidence'><div id=stations>Loading…</div></section>
-<section class=groups-panel><h2>Groups and emergency alerts</h2><p>Compose to a group or review received broadcasts. Automatic forwarding remains opt-in.</p><div id=groups>Loading…</div><h3>Group alert inbox</h3><div id=alerts>Loading…</div></section></div>
-<section><h2>Outbox</h2><div id=control-events></div><div id=messages>Loading…</div></section>
+<section class=groups-panel><h2>Groups and emergency alerts</h2><p>Compose to a group or review received broadcasts.</p><div id=groups>Loading…</div><h3>Group alert inbox</h3><div id=alerts>Loading…</div></section></div>
+<section><h2>Outbox<span class=outbox-refresh-note>Expanding an entry pauses refresh</span></h2><div id=outbox-bulk-actions class=outbox-bulk-bar><label><input type=checkbox data-outbox-select-all> Select all</label><span class=outbox-bulk-count data-outbox-count>Select messages</span><button type=button class=danger data-outbox-delete-selected disabled>Delete selected</button></div><div id=control-events></div><div id=messages>Loading…</div></section>
 <section><h2>Message route graph</h2><div id=graph-result>Select Graph on a message to inspect its evidence and attempts.</div></section>
 <section><h2>Recent observations</h2><div id=observations>Loading…</div></section>
+<footer class=site-footer><a href='https://github.com/snetting/JS8Mail' target=_blank rel=noopener aria-label='JS8Mail on GitHub'><svg viewBox='0 0 16 16' aria-hidden=true><path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38l-.01-1.49c-2.23.48-2.7-1.08-2.7-1.08-.36-.92-.89-1.16-.89-1.16-.73-.5.06-.49.06-.49.8.06 1.22.82 1.22.82.72 1.21 1.9.86 2.36.66.07-.51.28-.86.51-1.06-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.58.82-2.14-.08-.2-.36-1.01.08-2.11 0 0 .67-.21 2.2.82A7.65 7.65 0 0 1 8 4.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.91.08 2.11.51.56.82 1.27.82 2.14 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48l-.01 2.2c0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z'/></svg> GitHub</a><a href='https://www.oh3spn.fi' target=_blank rel=noopener>OH3SPN.fi</a><a href='mailto:steve@oh3spn.fi'>steve@oh3spn.fi</a><button onclick="useStation('OH3SPN');document.getElementById('compose')?.scrollIntoView({behavior:'smooth',block:'start'})">Compose to OH3SPN</button></footer>
 <script>
 function formatAttemptDetail(value){return String(value??'').replace(/delivered_at=(\\d{10,})/g,(_,raw)=>{let date=new Date(Number(raw));if(Number.isNaN(date.getTime()))return `delivered_at=${raw}`;let local=new Intl.DateTimeFormat(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'}).format(date);let utc=date.toISOString().replace('T',' ').replace(/\\.\\d{3}Z$/,' UTC');return `delivered_at=${local} / ${utc}`})}
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -536,25 +542,28 @@ function scrollToCompose(){let panel=document.querySelector('.compose-panel');if
 function useStation(call){document.querySelector('#compose input[name=destination]').value=call;scrollToCompose();setTimeout(()=>document.querySelector('#compose input[name=destination]')?.focus(),350)}
 let stationCache=[];function renderStations(){let q=document.getElementById('station-search').value.trim().toUpperCase();let s=stationCache.filter(x=>!q||x.callsign.includes(q)||x.evidence.join(' ').toUpperCase().includes(q));document.getElementById('stations').innerHTML=s.length?'<table style="table-layout:fixed;width:100%"><colgroup><col style="width:18%"><col style="width:18%"><col style="width:14%"><col style="width:18%"><col style="width:18%"><col style="width:14%"></colgroup><tr><th style="white-space:nowrap">Callsign</th><th style="white-space:nowrap">Age</th><th style="white-space:nowrap">SNR</th><th>Path</th><th style="white-space:nowrap">Action</th><th title="JS8Mail capability" style="white-space:nowrap;text-align:center">JS8M</th></tr>'+s.map(x=>`<tr><td style="white-space:nowrap"><b>${esc(x.callsign)}</b></td><td style="white-space:nowrap">${esc(relativeAge(x.age_seconds))}</td><td style="white-space:nowrap">${x.snr==null?'—':esc(x.snr)+' dB'}</td><td style="white-space:normal">${[...new Set(x.evidence.map(evidenceLabel))].map(esc).join('<br>')}</td><td style="white-space:nowrap"><button style="white-space:nowrap" onclick="useStation('${esc(x.callsign)}')">Compose</button></td><td title="${x.js8m?'JS8Mail capable':'Not identified as JS8Mail capable'}" style="white-space:nowrap;text-align:center;padding-left:.5em;padding-right:.5em;color:#16a34a;font-size:1.15em">${x.js8m?'●':''}</td></tr>`).join('')+'</table>':'<p>No matching station evidence.</p>'}async function refreshStations(){stationCache=await api('/api/stations');renderStations()}
 function renderInbox(items){document.getElementById('inbox').innerHTML=items.length?'<table><tr><th>From</th><th>Status</th><th>Message</th><th>Updated</th></tr>'+items.map(x=>`<tr><td><b>${esc(x.sender)}</b></td><td><span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts+' parts'}</span></td><td class=mono>${esc(x.body)}</td><td>${esc(new Date(x.updated_at_ms).toLocaleString())}<br>${esc(x.path||'')}</td></tr>`).join('')+'</table>':'<p>No received messages.</p>'}
-function renderControlEvents(items){let el=document.getElementById('control-events');if(!el)return;el.innerHTML=items.length?`<details class='control-events'><summary>Automatic delivery confirmations (${items.length})</summary><div class=mono>${items.map(x=>`<div><span class='timeline-time'>${new Date(x.created_at_ms).toLocaleTimeString()}</span> <b>${esc(x.label||'Automatic delivery update')}</b> → ${esc(x.target||'unknown')}: <span class='pill ${x.status==='submitted'?'ok':x.status==='failed'?'bad':'warn'}'>${esc(x.status||'waiting')}</span><br>${esc(x.detail||'')}${x.path?`<br>Path: ${esc(x.path)}`:''}</div>`).join('')}</div></details>`:''}
-async function refreshControlEvents(){try{renderControlEvents(await api('/api/control-events'))}catch(_error){}}
+function renderControlEvents(items){let el=document.getElementById('control-events');if(!el)return;el.innerHTML=items.length?`<details class='control-events'><summary>Automatic delivery confirmations (${items.length}) <small class=section-note>refresh pauses while open</small></summary><div class=mono>${items.map(x=>`<div><span class='timeline-time'>${new Date(x.created_at_ms).toLocaleTimeString()}</span> <b>${esc(x.label||'Automatic delivery update')}</b> → ${esc(x.target||'unknown')}: <span class='pill ${x.status==='submitted'?'ok':x.status==='failed'?'bad':'warn'}'>${esc(x.status||'waiting')}</span><br>${esc(x.detail||'')}${x.path?`<br>Path: ${esc(x.path)}`:''}</div>`).join('')}</div></details>`:''}
+async function refreshControlEvents(){let details=document.querySelector('#control-events details.control-events');if(details?.open)return;try{renderControlEvents(await api('/api/control-events'))}catch(_error){}}
 refreshControlEvents();setInterval(refreshControlEvents,3000);
-function ensureStoredRemoveButtons(){document.querySelectorAll('#messages tr').forEach(row=>{let first=row.cells?.[0],actions=row.cells?.[3];if(!first||!actions||!first.textContent.includes('Stored')||actions.querySelector('[data-stored-remove]'))return;let id=first.querySelector('details')?.dataset.id;if(!id)return;let button=document.createElement('button');button.className='danger';button.dataset.storedRemove='true';button.textContent='Remove';button.onclick=()=>act(id,'delete',button);actions.appendChild(button)})}
+function ensureStoredRemoveButtons(){document.querySelectorAll('#messages tr').forEach(row=>{let first=row.cells?.[1],actions=row.cells?.[4];if(!first||!actions||!first.textContent.includes('Stored')||actions.querySelector('[data-stored-remove]'))return;let id=first.querySelector('details')?.dataset.id;if(!id)return;let button=document.createElement('button');button.className='danger';button.dataset.storedRemove='true';button.textContent='Remove';button.onclick=()=>act(id,'delete',button);actions.appendChild(button)})}
 new MutationObserver(ensureStoredRemoveButtons).observe(document.getElementById('messages'),{childList:true,subtree:true});
 ensureStoredRemoveButtons();
-async function refresh(){let s=await api('/api/status'),statusHtml=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class='pill ${s.paused?'warn':'ok'}'>RF: ${s.paused?'paused':'active'}</span><span class=pill>Port: ${s.port}</span><button onclick="togglePause()">${s.paused?'Resume RF':'Pause RF'}</button>`;let defaultMode=document.getElementById('default-enhanced-mode');if(defaultMode&&defaultMode.value!==s.enhanced_mode)defaultMode.value=s.enhanced_mode||'opportunistic';let statusEl=document.getElementById('status');if(statusEl.dataset.rendered!==statusHtml){statusEl.innerHTML=statusHtml;statusEl.dataset.rendered=statusHtml}let m=await api('/api/messages');let openIds=[...document.querySelectorAll('#messages details[open]')].map(d=>d.dataset.id);document.getElementById('messages').innerHTML=m.length?'<table><tr><th>Message</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><details data-id='${esc(x.id)}' ${openIds.includes(x.id)?'open':''}><summary>${statePill(x)} · <span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?` · retry ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (#${x.retry_count})`:''}</summary><div class=mono>${(x.attempts||[]).map(a=>`<span class=timeline-time>${new Date(a.created_at_ms).toLocaleTimeString()}</span> ${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(formatAttemptDetail(a.detail)):''}`).join('<br>')||'No attempts recorded.'}</div><div class='message-full outbox-full-content'><b>Full content</b><br>${esc(x.body)}</div></details></td><td>${esc(x.destination)}</td><td data-preview='true'><div class=message-preview><b>${esc(x.subject||'(no subject)')}</b><br>${esc(x.body)}</div></td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route','in_progress','acknowledged'].includes(x.state)?`<button onclick="act('${x.id}','retry-now')">Retry now</button>`:''}${['queued','waiting_route','in_progress'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled','expired','delivered','acknowledged'].includes(x.state)?`<button class=danger onclick="act('${x.id}','delete')">Remove</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
+async function refresh(){let s=await api('/api/status'),statusHtml=`<span class='pill ${s.connected?'ok':'warn'}'>JS8Call: ${s.connected?'connected':'offline'}</span><span class=pill>Station: ${esc(s.callsign||'unknown')}</span><span class='pill ${s.paused?'warn':'ok'}'>RF: ${s.paused?'paused':'active'}</span><span class=pill>Port: ${s.port}</span><button onclick="togglePause()">${s.paused?'Resume RF':'Pause RF'}</button>`;let defaultMode=document.getElementById('default-enhanced-mode');if(defaultMode&&defaultMode.value!==s.enhanced_mode)defaultMode.value=s.enhanced_mode||'opportunistic';let statusEl=document.getElementById('status');if(statusEl.dataset.rendered!==statusHtml){statusEl.innerHTML=statusHtml;statusEl.dataset.rendered=statusHtml}let m=await api('/api/messages');let openIds=[...document.querySelectorAll('#messages details[open]')].map(d=>d.dataset.id);document.getElementById('messages').innerHTML=m.length?'<table><tr><th class=outbox-select-cell aria-label="Select"></th><th>Message</th><th>To</th><th>Content</th><th>Action</th></tr>'+m.map(x=>`<tr><td><details data-id='${esc(x.id)}' ${openIds.includes(x.id)?'open':''}><summary>${statePill(x)} · <span class=pill>${esc(confidenceName[x.confidence]||confidenceName.uncertain)}</span><br><small>${esc(x.id)}</small>${x.next_attempt_at_ms?` · retry ${new Date(x.next_attempt_at_ms).toLocaleTimeString()} (#${x.retry_count})`:''}</summary><div class=mono>${(x.attempts||[]).map(a=>`<span class=timeline-time>${new Date(a.created_at_ms).toLocaleTimeString()}</span> ${esc(a.action)} → ${esc(a.target)}: ${esc(a.status)}${a.detail?' · '+esc(formatAttemptDetail(a.detail)):''}`).join('<br>')||'No attempts recorded.'}</div><div class='message-full outbox-full-content'><b>Full content</b><br>${esc(x.body)}</div></details></td><td>${esc(x.destination)}</td><td data-preview='true'><div class=message-preview><b>${esc(x.subject||'(no subject)')}</b><br>${esc(x.body)}</div></td><td><button onclick="showGraph('${x.id}')">Graph</button>${['queued','waiting_route','in_progress','acknowledged'].includes(x.state)?`<button onclick="act('${x.id}','retry-now')">Retry now</button>`:''}${['queued','waiting_route','in_progress'].includes(x.state)?`<button class=danger onclick="act('${x.id}','cancel')">Cancel</button>`:''}${['failed','cancelled','expired','delivered','acknowledged'].includes(x.state)?`<button class=danger onclick="act('${x.id}','delete')">Remove</button>`:''}</td></tr>`).join('')+'</table>':'<p>No messages.</p>';let o=await api('/api/observations');document.getElementById('observations').innerHTML=o.map(x=>`<div class=mono>${new Date(x.observed_at_ms).toLocaleTimeString()} ${esc(x.event_type)} ${esc(x.value)}</div>`).join('')||'<p>Waiting for JS8Call events.</p>'}
 const EMERGENCY_GROUPS=['@JS8MAIL','@EMCOMM','@ARES','@RACES','@RAYNET','@NTS','@SKYWARN','@WX','@AMRRON'];function useGroup(group){document.querySelector('#compose input[name=destination]').value=group;document.querySelector('#compose input[name=destination]').focus()}function renderGroups(items){let groups=items.filter(x=>x.name!=='@HB'&&EMERGENCY_GROUPS.includes(x.name));document.getElementById('groups').innerHTML=groups.length?'<table><tr><th>Group</th><th>Purpose</th><th>Seen</th><th>Subscription</th><th>Action</th></tr>'+groups.map(x=>`<tr class="${x.subscribed?'group-subscribed':'group-unsubscribed'}"><td><b>${esc(x.name)}</b></td><td>${esc(x.description||'emergency group')}</td><td>${x.seen_count?esc(relativeAge((Date.now()-x.last_seen_at_ms)/1000)):'not yet observed'}</td><td><span class="pill group-subscription ${x.subscribed?'subscribed':'unsubscribed'}">${x.subscribed?'Subscribed':'Not subscribed'}</span></td><td><button onclick="useGroup('${esc(x.name)}')">Compose</button><button onclick="actGroup('${esc(x.name)}','${x.subscribed?'unsubscribe':'subscribe'}')">${x.subscribed?'Unsubscribe':'Subscribe'}</button></td></tr>`).join('')+'</table>':'<p>No emergency groups recorded.</p>'}function renderAlerts(items){let alerts=items.filter(x=>x.group_name);window.groupAlertItems=alerts;document.getElementById('alerts').innerHTML=alerts.length?alerts.map((x,i)=>`<article><b>${esc(x.group_name)} · ${esc(x.sender)}</b> <span class='pill ${x.complete?'ok':'warn'}'>${x.complete?'Complete':'Partial · '+x.received_parts.length+'/'+x.total_parts}</span><div class=mono>${esc(x.body)}</div><small>${esc(new Date(x.updated_at_ms).toLocaleString())} · ${esc(x.path||'')}</small><br><button class=danger onclick='deleteInboxMessage(groupAlertItems[${i}])'>Remove</button></article>`).join(''):'<p>No group alerts received.</p>'}
-const refreshMailbox=refresh;refresh=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);return refreshMailbox()};const updateRadioLeds=async()=>{let s=await api('/api/status'),activity=s.connected?(s.radio_activity||'RX'):'ERR';document.querySelectorAll('#radio-leds .led').forEach(x=>x.className='led');let led=document.getElementById('led-'+activity.toLowerCase());if(led)led.className='led on-'+activity.toLowerCase()};const refreshWithRadioState=refresh;refresh=async()=>{await refreshWithRadioState();await updateRadioLeds()};
+const refreshMailbox=refresh;refresh=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);return refreshMailbox()};const updateRadioLeds=async()=>{let s=await api('/api/status'),activity=s.connected?(s.radio_activity||'RX'):'ERR';['rx','tx','err'].forEach(name=>{let led=document.getElementById('led-'+name);if(led)led.className='led'});let led=document.getElementById('led-'+activity.toLowerCase());if(led)led.className='led on-'+activity.toLowerCase()};const refreshWithRadioState=refresh;refresh=async()=>{await refreshWithRadioState();await updateRadioLeds()};
 async function actGroup(group,action){try{await api(`/api/groups/${encodeURIComponent(group)}/${action}`,{method:'POST'});refresh()}catch(e){alert(e)}}
-function syncOutboxHistory(){if(!document.getElementById('outbox-history-style')){let style=document.createElement('style');style.id='outbox-history-style';style.textContent='#messages details > .mono,#messages details > .message-full{display:none!important}.outbox-history-row td{background:#f7f9fb;padding:.65em .5em}.outbox-history-row .message-full{margin-top:.6em}';document.head.appendChild(style)}document.querySelectorAll('#messages details[data-id]').forEach(detail=>{let row=detail.closest('tr');if(!row)return;let next=row.nextElementSibling;if(detail.open){if(!next||!next.classList.contains('outbox-history-row')||next.dataset.forId!==detail.dataset.id){if(next&&next.classList.contains('outbox-history-row'))next.remove();let history=document.createElement('tr');history.className='outbox-history-row';history.dataset.forId=detail.dataset.id;let cell=document.createElement('td');cell.colSpan=4;let timeline=detail.querySelector(':scope > .mono');let full=detail.querySelector(':scope > .message-full');if(timeline){let copy=timeline.cloneNode(true);copy.style.display='block';cell.append(copy)}if(full){let copy=full.cloneNode(true);copy.style.display='block';cell.append(copy)}history.append(cell);row.after(history)}}else if(next&&next.classList.contains('outbox-history-row'))next.remove()})}
+function syncOutboxHistory(){if(!document.getElementById('outbox-history-style')){let style=document.createElement('style');style.id='outbox-history-style';style.textContent='#messages details > .mono,#messages details > .message-full{display:none!important}.outbox-history-row td{background:#f7f9fb;padding:.65em .5em}.outbox-history-row .message-full{margin-top:.6em}';document.head.appendChild(style)}document.querySelectorAll('#messages details[data-id]').forEach(detail=>{let row=detail.closest('tr');if(!row)return;let next=row.nextElementSibling;if(detail.open){if(!next||!next.classList.contains('outbox-history-row')||next.dataset.forId!==detail.dataset.id){if(next&&next.classList.contains('outbox-history-row'))next.remove();let history=document.createElement('tr');history.className='outbox-history-row';history.dataset.forId=detail.dataset.id;let cell=document.createElement('td');cell.colSpan=5;let timeline=detail.querySelector(':scope > .mono');let full=detail.querySelector(':scope > .message-full');if(timeline){let copy=timeline.cloneNode(true);copy.style.display='block';cell.append(copy)}if(full){let copy=full.cloneNode(true);copy.style.display='block';cell.append(copy)}history.append(cell);row.after(history)}}else if(next&&next.classList.contains('outbox-history-row'))next.remove()})}
 document.addEventListener('toggle',e=>{if(e.target.matches?.('#messages details'))setTimeout(syncOutboxHistory,0)},true);syncOutboxHistory();setInterval(syncOutboxHistory,1000);
 async function deleteInboxMessage(item){if(!item||!confirm('Delete this local inbox message?'))return;try{await api(`/api/inbox/${encodeURIComponent(item.sender)}/${encodeURIComponent(item.message_id)}/delete`,{method:'POST'});refresh()}catch(e){alert(e)}}
 async function act(id,a,button){if(button){button.disabled=true}try{await api(`/api/messages/${encodeURIComponent(id)}/${a}`,{method:'POST'});await refresh()}catch(e){if(button){button.disabled=false}await refresh().catch(()=>{});let message=e instanceof Error?e.message:String(e);let event=document.getElementById('control-events');if(event){event.textContent=`Action failed: ${message}`;event.className='error'}else{alert(message)}}}
 async function togglePause(){try{let s=await api('/api/status');await api(`/api/control/${s.paused?'resume':'pause'}`,{method:'POST'});refresh()}catch(e){alert(e)}}
 const expandedMessages=new Set;document.addEventListener('click',e=>{let summary=e.target.closest?.('#messages details summary');if(!summary)return;setTimeout(()=>{let detail=summary.parentElement,id=detail?.querySelector('small')?.textContent.trim();if(id){if(detail.open)expandedMessages.add(id);else expandedMessages.delete(id)}},0)});function collapseExpandedOutbox(){expandedMessages.clear();document.querySelectorAll('#messages details[open]').forEach(detail=>{detail.open=false})}function restoreExpanded(){document.querySelectorAll('#messages details').forEach(d=>{let id=d.querySelector('small')?.textContent.trim();if(id&&expandedMessages.has(id))d.open=true})}const refreshKeepExpanded=refresh;refresh=async()=>{if(document.querySelector('#messages details[open]')){await updateRadioLeds();return}await refreshKeepExpanded();restoreExpanded()};
-const refreshStable=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);await refreshMailbox()};refresh=async()=>{await refreshStable();await updateRadioLeds();restoreExpanded()};async function addMessageControls(){if(!document.getElementById('outbox-layout-style')){let style=document.createElement('style');style.id='outbox-layout-style';style.textContent='#messages th:nth-child(3),#messages td:nth-child(3){width:15em}#messages th:nth-child(4),#messages td:nth-child(4){width:21em;white-space:normal}#messages td:nth-child(4) button{margin:0;padding:.4em .55em;white-space:nowrap}@media(max-width:800px){#messages th:nth-child(3),#messages td:nth-child(3),#messages th:nth-child(4),#messages td:nth-child(4){width:auto}}';document.head.appendChild(style)}document.querySelectorAll('#messages tr').forEach(row=>{let content=row.cells?.[2],details=row.querySelector('details');if(!content||content.dataset.preview)return;let full=content.innerHTML;content.dataset.preview='true';content.innerHTML=`<div class=message-preview>${full}</div>`;if(details){let expanded=document.createElement('div');expanded.className='message-full outbox-full-content';expanded.innerHTML=`<b>Full content</b><br>${full}`;details.appendChild(expanded)}})}
+const refreshStable=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);await refreshMailbox()};refresh=async()=>{await refreshStable();await updateRadioLeds();restoreExpanded()};async function addMessageControls(){if(!document.getElementById('outbox-layout-style')){let style=document.createElement('style');style.id='outbox-layout-style';style.textContent='#messages th:nth-child(4),#messages td:nth-child(4){width:15em}#messages th:nth-child(5),#messages td:nth-child(5){width:21em;white-space:normal}#messages td:nth-child(5) button{margin:0;padding:.4em .55em;white-space:nowrap}@media(max-width:800px){#messages th:nth-child(4),#messages td:nth-child(4),#messages th:nth-child(5),#messages td:nth-child(5){width:auto}}';document.head.appendChild(style)}document.querySelectorAll('#messages tr').forEach(row=>{let content=row.cells?.[3],details=row.querySelector('details');if(!content||content.dataset.preview)return;let full=content.innerHTML;content.dataset.preview='true';content.innerHTML=`<div class=message-preview>${full}</div>`;if(details){let expanded=document.createElement('div');expanded.className='message-full outbox-full-content';expanded.innerHTML=`<b>Full content</b><br>${full}`;details.appendChild(expanded)}})}
 document.getElementById('compose').onsubmit=async e=>{e.preventDefault();try{let x=await api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.getElementById('result').textContent='Queued '+x.id;e.target.reset();collapseExpandedOutbox();await refresh();document.getElementById('messages')?.closest('section')?.scrollIntoView({behavior:'smooth',block:'start'})}catch(e){document.getElementById('result').textContent=e}}
 document.getElementById('default-enhanced-mode').onchange=async e=>{try{await api('/api/settings/enhanced-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:e.target.value})});document.getElementById('result').textContent='Default JS8M mode saved'}catch(err){document.getElementById('result').textContent=err}}
+const routeHintsToggle=document.getElementById('route-hints-enabled');
+async function updateRouteHintsStatus(){try{let s=await api('/api/status'),r=s.route_hints||{},label=r.enabled?(r.state==='online'?'online':r.state==='offline'?'unavailable':'enabled'):'disabled',el=document.getElementById('route-hints-state');if(el){el.textContent=label;el.className='pill '+(r.enabled?(r.state==='offline'?'warn':'ok'):'');}if(routeHintsToggle&&routeHintsToggle.checked!==Boolean(r.enabled))routeHintsToggle.checked=Boolean(r.enabled);routeHintsToggle?.toggleAttribute('disabled',!r.configured)}catch(_e){}}
+routeHintsToggle?.addEventListener('change',async e=>{try{await api('/api/settings/route-hints',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:e.target.checked})});await updateRouteHintsStatus()}catch(_e){e.target.checked=false;await updateRouteHintsStatus()}});updateRouteHintsStatus();setInterval(updateRouteHintsStatus,5000);
 document.addEventListener('submit',e=>{if(e.target.id==='compose')collapseExpandedOutbox()},true);
 document.getElementById('station-search').oninput=renderStations;
 const destinationInput=document.querySelector('#compose input[name="destination"]');
@@ -593,7 +602,7 @@ const existingShowInboxMessage=showInboxMessage;showInboxMessage=async item=>{if
 const showInboxMessageWithProtocol=showInboxMessage;showInboxMessage=async item=>{await showInboxMessageWithProtocol(item);let p=[...document.querySelectorAll('#message-modal-content p')].find(x=>x.textContent.includes('Protocol:'));if(p&&item?.protocol==='js8m'&&!p.querySelector('.enhanced'))p.innerHTML=p.innerHTML.replace('JS8Mail','<span class="pill enhanced">JS8Mail · J8M1 v1</span>')};
 const existingInboxRenderer=renderInbox;renderInbox=items=>{existingInboxRenderer(items);document.querySelectorAll('#inbox tr.inbox-new').forEach(row=>row.classList.remove('inbox-new'));(window.inboxItems||[]).forEach((item,index)=>{if(!item.is_read){let row=document.querySelectorAll('#inbox tr')[index+1];if(row)row.classList.add('inbox-new')}})};
 let modalStyle=document.createElement('style');modalStyle.textContent='#message-modal,#version-modal{display:none;position:fixed;inset:0;background:#18222d88;z-index:20;align-items:center;justify-content:center;padding:1em}.modal-card{background:white;border-radius:10px;box-shadow:0 8px 30px #18222d66;max-width:720px;width:min(720px,100%);max-height:85vh;overflow:auto;padding:1.2em}.modal-close{float:right}.message-preview{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}.message-full{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #d9e0e7;border-radius:6px;padding:1em;background:#f7f9fb}.inbox-new{background:#eff6ff}.timeline-time{color:#64748b;font-variant-numeric:tabular-nums}.pill.good,.pill.enhanced{background:#b7f0d0;color:#075c38}.pill.bad{background:#ffd9d9;color:#8b1e1e}.live-legend{font-weight:700;white-space:nowrap}.live-legend-reciprocal{color:#16a34a}.live-legend-active{color:#f59e0b}.live-legend-aged{color:#64748b}.live-legend-js8m{color:#0f766e;font-weight:700}';document.head.appendChild(modalStyle);
-let outboxPreviewStyle=document.createElement('style');outboxPreviewStyle.textContent='#messages td:nth-child(3){height:5.5em;max-height:5.5em;overflow:hidden;line-height:1.25}#messages td:nth-child(3) .message-preview{max-height:4.5em}.confidence-stored_at_custodian,.confidence-delivered_to_js8mail{background:#b7f0d0;color:#075c38}.confidence-awaiting_delivery_ack,.confidence-awaiting_custodian_ack,.confidence-enhanced_acknowledged,.confidence-enhanced_acknowledged_stopped{background:#fff1c2;color:#7a4b00}.confidence-delivery_uncertain{background:#ffd9d9;color:#8b1e1e}.confidence-radio_acknowledged{background:#dbeafe;color:#174ea6}';document.head.appendChild(outboxPreviewStyle);
+let outboxPreviewStyle=document.createElement('style');outboxPreviewStyle.textContent='#messages td:nth-child(4){height:auto;max-height:4.5em;overflow:hidden;line-height:1.25}#messages td:nth-child(4) .message-preview{max-height:4.5em}.confidence-stored_at_custodian,.confidence-delivered_to_js8mail{background:#b7f0d0;color:#075c38}.confidence-awaiting_delivery_ack,.confidence-awaiting_custodian_ack,.confidence-enhanced_acknowledged,.confidence-enhanced_acknowledged_stopped{background:#fff1c2;color:#7a4b00}.confidence-delivery_uncertain{background:#ffd9d9;color:#8b1e1e}.confidence-radio_acknowledged{background:#dbeafe;color:#174ea6}';document.head.appendChild(outboxPreviewStyle);
 let groupSubscriptionStyle=document.createElement('style');groupSubscriptionStyle.textContent='.group-subscribed{background:#f0fdf4}.group-unsubscribed{background:#fff}.group-subscription{font-size:.82em;white-space:nowrap}.group-subscription.subscribed{background:#bbf7d0;color:#166534}.group-subscription.unsubscribed{background:#e5e7eb;color:#4b5563}';document.head.appendChild(groupSubscriptionStyle);
 function styleOutboxConfidence(){document.querySelectorAll('#messages details summary .pill').forEach(p=>{let text=p.textContent||'',key=text.startsWith('Delivered to custodian')?'stored_at_custodian':text.startsWith('Delivered to JS8Mail')?'delivered_to_js8mail':text.startsWith('Store offer submitted')?'awaiting_custodian_ack':text.startsWith('TX submitted')?'awaiting_delivery_ack':text.startsWith('Delivery unconfirmed')?'delivery_uncertain':text.startsWith('JS8Call accepted')?'enhanced_acknowledged_stopped':text.startsWith('JS8Call ACK')?'enhanced_acknowledged':text==='Standard'?'radio_acknowledged':'';if(key)p.classList.add('confidence-'+key)})}new MutationObserver(styleOutboxConfidence).observe(document.getElementById('messages'),{childList:true,subtree:true});
 function renderLiveGraph(g){let box=document.getElementById('live-graph');if(!box)return;if(!g.nodes.length){box.innerHTML='<p>Waiting for active-band observations.</p>';return}let cols=Math.min(6,Math.max(2,Math.ceil(Math.sqrt(g.nodes.length)))),rows=Math.ceil(g.nodes.length/cols),w=Math.max(720,cols*150+80),h=Math.max(280,rows*90+70),pos={};g.nodes.forEach((n,i)=>pos[n]={x:50+(i%cols)*150,y:45+Math.floor(i/cols)*90});let edges=g.edges.map(e=>{let a=pos[e.from],b=pos[e.to],kind=e.kind==='reciprocal'?'reciprocal':e.kind==='active_one_way'?'active_one_way':'aged',color=kind==='reciprocal'?'#16a34a':kind==='active_one_way'?'#f59e0b':'#cbd5e1',width=e.js8m?5:kind==='reciprocal'?4:kind==='active_one_way'?3:2;return `<line data-edge-kind='${kind}' x1=${a.x} y1=${a.y} x2=${b.x} y2=${b.y} stroke='${color}' stroke-opacity='1' opacity='1' stroke-width='${width}'/>`}).join('');let circles=g.nodes.map(n=>`<g><circle cx=${pos[n].x} cy=${pos[n].y} r=25 fill='#e8edf2' stroke='#18222d'/><text x=${pos[n].x} y=${pos[n].y+4} text-anchor=middle font-size=11>${esc(n)}</text></g>`).join('');box.innerHTML=`<p class=mono>Band ${esc(g.band)} · ${g.nodes.length} stations · ${g.edges.length} links · last 2 hours</p><svg viewBox='0 0 ${w} ${h}' preserveAspectRatio='xMidYMin meet' role='img' aria-label='Live radio activity graph'>${edges}${circles}</svg><small><span class='live-legend live-legend-reciprocal'>Reciprocal</span> · <span class='live-legend live-legend-active'>Active one-way</span> · <span class='live-legend live-legend-aged'>Aged one-way</span><br><span class='live-legend live-legend-js8m'>Thick links = JS8Mail evidence</span></small>`}async function refreshLiveGraph(){try{let g=await api('/api/live-graph');window.liveGraphData=g;renderLiveGraph(g)}catch(e){document.getElementById('live-graph').textContent='Live graph unavailable'}}refreshLiveGraph();setInterval(refreshLiveGraph,3000);
@@ -607,7 +616,7 @@ let liveLegendObserver=new MutationObserver(()=>{let live=document.getElementByI
 // route graph it is a dense activity overview, and curved edges obscure which
 // nodes are actually connected.
 document.addEventListener('click',e=>{let button=e.target.closest?.('#messages button');if(button&&button.textContent.trim()==='Graph')setTimeout(()=>document.querySelector('#graph-result')?.closest('section')?.scrollIntoView({behavior:'smooth',block:'start'}),50)});
-let actionGapStyle=document.createElement('style');actionGapStyle.textContent='#messages td:nth-child(4) button{margin-right:.45em!important;margin-bottom:.25em!important}#messages td:nth-child(4) button:last-child{margin-right:0!important}section{scroll-margin-top:8rem}';document.head.appendChild(actionGapStyle);
+let actionGapStyle=document.createElement('style');actionGapStyle.textContent='#messages td:nth-child(5) button{margin-right:.45em!important;margin-bottom:.25em!important}#messages td:nth-child(5) button:last-child{margin-right:0!important}section{scroll-margin-top:8rem}';document.head.appendChild(actionGapStyle);
 function styleStatusPills(){let bar=document.getElementById('status'),p=bar?.querySelectorAll('.pill');if(!p||p.length<5)return;let s=window.lastStatus||{};p[0].className='pill '+(s.connected?'good':'bad');p[1].className='pill '+(s.callsign?'good':'bad');p[2].className='pill '+(s.speed!==''&&s.speed!=='unknown'&&s.speed!=='unavailable'?'good':'bad');p[3].className='pill '+(s.tx_mode?'good':'bad');p[4].className='pill '+(s.connected?'good':'bad')}
 async function updateBandStatus(){try{let s=await api('/api/status'),el=document.getElementById('status-band');window.lastStatus=s;if(!el){el=document.createElement('span');el.id='status-band';el.className='pill';document.getElementById('status').appendChild(el)}let valid=Boolean(s.band)&&Number(s.dial_frequency)>0;el.className='pill '+(valid?'good':'bad');let value=`Band: ${s.band||'not set'} · Dial: ${formatDial(s.dial_frequency)}`;if(el.textContent!==value)el.textContent=value;styleStatusPills()}catch(e){}}
 document.head.insertAdjacentHTML('beforeend',"<style>#status .pill:nth-child(3){display:inline-block!important}</style>");updateBandStatus();setInterval(updateBandStatus,3000);
@@ -615,7 +624,7 @@ document.head.insertAdjacentHTML('beforeend',"<style>#status .pill:nth-child(3){
 // status contents instead of allowing that redraw to remove it.
 new MutationObserver(()=>updateBandStatus()).observe(document.getElementById('status'),{childList:true});
 function movePauseControl(){let bar=document.getElementById('status'),band=document.getElementById('status-band'),button=bar?.querySelector('button');if(bar&&band&&button&&band.nextElementSibling!==button)band.after(button)}new MutationObserver(movePauseControl).observe(document.getElementById('status'),{childList:true});setInterval(movePauseControl,3000);movePauseControl();
-async function updateProtocolLeds(){try{let s=await api('/api/status'),now=Date.now(),dcd=document.getElementById('led-dcd'),bar=document.getElementById('radio-leds'),js8=document.getElementById('led-js8');if(dcd)dcd.className='led'+(Number(s.dcd_until_ms||0)>now?' on-dcd':'');if(!js8&&bar){js8=document.createElement('span');js8.id='led-js8';js8.className='led';js8.textContent='JS8';bar.appendChild(js8)}if(js8)js8.className='led'+(Number(s.js8_activity_until_ms||0)>now?' on-js8':'')}catch(e){}}
+async function updateProtocolLeds(){try{let s=await api('/api/status'),now=Date.now(),dcd=document.getElementById('led-dcd'),bar=document.getElementById('radio-leds'),js8=document.getElementById('led-js8'),net=document.getElementById('led-net');if(dcd)dcd.className='led'+(Number(s.dcd_until_ms||0)>now?' on-dcd':'');if(!js8&&bar){js8=document.createElement('span');js8.id='led-js8';js8.className='led';js8.textContent='JS8';bar.appendChild(js8)}if(js8)js8.className='led'+(Number(s.js8_activity_until_ms||0)>now?' on-js8':'');if(!net&&bar){net=document.createElement('span');net.id='led-net';net.className='led';net.textContent='NET';bar.appendChild(net)}let routeState=String(s.route_hints_led_state||'idle'),routeActive=Number(s.route_hints_activity_until_ms||0)>now;let routeClass=routeActive?({'active':'on-net-warn','success':'on-net','timeout':'on-net-warn','error':'on-net-error'}[routeState]||''):'';if(net)net.className='led'+(routeClass?' '+routeClass:'')}catch(e){}}
 let protocolLedStyle=document.createElement('style');protocolLedStyle.textContent='.led.on-js8{background:#d9d2ff;color:#4b2c82}';document.head.appendChild(protocolLedStyle);updateProtocolLeds();setInterval(updateProtocolLeds,1000);
 const refreshWithoutOpenOutbox=async()=>{let inbox=await api('/api/inbox');renderInbox(inbox);renderAlerts(inbox);let groups=await api('/api/groups');renderGroups(groups);if(!document.querySelector('#messages details[open]'))await refreshMailbox();await updateRadioLeds();restoreExpanded()};refresh=refreshWithoutOpenOutbox;
 const standardInboxRenderer=renderInbox;renderInbox=items=>standardInboxRenderer(items.filter(x=>!x.group_name));
@@ -646,16 +655,30 @@ let inboxCapabilityStyle=document.createElement('style');inboxCapabilityStyle.te
 const moveInboxCapabilityHint=renderInbox;renderInbox=items=>{moveInboxCapabilityHint(items);let rows=[...document.querySelectorAll('#inbox tr[data-inbox-row]')];(items||[]).forEach((item,index)=>{if(item?.protocol!=='standard'||!item.peer_js8m||!rows[index])return;let sender=rows[index].children[1],status=rows[index].children[2],dot=status?.querySelector('.inbox-capability-known');if(sender&&dot) sender.append(' ',dot)})};
 const ensureInboxCapabilityDot=renderInbox;renderInbox=items=>{ensureInboxCapabilityDot(items);let rows=[...document.querySelectorAll('#inbox tr[data-inbox-row]')];(items||[]).forEach((item,index)=>{if(!item?.peer_js8m||!rows[index])return;let sender=rows[index].children[1],dot=sender?.querySelector('.inbox-capability-known');if(!sender)return;if(!dot){dot=document.createElement('span');dot.className='inbox-capability-known';dot.setAttribute('aria-label','JS8Mail capable');dot.setAttribute('role','img');dot.textContent='●';sender.append(' ',dot)}dot.title='JS8Mail capable'})};
 const inboxMessageWithSubject=showInboxMessage;showInboxMessage=async item=>{await inboxMessageWithSubject(item);let content=document.getElementById('message-modal-content');if(!content||content.querySelector('[data-message-subject]'))return;let subject=document.createElement('p');subject.dataset.messageSubject='true';subject.innerHTML=`<b>Subject:</b> ${esc(item?.subject||'(no subject)')}`;let first=content.querySelector('p');if(first)first.before(subject);else content.prepend(subject)};
+// Show the remote JS8Call store ID only when a matching retrieval was
+// actually correlated.  This is deliberately presentation metadata; the
+// route string remains suitable for routing and graph calculations.
+const showInboxMessageWithCollectionPath=showInboxMessage;showInboxMessage=async item=>{await showInboxMessageWithCollectionPath(item);if(item?.delivery!=='stored_collected'||item?.custodian_message_id==null)return;let content=document.getElementById('message-modal-content'),path=item.path||item.sender||'Unknown';if(!content)return;let paragraph=[...content.querySelectorAll('p')].find(node=>node.innerHTML.includes('<b>Path:</b>'));if(paragraph){let marker='<b>Path:</b>',offset=paragraph.innerHTML.indexOf(marker);if(offset>=0)paragraph.innerHTML=paragraph.innerHTML.slice(0,offset)+`${marker} ${esc(path)} · MSG ID ${esc(item.custodian_message_id)}`}};
+const renderInboxWithCollectionPath=renderInbox;renderInbox=items=>{renderInboxWithCollectionPath(items);(items||[]).forEach((item,index)=>{if(item?.delivery!=='stored_collected'||item?.custodian_message_id==null)return;let row=document.querySelectorAll('#inbox tr[data-inbox-row]')[index],cell=row?.children?.[4];if(cell)cell.insertAdjacentHTML('beforeend',`<br><span class=mono>MSG ID ${esc(item.custodian_message_id)}</span>`)})};
 // Keep the release label and update popup in sync with the package version.
-document.querySelector('.version-button')?.replaceChildren(document.createTextNode('v0.0.8d · Updates'));
-const showReleaseInfo=showVersionInfo;showVersionInfo=()=>{showReleaseInfo();let title=document.querySelector('#version-modal h2');if(title)title.textContent='JS8Mail v0.0.8d';let list=document.querySelector('#version-modal ul');if(list)list.innerHTML='<li>Reassembles standard and JS8Mail activity frames, including bare multiframe receipts.</li><li>Preserves partial multipart mail and correlates selective acknowledgements and final delivery receipts.</li><li>Serializes TX trains, protects RX response windows, and retains routes across busy-radio deferrals.</li><li>Improves inbox selection, stable compact previews, protocol labels, and active-band RF evidence.</li><li>Adds semantic message-route graph outcomes, compact latest-route details, collision-aware labels, and readable sizing for long callsigns.</li><li>Color-codes Live RF Activity labels to match reciprocal, active one-way, aged, and JS8Mail evidence links.</li><li>Opportunistic mode actively learns JS8M capability from marked first contact, while Standard mode remains a complete one-message opt-out.</li><li>Group broadcasts now omit the JS8Mail marker to save airtime; capability records remain valid for seven days and refresh with valid JS8M evidence.</li><li>Queues stored-message retrieval after a JS8Call YES MSG ID response, retries safely outside the receive callback, and restores pending collection after daemon restart.</li><li>Special thanks to F4LPU for the message-graph readability report, and to everyone who helped with the local and on-air testing behind this release.</li>'};
-document.querySelector('.version-button')?.replaceChildren(document.createTextNode('v0.0.8d · Updates'));
+document.querySelector('.version-button')?.replaceChildren(document.createTextNode('v0.1.0 · Updates'));
+const showReleaseInfo=showVersionInfo;showVersionInfo=()=>{showReleaseInfo();let title=document.querySelector('#version-modal h2');if(title)title.textContent='JS8Mail v0.1.0';let list=document.querySelector('#version-modal ul');if(list)list.innerHTML='<li>Reassembles standard and JS8Mail activity frames, including interleaved multipart traffic and bare multiframe receipts.</li><li>Preserves partial mail, correlates selective acknowledgements and final delivery receipts, and restores stored-message collection after restart.</li><li>Serializes TX trains, protects receive windows, retains routes while the radio is busy, and applies bounded airtime scheduling.</li><li>Improves Inbox selection, compact Outbox previews, stable expanded histories, protocol labels, active-band evidence, and group-panel readability.</li><li>Adds semantic message-route graph outcomes and clear Live RF Activity colors for reciprocal, one-way, aged, and JS8Mail evidence links.</li><li>Adds network route hints: short-lived, band-scoped RF observations can assist multi-hop discovery without sharing message or mailbox data.</li><li>Network hints are enabled by default, shown with NET status, kept advisory behind local RF evidence, and fail safely when unavailable.</li><li>Opportunistic mode learns JS8M capability from valid CAP and marked first-contact evidence; Standard remains a one-message opt-out.</li><li>Group broadcasts omit the JS8Mail marker to save airtime; capability records expire and refresh from valid evidence.</li><li>Fixes the frontend refresh regression that could leave data-backed panels stuck on Loading.</li><li>Special thanks to F4LPU and to everyone who helped with the local and on-air testing behind this release.</li>'};
+document.querySelector('.version-button')?.replaceChildren(document.createTextNode('v0.1.0 · Updates'));
 const addSchedulerUpdates=showVersionInfo;showVersionInfo=()=>{addSchedulerUpdates();let list=document.querySelector('#version-modal ul');if(list)list.insertAdjacentHTML('afterbegin','<li>Emergency scheduler fix removes a permanent station-wide airtime lock that could block all queued RF until restart.</li><li>Budget waits now wake at the next eligible window instead of blindly delaying another full 15 minutes; per-message safety limits remain active.</li>')};
+const renderGraphWithNetworkHints=showGraph;showGraph=async id=>{await renderGraphWithNetworkHints(id);try{let s=await api('/api/status'),g=await api('/api/graph?message_id='+encodeURIComponent(id)+'&origin='+encodeURIComponent(s.callsign||'')),lines=[...document.querySelectorAll('#graph-result svg line')],labels=[...document.querySelectorAll('#graph-result svg .graph-edge-label')];(g.edges||[]).forEach((edge,index)=>{if(!edge.network_hint||edge.rf_observed||!lines[index])return;let line=lines[index],kind=edge.kind||'observed';if(kind==='observed'||kind==='reported')line.setAttribute('stroke','#7c3aed');line.setAttribute('stroke-dasharray',line.getAttribute('stroke-dasharray')||'5 4');let text=labels[index]?.querySelector('text'),rect=labels[index]?.querySelector('rect');if(text&&!text.textContent.includes('NET')){text.textContent+=' · NET';if(rect){let width=Number(rect.getAttribute('width')||0)+30,center=Number(rect.getAttribute('x')||0)+Number(rect.getAttribute('width')||0)/2;rect.setAttribute('width',String(width));rect.setAttribute('x',String(center-width/2))}}});let legend=document.querySelector('#graph-result [data-network-legend]');if(!legend){let p=document.querySelector('#graph-result>p');if(p){legend=document.createElement('span');legend.dataset.networkLegend='true';legend.style.color='#7c3aed';legend.textContent=' · purple dashed = network hint';p.append(legend)}}}catch(_e){}};
+const outboxSelection=new Set;
+let outboxSelectionStyle=document.createElement('style');outboxSelectionStyle.textContent='#messages{max-height:30rem;overflow:auto}#messages table{border-collapse:collapse}#messages th,#messages td{padding:.3em .45em}#messages details summary{padding:0;line-height:1.2}.outbox-select-cell{width:2.25em;text-align:center;vertical-align:middle}.outbox-select{width:auto!important;margin:0;transform:scale(1.1);vertical-align:middle;accent-color:#1769aa}.outbox-select:disabled{opacity:.45;cursor:not-allowed}.outbox-row-selected{background:#e0f2fe!important;box-shadow:inset 3px 0 #1769aa}.outbox-row-selected td:first-child{background:#bae6fd}#messages th:nth-child(2),#messages td:nth-child(2){width:auto!important}#messages th:nth-child(3),#messages td:nth-child(3){width:8em!important}#messages th:nth-child(4),#messages td:nth-child(4){width:15em!important}#messages th:nth-child(5),#messages td:nth-child(5){width:21em!important;white-space:normal}@media(max-width:800px){#messages th:nth-child(2),#messages td:nth-child(2),#messages th:nth-child(3),#messages td:nth-child(3),#messages th:nth-child(4),#messages td:nth-child(4),#messages th:nth-child(5),#messages td:nth-child(5){width:auto!important;white-space:normal}}';document.head.appendChild(outboxSelectionStyle);
+function updateOutboxSelectionState(){let box=document.getElementById('messages'),bar=document.getElementById('outbox-bulk-actions');if(!box||!bar)return;let rows=[...box.querySelectorAll('tr[data-outbox-row]')],selectable=rows.filter(row=>row.querySelector('[data-outbox-select]:not(:disabled)')),ids=selectable.map(row=>row.dataset.outboxRow).filter(Boolean),selected=ids.filter(id=>outboxSelection.has(id));let count=bar.querySelector('[data-outbox-count]'),button=bar.querySelector('[data-outbox-delete-selected]'),all=bar.querySelector('[data-outbox-select-all]');if(count)count.textContent=selected.length?`${selected.length} selected`:'Select messages';if(button)button.disabled=!selected.length;if(all){all.checked=Boolean(ids.length&&selected.length===ids.length);all.indeterminate=Boolean(selected.length&&selected.length<ids.length)}rows.forEach(row=>{let chosen=outboxSelection.has(row.dataset.outboxRow);row.classList.toggle('outbox-row-selected',chosen);let input=row.querySelector('[data-outbox-select]');if(input)input.checked=chosen})}
+function syncOutboxSelection(){let box=document.getElementById('messages');if(!box)return;box.querySelectorAll('tr').forEach(row=>{let detail=row.querySelector('details[data-id]');if(!detail||row.classList.contains('outbox-history-row'))return;let id=detail.dataset.id;row.dataset.outboxRow=id;let summary=(detail.querySelector('summary')?.textContent||'').trim(),active=/^(New|In progress)/.test(summary),input=row.querySelector('[data-outbox-select]'),cell=row.querySelector(':scope > td.outbox-select-cell');if(!cell){cell=document.createElement('td');cell.className='outbox-select-cell';row.insertBefore(cell,row.cells[0])}if(active){outboxSelection.delete(id);if(!input){input=document.createElement('input');input.type='checkbox';input.dataset.outboxSelect='true';input.dataset.outboxId=id;input.setAttribute('aria-label',`Active outgoing message ${id}; cancel before deleting`);input.className='outbox-select';cell.append(input)}input.disabled=true;input.checked=false;input.title='Cancel this active message before removing it';return}if(input?.disabled){input.remove();input=null}if(!input){input=document.createElement('input');input.type='checkbox';input.dataset.outboxSelect='true';input.dataset.outboxId=id;input.setAttribute('aria-label',`Select outgoing message ${id}`);input.className='outbox-select';input.title='Select for bulk deletion';cell.append(input)}});updateOutboxSelectionState()}
+document.addEventListener('change',event=>{let input=event.target;if(input.matches?.('[data-outbox-select]')){let id=input.dataset.outboxId;if(id){if(input.checked)outboxSelection.add(id);else outboxSelection.delete(id);updateOutboxSelectionState()}}else if(input.matches?.('[data-outbox-select-all]')){document.querySelectorAll('#messages tr[data-outbox-row]').forEach(row=>{let checkbox=row.querySelector('[data-outbox-select]:not(:disabled)'),id=row.dataset.outboxRow;if(checkbox&&id){if(input.checked)outboxSelection.add(id);else outboxSelection.delete(id)}});updateOutboxSelectionState()}});
+async function deleteSelectedOutbox(){let ids=[...outboxSelection];if(!ids.length)return;if(!confirm(`Delete ${ids.length} selected outgoing message${ids.length===1?'':'s'}?`))return;collapseExpandedOutbox();let button=document.querySelector('[data-outbox-delete-selected]');if(button)button.disabled=true;try{await Promise.all(ids.map(id=>api(`/api/messages/${encodeURIComponent(id)}/delete`,{method:'POST'})));outboxSelection.clear();await refresh()}catch(error){let message=error instanceof Error?error.message:String(error);let events=document.getElementById('control-events');if(events)events.textContent=`Delete failed: ${message}`}finally{syncOutboxSelection()}}
+document.querySelector('[data-outbox-delete-selected]')?.addEventListener('click',deleteSelectedOutbox);new MutationObserver(syncOutboxSelection).observe(document.getElementById('messages'),{childList:true,subtree:true});syncOutboxSelection();
+const renderStationsWithRawEvidence=renderStations;renderStations=()=>{let original=stationCache;stationCache=original.map(x=>({...x,evidence:[...(x.evidence||[]),...(x.evidence||[]).map(evidenceLabel)]}));try{renderStationsWithRawEvidence()}finally{stationCache=original}};document.getElementById('station-search').oninput=renderStations;renderStations();
 </script>"""
 
 # Keep the small initial HTML paint in sync with the release metadata that the
 # final script also applies after the page loads.
-PAGE = PAGE.replace("0.0.7", "0.0.9").replace("0.0.8d", "0.0.9")
+PAGE = PAGE.replace("0.0.7", "0.1.0").replace("0.0.8d", "0.1.0").replace("0.0.9", "0.1.0")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -672,6 +695,7 @@ class Handler(BaseHTTPRequestHandler):
     next_tx_not_before_ms: int | None
     active_transaction_id: int | None
     auto_speed: bool
+    route_hints: RouteHintsClient
 
     def finish(self) -> None:
         try:
@@ -741,6 +765,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             self.reply(200, PAGE, "text/html")
         elif path == "/api/status":
+            self.status["route_hints"] = self.route_hints.public_status()
             self.reply(200, self.status)
         elif path == "/api/inbox":
             self.reply(200, self.service.database.list_inbox())
@@ -864,6 +889,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.service.database.set_configuration("enhanced_mode", mode)
                 self.service.database.audit("settings.enhanced_mode_changed", {"mode": mode})
                 self.reply(200, {"ok": True, "enhanced_mode": mode})
+                return
+            if path == "/api/settings/route-hints":
+                enabled = bool(payload.get("enabled", False))
+                self.route_hints.set_enabled(enabled)
+                self.service.database.set_configuration("route_hints_enabled", "1" if enabled else "0")
+                self.service.database.audit(
+                    "settings.route_hints_changed",
+                    {"enabled": enabled, "configured": bool(self.route_hints.endpoint)},
+                )
+                self.reply(200, {"ok": True, "route_hints": self.route_hints.public_status()})
                 return
             if path == "/api/messages":
                 requested_mode = str(payload.get("enhanced_mode", "")).strip().lower()
@@ -1832,6 +1867,11 @@ async def run(args: argparse.Namespace) -> None:
     if configured_mode not in ENHANCED_MODES:
         configured_mode = "opportunistic"
     client = Js8CallClient(args.host, args.port)
+    route_hints = RouteHintsClient(args.route_hints_url, args.route_hints_timeout)
+    saved_route_hints = database.get_configuration("route_hints_enabled", "")
+    route_hints.set_enabled(
+        bool(args.route_hints_url) and saved_route_hints not in {"0", "false", "off"}
+    )
     loop = asyncio.get_running_loop()
     saved_airtime = database.airtime_state()
     saved_window_start = saved_airtime.get("window_started_at_ms")
@@ -1859,6 +1899,8 @@ async def run(args: argparse.Namespace) -> None:
         "next_tx_not_before_ms": 0,
         "dcd_until_ms": 0,
         "js8_activity_until_ms": 0,
+        "route_hints_activity_until_ms": 0,
+        "route_hints_led_state": "idle",
         "tx_message_id": None,
         "tx_reserved_ms": 0,
         "incoming_directed_until_ms": 0,
@@ -1871,6 +1913,7 @@ async def run(args: argparse.Namespace) -> None:
         "pending_capability_message_id": None,
         "pending_capability_peer": None,
         "speed_recommendation": None,
+        "route_hints": route_hints.public_status(),
     }
     handler: type[Handler] = type(
         "BoundHandler",
@@ -1889,6 +1932,7 @@ async def run(args: argparse.Namespace) -> None:
             "next_tx_not_before_ms": None,
             "active_transaction_id": None,
             "auto_speed": args.auto_speed,
+            "route_hints": route_hints,
         },
     )
     # The HTTP server creates request-handler instances, but the background
@@ -1909,6 +1953,7 @@ async def run(args: argparse.Namespace) -> None:
     controller.next_tx_not_before_ms = None
     controller.active_transaction_id = None
     controller.auto_speed = args.auto_speed
+    controller.route_hints = route_hints
     server = ThreadingHTTPServer((args.ui_host, args.ui_port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1939,8 +1984,12 @@ async def run(args: argparse.Namespace) -> None:
     # JS8Call store is separate from our mailbox database.
     pending_retrievals: dict[tuple[str, int], tuple[int, int]] = {}
     completed_retrievals: set[tuple[str, int]] = set()
+    # Only one retrieval may be awaiting a response from a given custodian.
+    # A normal message from that custodian must not complete unrelated IDs.
+    retrieval_in_flight: dict[str, tuple[tuple[str, int], int]] = {}
     max_retrieval_attempts = 4
     retrieval_retry_delay_ms = 45_000
+    retrieval_response_window_ms = 4 * 60_000
 
     def retrieval_key_from_payload(payload: dict[str, Any]) -> tuple[str, int] | None:
         custodian = str(payload.get("custodian", "")).strip().upper()
@@ -1955,12 +2004,17 @@ async def run(args: argparse.Namespace) -> None:
     def restore_pending_retrievals(now_ms: int) -> None:
         """Recover retrievals that were announced or submitted before restart."""
         latest: dict[tuple[str, int], tuple[int, str, int]] = {}
+        pending_epoch: dict[tuple[str, int], int] = {}
+        submitted_after_pending: dict[tuple[str, int], int] = {}
         since_ms = now_ms - 7 * 24 * 60 * 60 * 1000
         events: list[tuple[int, str, dict[str, Any]]] = []
         for event_type in (
             "inbox.retrieval_pending",
             "inbox.retrieval_submitted",
             "inbox.retrieval_failed",
+            "inbox.retrieval_partial",
+            "inbox.retrieval_timeout",
+            "inbox.retrieval_rearmed",
             "inbox.retrieval_completed",
             "inbox.retrieval_exhausted",
         ):
@@ -1974,10 +2028,35 @@ async def run(args: argparse.Namespace) -> None:
                 attempts = int(payload.get("attempt", 0))
             except (TypeError, ValueError):
                 attempts = 0
-            latest[key] = (created_at_ms, event_type, max(0, attempts))
+            attempts = max(0, attempts)
+            if event_type in {"inbox.retrieval_pending", "inbox.retrieval_rearmed"}:
+                pending_epoch[key] = created_at_ms
+                submitted_after_pending.pop(key, None)
+            elif event_type == "inbox.retrieval_submitted":
+                pending_epoch.setdefault(key, 0)
+                submitted_after_pending[key] = created_at_ms
+            latest[key] = (created_at_ms, event_type, attempts)
         for key, (created_at_ms, event_type, attempts) in latest.items():
             if event_type == "inbox.retrieval_completed":
-                completed_retrievals.add(key)
+                # Older versions completed every pending ID when any full
+                # message arrived from a custodian.  Such a completion has no
+                # matching submitted QUERY MSG and must be re-armed instead
+                # of suppressing collection forever.
+                submitted_at = submitted_after_pending.get(key)
+                pending_at = pending_epoch.get(key, 0)
+                if submitted_at is not None and submitted_at >= pending_at:
+                    completed_retrievals.add(key)
+                else:
+                    database.audit(
+                        "inbox.retrieval_rearmed",
+                        {
+                            "custodian": key[0],
+                            "js8call_message_id": key[1],
+                            "attempt": 0,
+                            "reason": "historical completion had no matching retrieval submission",
+                        },
+                    )
+                    pending_retrievals[key] = (now_ms, 0)
                 continue
             if event_type == "inbox.retrieval_exhausted":
                 continue
@@ -2177,10 +2256,18 @@ async def run(args: argparse.Namespace) -> None:
         target: str,
         scheduler: QueryScheduler = query_scheduler,
         route_destination: str | None = None,
-    ) -> bool:
+    ) -> tuple[bool, str | None]:
         now = int(asyncio.get_running_loop().time() * 1000)
-        if not client.connected or not scheduler.due(key, now):
-            return False
+        if not client.connected:
+            return False, "JS8Call API disconnected"
+        if not scheduler.due(key, now):
+            state = scheduler.state(key)
+            remaining_ms = max(0, state.next_at_ms - now)
+            remaining_seconds = max(1, (remaining_ms + 999) // 1000)
+            return (
+                False,
+                f"query cooldown active; next attempt in {remaining_seconds}s",
+            )
         now_wall = utc_now_ms()
         pending_call_queries[:] = [
             query
@@ -2199,14 +2286,58 @@ async def run(args: argparse.Namespace) -> None:
                 # A compact ALLCALL YES cannot identify which queried
                 # destination it answers. Keep one outstanding ALLCALL
                 # destination so a valid answer is never misrouted.
-                return False
+                pending = next(
+                    query
+                    for query in pending_call_queries
+                    if query.responder == "@ALLCALL"
+                    and query.destination != destination
+                    and now_wall - query.submitted_at_ms <= query.response_window_ms
+                )
+                remaining_seconds = max(
+                    1,
+                    (
+                        pending.submitted_at_ms
+                        + pending.response_window_ms
+                        - now_wall
+                        + 999
+                    )
+                    // 1000,
+                )
+                return (
+                    False,
+                    (
+                        f"another @ALLCALL query for {pending.destination} is awaiting "
+                        f"replies ({remaining_seconds}s remaining)"
+                    ),
+                )
             if any(
                 query.responder == responder and query.destination != destination
                 for query in pending_call_queries
             ):
                 # CALL YES does not repeat the destination. Keep at most one
                 # outstanding destination per directed station/@ALLCALL.
-                return False
+                pending = next(
+                    query
+                    for query in pending_call_queries
+                    if query.responder == responder and query.destination != destination
+                )
+                remaining_seconds = max(
+                    1,
+                    (
+                        pending.submitted_at_ms
+                        + pending.response_window_ms
+                        - now_wall
+                        + 999
+                    )
+                    // 1000,
+                )
+                return (
+                    False,
+                    (
+                        f"{responder} query for {pending.destination} is awaiting "
+                        f"replies ({remaining_seconds}s remaining)"
+                    ),
+                )
         try:
             await controller.send_rf(text)
             database.audit(
@@ -2232,10 +2363,10 @@ async def run(args: argparse.Namespace) -> None:
                     )
                 )
                 del pending_call_queries[:-16]
-            return True
-        except (ConnectionError, RuntimeError):
+            return True, None
+        except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
             scheduler.record(key, now)
-            return False
+            return False, f"RF handoff blocked: {radio_exception_reason(exc)}"
 
     def queue_message_retrieval(custodian: str, stored_id: int, reason: str) -> None:
         """Queue a targeted QUERY MSG without blocking the RX event handler."""
@@ -2269,12 +2400,48 @@ async def run(args: argparse.Namespace) -> None:
             },
         )
 
+    def active_retrieval_for(custodian: str, now_ms: int | None = None) -> tuple[str, int] | None:
+        """Return the one retrieval whose response may be correlated now."""
+        now_ms = utc_now_ms() if now_ms is None else now_ms
+        active = retrieval_in_flight.get(custodian.strip().upper())
+        if active is None:
+            return None
+        key, deadline_ms = active
+        if now_ms >= deadline_ms:
+            return None
+        return key
+
     async def service_pending_retrievals(now_wall_ms: int) -> None:
         """Submit queued retrievals during normal scheduler opportunities."""
+        # A response window is measured from the retrieval handoff. Once it
+        # expires, let the normal retry budget decide whether to try again.
+        for custodian, (in_flight_key, deadline_ms) in list(retrieval_in_flight.items()):
+            if now_wall_ms >= deadline_ms:
+                retrieval_in_flight.pop(custodian, None)
+                pending_state = pending_retrievals.get(in_flight_key)
+                if pending_state is not None:
+                    pending_retrievals[in_flight_key] = (
+                        now_wall_ms,
+                        pending_state[1],
+                    )
+                    database.audit(
+                        "inbox.retrieval_timeout",
+                        {
+                            "custodian": custodian,
+                            "js8call_message_id": in_flight_key[1],
+                            "attempt": pending_state[1],
+                            "reason": "no matching message response before retrieval window",
+                        },
+                    )
         for key, (due_at_ms, submitted_count) in list(pending_retrievals.items()):
             if now_wall_ms < due_at_ms:
                 continue
             custodian, stored_id = key
+            active = retrieval_in_flight.get(custodian)
+            if active is not None:
+                # Serialize IDs for one custodian. A full message received
+                # while another ID is active cannot be attributed safely.
+                continue
             if submitted_count >= max_retrieval_attempts:
                 database.audit(
                     "inbox.retrieval_exhausted",
@@ -2311,15 +2478,204 @@ async def run(args: argparse.Namespace) -> None:
                 )
                 continue
             attempt = submitted_count + 1
-            pending_retrievals[key] = (now_wall_ms + retrieval_retry_delay_ms, attempt)
+            response_deadline = utc_now_ms() + retrieval_response_window_ms
+            pending_retrievals[key] = (response_deadline, attempt)
+            retrieval_in_flight[custodian] = (key, response_deadline)
             database.audit(
                 "inbox.retrieval_submitted",
                 {
                     "custodian": custodian,
                     "js8call_message_id": stored_id,
                     "attempt": attempt,
+                    "response_deadline_ms": response_deadline,
                 },
             )
+
+    route_hints_last_pull_ms: dict[str, int] = {}
+    route_hints_last_push_ms = 0
+
+    def route_hints_io_started() -> None:
+        status["route_hints_led_state"] = "active"
+        status["route_hints_activity_until_ms"] = utc_now_ms() + max(
+            2_000, int(route_hints.timeout_seconds * 1_000) + 250
+        )
+
+    def route_hints_io_finished(success: bool) -> None:
+        if success:
+            state = "success"
+        else:
+            error = str(route_hints.state.last_error).lower()
+            state = "timeout" if "timeout" in error or "timed out" in error else "error"
+        status["route_hints_led_state"] = state
+        status["route_hints_activity_until_ms"] = utc_now_ms() + 2_000
+
+    def route_hints_enabled() -> bool:
+        return route_hints.enabled and database.get_configuration("route_hints_enabled", "1") not in {
+            "0",
+            "false",
+            "off",
+        }
+
+    def apply_network_hint(claim: dict[str, Any], local_call: str, band: str) -> bool:
+        """Project one remote claim into normal, band-scoped route evidence."""
+        observer = str(claim.get("observer", "")).strip().upper()
+        kind = str(claim.get("kind", "")).strip().lower()
+        source = str(claim.get("source", "")).strip().upper()
+        destination = str(claim.get("destination", "")).strip().upper()
+        claim_band = str(claim.get("band", "")).strip().lower()
+        if not observer or not source or claim_band != band.lower() or source.startswith("@"):
+            return False
+        if kind == "heard":
+            # The remote observer heard source. Treat this as remote observer
+            # -> source evidence, never as proof that source heard us.
+            destination = source
+            source = observer
+        elif kind == "observed_traffic" and (not destination or destination.startswith("@")):
+            return False
+        elif kind == "observed_path":
+            via = str(claim.get("via", "")).strip().upper()
+            if via and destination and via not in {source, destination}:
+                for left, right in ((source, via), (via, destination)):
+                    database.record_observation(
+                        NormalizedEvent(
+                            "RX.NETWORK_HINT",
+                            f"{left} -> {right} observed path",
+                            {
+                                "FROM": left,
+                                "TO": right,
+                                "EVIDENCE": "remote_web_path",
+                                "SNR": claim.get("snr"),
+                                "BAND": band,
+                            },
+                            int(claim.get("observed_at_ms", utc_now_ms())),
+                        ),
+                        band=band,
+                        dial_frequency=int(claim["dial_frequency"])
+                        if isinstance(claim.get("dial_frequency"), int)
+                        else None,
+                    )
+                return True
+        if not destination or destination.startswith("@") or source == destination:
+            return False
+        database.record_observation(
+            NormalizedEvent(
+                "RX.NETWORK_HINT",
+                f"{source} -> {destination} ({kind})",
+                {
+                    "FROM": source,
+                    "TO": destination,
+                    "EVIDENCE": "remote_web_" + kind,
+                    "SNR": claim.get("snr"),
+                    "BAND": band,
+                },
+                int(claim.get("observed_at_ms", utc_now_ms())),
+            ),
+            band=band,
+            dial_frequency=int(claim["dial_frequency"])
+            if isinstance(claim.get("dial_frequency"), int)
+            else None,
+        )
+        return True
+
+    async def pull_route_hints_for(destination: str, reason: str) -> int:
+        if not route_hints_enabled():
+            return 0
+        band = str(status.get("band", "")).strip().lower()
+        local_call = str(status.get("callsign", "")).strip().upper()
+        target = destination.strip().upper()
+        if not band or not local_call or not target or target.startswith("@"):
+            return 0
+        now = utc_now_ms()
+        retry_count = 0
+        message_rows = database.list_messages()
+        for message in message_rows:
+            if str(message.get("destination", "")).upper() == target:
+                retry_count = max(retry_count, int(message.get("retry_count", 0) or 0))
+        interval_ms = min(15 * 60_000, max(60_000, 60_000 * (2 ** min(retry_count, 4))))
+        if now - route_hints_last_pull_ms.get(target, 0) < interval_ms:
+            return 0
+        route_hints_last_pull_ms[target] = now
+        route_hints_io_started()
+        hints = await route_hints.pull(target, band)
+        route_hints_io_finished(route_hints.state.state == "online")
+        status["route_hints"] = route_hints.public_status()
+        database.audit(
+            "route_hints.pull",
+            {"destination": target, "band": band, "reason": reason, "count": len(hints), "state": route_hints.state.state},
+        )
+        applied = 0
+        for claim in hints:
+            # The service returns the observer, which is required to preserve
+            # the difference between direct hearing and reported reachability.
+            if apply_network_hint(claim, local_call, band):
+                applied += 1
+        if applied:
+            for message in message_rows:
+                if (
+                    str(message.get("destination", "")).upper() == target
+                    and str(message.get("state", "")) in {"queued", "waiting_route", "in_progress"}
+                ):
+                    database.record_attempt(
+                        str(message["id"]),
+                        "route_hints",
+                        target,
+                        "received",
+                        f"applied {applied} short-lived network route hint(s) for {band}; advisory only, local RF confirmation still required",
+                    )
+                    database.wake_message_for_route(str(message["id"]))
+            database.audit(
+                "route_hints.applied",
+                {"destination": target, "band": band, "count": applied, "reason": reason},
+            )
+        return applied
+
+    async def publish_route_hints() -> int:
+        nonlocal route_hints_last_push_ms
+        if not route_hints_enabled():
+            return 0
+        local_call = str(status.get("callsign", "")).strip().upper()
+        band = str(status.get("band", "")).strip().lower()
+        if not local_call or not band:
+            return 0
+        now = utc_now_ms()
+        if now - route_hints_last_push_ms < 10 * 60_000:
+            return 0
+        observations = database.recent_observations(250, band=band)
+        claims = claims_from_observations(observations, local_call, limit=100)
+        if not claims:
+            route_hints_last_push_ms = now
+            return 0
+        route_hints_io_started()
+        accepted = await route_hints.push(local_call, claims)
+        route_hints_io_finished(route_hints.state.state == "online")
+        route_hints_last_push_ms = now
+        status["route_hints"] = route_hints.public_status()
+        database.audit(
+            "route_hints.push",
+            {"band": band, "claims": len(claims), "accepted": accepted, "state": route_hints.state.state},
+        )
+        return accepted
+
+    async def route_hints_loop() -> None:
+        """Poll and publish outside the radio scheduler.
+
+        Pull cadence follows each message's exponential retry age, so a
+        backoff does not suppress potentially useful fresh network evidence.
+        HTTP work is threaded and cannot block JS8Call RX/TX handling.
+        """
+        while True:
+            await asyncio.sleep(15)
+            if not route_hints_enabled():
+                continue
+            await publish_route_hints()
+            destinations = {
+                str(message["destination"]).upper()
+                for message in database.list_messages()
+                if str(message.get("state", "")) in {"queued", "waiting_route", "in_progress"}
+                and not str(message["destination"]).startswith("@")
+            }
+            for destination in sorted(destinations):
+                await pull_route_hints_for(destination, "retry/backoff opportunity")
 
     async def discovery_loop() -> None:
         inbox_key = "inbox:broadcast"
@@ -3048,14 +3404,16 @@ async def run(args: argparse.Namespace) -> None:
 
                 call_key = f"call-query:{destination}"
                 query_submitted = False
+                query_block_reason: str | None = None
                 query_wait_ms = query_context_window_ms
                 if query_scheduler.due(call_key, now):
                     candidates = promising
+                    candidate_block_reasons: list[tuple[str, str]] = []
                     if candidates:
                         for candidate in candidates:
                             candidate_key = f"candidate-query:{candidate}:{destination}"
                             if query_scheduler.due(candidate_key, now):
-                                candidate_submitted = await submit_query(
+                                candidate_submitted, candidate_block_reason = await submit_query(
                                     candidate_key,
                                     f"{candidate} QUERY CALL {destination}",
                                     "candidate_query_call",
@@ -3067,18 +3425,44 @@ async def run(args: argparse.Namespace) -> None:
                                     "candidate_query_call",
                                     candidate,
                                     "submitted" if candidate_submitted else "blocked",
-                                    destination,
+                                    destination
+                                    if candidate_submitted
+                                    else f"{destination}; {candidate_block_reason or 'query not submitted'}",
                                 )
                                 query_submitted = query_submitted or candidate_submitted
                                 if candidate_submitted:
-                                    query_wait_ms = max(
+                                        query_wait_ms = max(
                                         query_wait_ms,
-                                        query_response_window_ms(
-                                            "candidate_query_call", status.get("speed", 0)
+                                            query_response_window_ms(
+                                                "candidate_query_call", status.get("speed", 0)
+                                            ),
+                                        )
+                            else:
+                                state = query_scheduler.state(candidate_key)
+                                remaining_seconds = max(
+                                    1,
+                                    (max(0, state.next_at_ms - now) + 999) // 1000,
+                                )
+                                candidate_block_reasons.append(
+                                    (
+                                        candidate,
+                                        (
+                                            f"query cooldown active; next attempt in "
+                                            f"{remaining_seconds}s"
                                         ),
                                     )
+                                )
+                        if not query_submitted and candidate_block_reasons:
+                            blocked_candidate, query_block_reason = candidate_block_reasons[0]
+                            database.record_attempt(
+                                str(message["id"]),
+                                "candidate_query_call",
+                                blocked_candidate,
+                                "blocked",
+                                f"{destination}; {query_block_reason}",
+                            )
                     else:
-                        allcall_submitted = await submit_query(
+                        allcall_submitted, allcall_block_reason = await submit_query(
                             call_key,
                             call_query(destination),
                             "allcall_query_call",
@@ -3090,13 +3474,31 @@ async def run(args: argparse.Namespace) -> None:
                             "allcall_query_call",
                             "@ALLCALL",
                             "submitted" if allcall_submitted else "blocked",
-                            destination,
+                            destination
+                            if allcall_submitted
+                            else f"{destination}; {allcall_block_reason or 'query not submitted'}",
                         )
                         query_submitted = allcall_submitted
                         if allcall_submitted:
                             query_wait_ms = query_response_window_ms(
                                 "allcall_query_call", status.get("speed", 0)
                             )
+                else:
+                    state = query_scheduler.state(call_key)
+                    remaining_seconds = max(
+                        1,
+                        (max(0, state.next_at_ms - now) + 999) // 1000,
+                    )
+                    query_block_reason = (
+                        f"query cooldown active; next attempt in {remaining_seconds}s"
+                    )
+                    database.record_attempt(
+                        str(message["id"]),
+                        "allcall_query_call",
+                        "@ALLCALL",
+                        "blocked",
+                        f"{destination}; {query_block_reason}",
+                    )
                 delay_ms = min(
                     60_000 * (2 ** min(int(message.get("retry_count", 0)), 8)),
                     21_600_000,
@@ -3130,6 +3532,7 @@ async def run(args: argparse.Namespace) -> None:
                 await asyncio.sleep(1)
 
     discovery_task = asyncio.create_task(discovery_supervisor())
+    route_hints_task = asyncio.create_task(route_hints_loop())
     try:
         while True:
             try:
@@ -3732,7 +4135,12 @@ async def run(args: argparse.Namespace) -> None:
                             message_text = clean_user_message(message_text)
                             if not message_text:
                                 return
-                            collected = any(key[0] == source.upper() for key in pending_retrievals)
+                            retrieval_key = active_retrieval_for(source)
+                            # A custodian's ordinary message is only a stored
+                            # retrieval response when this daemon has actually
+                            # submitted the matching QUERY MSG and is still
+                            # inside its bounded response window.
+                            collected = retrieval_key is not None
                             original_sender = source
                             if collected:
                                 # JS8Call's stored-message response normally
@@ -3853,43 +4261,44 @@ async def run(args: argparse.Namespace) -> None:
                                     status.get("pending_capability_peer") or ""
                                 ),
                             )
-                        matching_retrievals = [
-                            (retrieval_key, state)
-                            for retrieval_key, state in pending_retrievals.items()
-                            if retrieval_key[0] == source.upper()
-                        ]
-                        if partial and matching_retrievals:
-                            retrieval_key, (next_retry_at, retry_count) = matching_retrievals[0]
+                        matching_retrieval = (
+                            retrieval_key
+                            if retrieval_key is not None
+                            and retrieval_key in pending_retrievals
+                            else None
+                        )
+                        if partial and matching_retrieval is not None:
+                            next_retry_at, retry_count = pending_retrievals[matching_retrieval]
                             now = utc_now_ms()
+                            retrieval_in_flight.pop(source.upper(), None)
                             if retry_count < max_retrieval_attempts and now >= next_retry_at:
-                                pending_retrievals[retrieval_key] = (
+                                pending_retrievals[matching_retrieval] = (
                                     now + retrieval_retry_delay_ms,
                                     retry_count,
                                 )
                                 database.audit(
                                     "inbox.retrieval_partial",
                                     {
-                                        "custodian": retrieval_key[0],
-                                        "js8call_message_id": retrieval_key[1],
+                                        "custodian": matching_retrieval[0],
+                                        "js8call_message_id": matching_retrieval[1],
                                         "attempt": retry_count,
                                         "message_id": legacy_id,
                                         "detail": "partial retrieval retained; scheduler will request the complete message again",
                                     },
                                 )
-                        elif not partial:
-                            for retrieval_key in tuple(pending_retrievals):
-                                if retrieval_key[0] == source.upper():
-                                    database.audit(
-                                        "inbox.retrieval_completed",
-                                        {
-                                            "custodian": retrieval_key[0],
-                                            "js8call_message_id": retrieval_key[1],
-                                            "attempt": pending_retrievals[retrieval_key][1],
-                                            "message_id": legacy_id,
-                                        },
-                                    )
-                                    completed_retrievals.add(retrieval_key)
-                                    pending_retrievals.pop(retrieval_key, None)
+                        elif not partial and matching_retrieval is not None:
+                            database.audit(
+                                "inbox.retrieval_completed",
+                                {
+                                    "custodian": matching_retrieval[0],
+                                    "js8call_message_id": matching_retrieval[1],
+                                    "attempt": pending_retrievals[matching_retrieval][1],
+                                    "message_id": legacy_id,
+                                },
+                            )
+                            completed_retrievals.add(matching_retrieval)
+                            pending_retrievals.pop(matching_retrieval, None)
+                            retrieval_in_flight.pop(source.upper(), None)
                     query_response = parse_query_call_response(
                         frame.wire_text if frame is not None else ""
                     )
@@ -4416,6 +4825,8 @@ async def run(args: argparse.Namespace) -> None:
     finally:
         discovery_task.cancel()
         await asyncio.gather(discovery_task, return_exceptions=True)
+        route_hints_task.cancel()
+        await asyncio.gather(route_hints_task, return_exceptions=True)
         server.shutdown()
         server.server_close()
         database.close()
@@ -4443,6 +4854,17 @@ def main() -> None:
         "--open-browser",
         action="store_true",
         help="Open the local web UI after startup (used by the desktop bundle)",
+    )
+    parser.add_argument(
+        "--route-hints-url",
+        default="http://js8mail.oh3spn.fi:8787",
+        help="JS8Mail route-hints service URL (default: http://js8mail.oh3spn.fi:8787; disable in the UI)",
+    )
+    parser.add_argument(
+        "--route-hints-timeout",
+        default=4.0,
+        type=float,
+        help="Route-hints HTTP timeout in seconds (default: 4)",
     )
     args = parser.parse_args()
     try:

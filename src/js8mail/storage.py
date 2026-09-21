@@ -12,7 +12,7 @@ from typing import Any
 from js8mail.bands import context_from_params
 from js8mail.domain import NormalizedEvent, utc_now_ms
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 
 class Database:
@@ -521,6 +521,15 @@ class Database:
                     VALUES (28, strftime('%s','now') * 1000);
                 """
             )
+        if current < 29:
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS audit_events_type_created_idx "
+                "ON audit_events(event_type, created_at_ms, id)"
+            )
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at_ms) "
+                "VALUES (29, strftime('%s','now') * 1000)"
+            )
         self.connection.commit()
 
     def record_observation(
@@ -952,6 +961,55 @@ class Database:
             {"payload": json.loads(row["payload_json"]), "created_at_ms": int(row["created_at_ms"])}
             for row in rows
         ]
+
+    def inbox_retrieval_metadata(self) -> dict[str, dict[str, Any]]:
+        """Return valid custodian collection IDs keyed by local inbox ID.
+
+        A full message from a custodian is not, by itself, proof that a
+        particular ``QUERY MSG <id>`` was answered.  Correlate only a
+        completion that follows a submitted retrieval in the same retrieval
+        epoch.  This also keeps historical false correlations out of the UI.
+        """
+        rows = self.connection.execute(
+            "SELECT event_type, payload_json, created_at_ms FROM audit_events "
+            "WHERE event_type IN ("
+            "'inbox.retrieval_pending', 'inbox.retrieval_rearmed', "
+            "'inbox.retrieval_submitted', 'inbox.retrieval_completed'"
+            ") ORDER BY created_at_ms, id"
+        ).fetchall()
+        state: dict[tuple[str, int], dict[str, Any]] = {}
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+                custodian = str(payload.get("custodian", "")).strip().upper()
+                stored_id = int(payload.get("js8call_message_id"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not custodian or stored_id < 0:
+                continue
+            key = (custodian, stored_id)
+            event_type = str(row["event_type"])
+            created_at_ms = int(row["created_at_ms"])
+            if event_type in {"inbox.retrieval_pending", "inbox.retrieval_rearmed"}:
+                state[key] = {"pending_at_ms": created_at_ms, "submitted_at_ms": None}
+                continue
+            if event_type == "inbox.retrieval_submitted":
+                current = state.setdefault(
+                    key, {"pending_at_ms": 0, "submitted_at_ms": None}
+                )
+                current["submitted_at_ms"] = created_at_ms
+                continue
+            current = state.get(key)
+            if current is None or current.get("submitted_at_ms") is None:
+                continue
+            local_message_id = str(payload.get("message_id", "")).strip()
+            if local_message_id:
+                result[local_message_id] = {
+                    "custodian": custodian,
+                    "custodian_message_id": stored_id,
+                }
+        return result
 
     def recent_control_events(self, limit: int = 50) -> list[dict[str, Any]]:
         """Return recent automatic delivery-control activity for the UI."""
@@ -1503,6 +1561,7 @@ class Database:
             query += " WHERE group_name != ''"
         query += " ORDER BY updated_at_ms DESC"
         rows = self.connection.execute(query).fetchall()
+        retrieval_metadata = self.inbox_retrieval_metadata()
         result: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
@@ -1512,6 +1571,11 @@ class Database:
             # This is a forward-looking hint, not the protocol used by the
             # message. peer_capabilities() applies the normal expiry policy.
             item["peer_js8m"] = self.peer_capabilities(str(item["sender"])) is not None
+            item["custodian_collection"] = retrieval_metadata.get(str(item["message_id"]))
+            if item["custodian_collection"] is not None:
+                item["custodian_message_id"] = item["custodian_collection"][
+                    "custodian_message_id"
+                ]
             result.append(item)
         return result
 
@@ -1766,8 +1830,15 @@ class Database:
         ).fetchone()
         if row is None:
             raise KeyError(message_id)
-        if row["state"] == "in_progress":
-            raise ValueError("cannot remove a message currently in progress")
+        if row["state"] not in {
+            "acknowledged",
+            "stored",
+            "delivered",
+            "failed",
+            "expired",
+            "cancelled",
+        }:
+            raise ValueError("cannot remove an active message; cancel it first")
         # Remove dependent history before the parent row. Several older tables
         # do not declare ON DELETE CASCADE, so deleting only attempts violates
         # SQLite foreign-key enforcement for airtime and route history.

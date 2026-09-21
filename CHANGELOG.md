@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.0 — 2026-09-21
+
+This milestone brings the local mailbox, route discovery, operator UI, and
+network-assisted discovery helper together for wider community testing:
+
+- added the optional network route-hints integration, enabled by default, with
+  short-lived band-scoped RF claims, expiry, indexed lookups, persistent
+  service storage, a visible NET activity indicator, and graceful offline
+  behavior; no message or mailbox data is shared;
+- added network-hint provenance to route decisions, Outbox history, and message
+  graphs while keeping fresh local RF evidence authoritative;
+- completed the mail-first UI layout with a full-width Inbox, compact scrolling
+  Outbox, stable expanded-history rows, bulk mailbox actions, readable group
+  controls, active-band indicators, and capability/status LEDs;
+- fixed the frontend refresh regression that could leave every data-backed panel
+  stuck on “Loading…” after a JavaScript exception;
+- retained the tested JS8Call handoff serialization, receive-window protection,
+  route retention during radio-busy periods, custody collection recovery,
+  multipart reassembly/resend handling, and bounded airtime scheduling;
+- documented LAN UI access, JS8Call API setup, network route hints, privacy
+  boundaries, and current experimental limitations.
+
+This is still early, experimental radio software rather than a finished
+emergency-service product. Extensive supervised local and on-air testing has
+been performed. Thanks to F4LPU and to all operators who supplied reports,
+test traffic, and real-world JS8Call observations.
+
 ## 0.0.9 — 2026-09-19
 
 This development milestone consolidates the recent reliability work before the

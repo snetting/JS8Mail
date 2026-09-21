@@ -56,6 +56,44 @@ def test_partial_legacy_inbox_fragment_can_be_reconciled(tmp_path: Path) -> None
     database.close()
 
 
+def test_inbox_collection_metadata_requires_matching_submission(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    database.upsert_inbox_message(
+        "ORIGIN", "local-1", "hello", 1, (1,), True,
+        ("ORIGIN", "CUST"), delivery="stored_collected"
+    )
+    database.audit(
+        "inbox.retrieval_pending",
+        {"custodian": "CUST", "js8call_message_id": 431, "attempt": 0},
+    )
+    database.audit(
+        "inbox.retrieval_completed",
+        {
+            "custodian": "CUST",
+            "js8call_message_id": 431,
+            "attempt": 0,
+            "message_id": "local-1",
+        },
+    )
+    assert database.list_inbox()[0].get("custodian_message_id") is None
+
+    database.audit(
+        "inbox.retrieval_submitted",
+        {"custodian": "CUST", "js8call_message_id": 431, "attempt": 1},
+    )
+    database.audit(
+        "inbox.retrieval_completed",
+        {
+            "custodian": "CUST",
+            "js8call_message_id": 431,
+            "attempt": 1,
+            "message_id": "local-1",
+        },
+    )
+    assert database.list_inbox()[0]["custodian_message_id"] == 431
+    database.close()
+
+
 def test_inbox_read_state_is_durable_and_new_content_reopens_item(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     database.upsert_inbox_message("MM0SPN", "m1", "hello", 1, (1,), True)
@@ -371,6 +409,7 @@ def test_remove_message_cleans_all_spool_history(tmp_path: Path) -> None:
     database.record_message_path("m1", ("ORIGIN", "RELAY", "DEST"))
     database.save_message_airtime("m1", 1000)
 
+    database.transition_message("m1", "cancelled")
     database.delete_message("m1")
 
     assert database.get_message("m1") is None

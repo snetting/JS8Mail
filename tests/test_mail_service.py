@@ -54,6 +54,25 @@ def test_delete_is_idempotent_for_missing_messages(tmp_path: Path) -> None:
     database.close()
 
 
+@pytest.mark.parametrize("active_state", ["queued", "waiting_route", "in_progress"])
+def test_delete_requires_cancel_for_active_messages(
+    tmp_path: Path, active_state: str
+) -> None:
+    database = Database(tmp_path / f"mail-{active_state}.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("M0SPN", "Test", "Active message")
+    if active_state in {"waiting_route", "in_progress"}:
+        database.transition_message(message_id, "waiting_route")
+    if active_state == "in_progress":
+        database.transition_message(message_id, "in_progress")
+
+    with pytest.raises(ValueError, match="cancel it first"):
+        service.delete(message_id)
+
+    assert database.get_message(message_id)["state"] == active_state  # type: ignore[index]
+    database.close()
+
+
 def test_new_queued_message_reports_waiting_for_discovery(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     service = MailService(database)
@@ -257,6 +276,63 @@ def test_message_graph_separates_reported_route_from_delivery_attempt(tmp_path: 
     assert by_pair[("OH3SPN", "DG3YDE")]["kind"] == "failed"
     assert by_pair[("OH3SPN", "M9LOV")]["kind"] != "delivered"
     assert graph["paths"] == []
+    database.close()
+
+
+def test_message_graph_marks_network_hints_without_overriding_local_rf(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("DG3YDE", "test", "body")
+    now = int(time.time() * 1000)
+    database.record_observation(
+        NormalizedEvent(
+            "RX.NETWORK_HINT",
+            "M9LOV -> DG3YDE observed path",
+            {"FROM": "M9LOV", "TO": "DG3YDE", "EVIDENCE": "remote_web_observed_traffic"},
+            now,
+        ),
+        band="20m",
+    )
+
+    graph = service.message_graph(message_id, "OH3SPN", band="20m")
+    edge = next(edge for edge in graph["edges"] if edge["from"] == "M9LOV")
+    assert edge["network_hint"] is True
+    assert edge["rf_observed"] is False
+
+    database.record_observation(
+        NormalizedEvent(
+            "RX.ACTIVITY",
+            "M9LOV -> DG3YDE observed locally",
+            {"FROM": "M9LOV", "TO": "DG3YDE", "EVIDENCE": "local"},
+            now + 1_000,
+        ),
+        band="20m",
+    )
+    graph = service.message_graph(message_id, "OH3SPN", band="20m")
+    edge = next(edge for edge in graph["edges"] if edge["from"] == "M9LOV")
+    assert edge["network_hint"] is True
+    assert edge["rf_observed"] is True
+    database.close()
+
+
+def test_message_graph_drops_stale_passive_evidence(tmp_path: Path) -> None:
+    database = Database(tmp_path / "mail.sqlite3")
+    service = MailService(database)
+    message_id = service.compose("DG3YDE", "test", "body")
+    stale = int(time.time() * 1000) - (49 * 60 * 60 * 1000)
+    database.record_observation(
+        NormalizedEvent(
+            "RX.NETWORK_HINT",
+            "M9LOV -> DG3YDE stale path",
+            {"FROM": "M9LOV", "TO": "DG3YDE", "EVIDENCE": "remote_web_observed_traffic"},
+            stale,
+        ),
+        band="20m",
+    )
+
+    graph = service.message_graph(message_id, "OH3SPN", band="20m")
+    assert "M9LOV" not in graph["nodes"]
+    assert graph["edges"] == []
     database.close()
 
 

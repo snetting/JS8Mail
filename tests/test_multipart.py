@@ -74,7 +74,7 @@ def test_standard_js8call_relay_and_store_forms() -> None:
 def test_first_ordinary_message_can_identify_js8mail() -> None:
     identified = format_ordinary_message("N0CALL", "hello", announce=True)
     later = format_ordinary_message("N0CALL", "hello")
-    assert identified == "N0CALL MSG hello [JS8Mail/0.0.9]"
+    assert identified == "N0CALL MSG hello [JS8Mail/0.1.0]"
     assert "JS8Mail" not in later
 
 

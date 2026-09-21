@@ -34,7 +34,17 @@ Launcher options:
   --foreground   Run in this terminal and show live daemon output
   --background   Run detached in the background (the default)
 
-Normal daemon options are passed through. Defaults are:
+Daemon options (passed through):
+  --host HOST         JS8Call API address (default: 127.0.0.1)
+  --port PORT         JS8Call API port (default: 2442)
+  --database PATH     Mailbox database (default: js8mail.sqlite3)
+  --ui-host HOST      Web UI bind address (default: 127.0.0.1)
+  --ui-port PORT      Web UI port (default: 8765)
+  --tx-mode MODE      automatic or observe (default: automatic)
+  --auto-speed        Allow evidence-backed JS8Call speed changes
+  --open-browser      Open the local web UI after startup
+
+Defaults:
   JS8Call API: 127.0.0.1:2442
   Web UI:      http://127.0.0.1:8765
   TX mode:     automatic

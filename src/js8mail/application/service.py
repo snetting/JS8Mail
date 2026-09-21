@@ -13,6 +13,11 @@ from js8mail.domain import utc_now_ms
 from js8mail.routing import LinkEvidence, RouteEngine, RoutePlan, TemporalGraph
 from js8mail.storage import Database
 
+
+MESSAGE_GRAPH_EVIDENCE_MAX_AGE_MS = 48 * 60 * 60 * 1000
+MESSAGE_GRAPH_MAX_PATHS = 64
+MESSAGE_GRAPH_MAX_OPERATION_EDGES = 80
+
 DEFAULT_MESSAGE_TTL_MS = 3 * 24 * 60 * 60 * 1000
 ENHANCED_MODES = frozenset({"standard", "opportunistic", "required"})
 
@@ -140,7 +145,7 @@ class MailService:
                 base = 0.35 + (float(snr) + 20.0) / 50.0
             else:
                 base = 0.42 if evidence in {"query_answered", "remote_query_call_yes"} else 0.32
-            if evidence == "remote_query_call_yes":
+            if evidence.startswith("remote_"):
                 base *= 0.8  # reported reachability, not a local ACK
             return max(0.0, min(1.0, base))
 
@@ -186,7 +191,7 @@ class MailService:
                     target,
                     observation["observed_at_ms"] - age_ms,
                     score,
-                    source_kind="remote" if evidence == "remote_query_call_yes" else "local",
+                    source_kind="remote" if evidence.startswith("remote_") else "local",
                     expected_airtime_ms=1000,
                 )
             )
@@ -342,6 +347,7 @@ class MailService:
         destination = str(message["destination"]).upper()
         message_state = str(message["state"])
         origin = origin.strip().upper()
+        now = utc_now_ms()
         nodes: set[str] = {origin, destination}
         edges: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -360,6 +366,8 @@ class MailService:
                     "last_action": None,
                     "last_status": None,
                     "label": "observed",
+                    "network_hint": False,
+                    "rf_observed": False,
                 },
             )
 
@@ -415,7 +423,10 @@ class MailService:
                 label = f"reported {reported_snr:g} dB"
             set_kind(edge, "reported", label)
 
+        evidence_cutoff_ms = now - MESSAGE_GRAPH_EVIDENCE_MAX_AGE_MS
         for observation in self.database.recent_observations(500, band=band):
+            if int(observation["observed_at_ms"]) < evidence_cutoff_ms:
+                continue
             params = observation["params"]
             source, target = params.get("FROM"), params.get("TO")
             if not isinstance(source, str) or not isinstance(target, str):
@@ -429,6 +440,10 @@ class MailService:
             edge = edge_for(source, target)
             edge["count"] = int(edge["count"]) + 1
             edge["latest"] = max(int(edge["latest"]), int(observation["observed_at_ms"]))
+            if str(params.get("EVIDENCE", "")).startswith("remote_web_"):
+                edge["network_hint"] = True
+            else:
+                edge["rf_observed"] = True
             snr = params.get("SNR")
             if isinstance(snr, (int, float)):
                 edge["snr"] = snr if edge["snr"] is None else max(float(edge["snr"]), float(snr))
@@ -563,7 +578,43 @@ class MailService:
         # Do not let a long-lived mailbox turn a graph request into a dump of
         # every historical retry.  The database remains complete; the graph
         # only needs the most recent route attempts for interpretation.
-        paths = paths[-64:]
+        paths = paths[-MESSAGE_GRAPH_MAX_PATHS:]
+
+        # Keep the durable attempt/audit history untouched, but bound the
+        # graph itself. Passive RF/network evidence is time-limited above;
+        # operation edges are retained when they belong to a recent path and
+        # otherwise capped to the newest attempted links. This prevents a
+        # multi-day undelivered message from turning the visual graph into a
+        # dump of every historical custodian considered.
+        recent_path_pairs = {
+            (path[0], path[1])
+            for item in paths
+            for path in [tuple(str(node).upper() for node in item.get("path", []))]
+            if len(path) >= 2
+        }
+        operation_edges = [
+            edge for edge in edges.values() if int(edge.get("attempts", 0) or 0) > 0
+        ]
+        if len(operation_edges) > MESSAGE_GRAPH_MAX_OPERATION_EDGES:
+            keep_operation_keys = set(recent_path_pairs)
+            keep_operation_keys.update(
+                (str(edge["from"]), str(edge["to"]))
+                for edge in sorted(
+                    operation_edges,
+                    key=lambda item: int(item.get("latest", 0) or 0),
+                    reverse=True,
+                )[:MESSAGE_GRAPH_MAX_OPERATION_EDGES]
+            )
+            edges = {
+                key: edge
+                for key, edge in edges.items()
+                if int(edge.get("attempts", 0) or 0) == 0 or key in keep_operation_keys
+            }
+        nodes = {origin, destination}
+        for edge in edges.values():
+            nodes.update((str(edge["from"]), str(edge["to"])))
+        for item in paths:
+            nodes.update(str(node).upper() for node in item.get("path", []))
         return {
             "message_id": message_id,
             "origin": origin,
