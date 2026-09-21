@@ -995,9 +995,10 @@ class Database:
                 state[key] = {"pending_at_ms": created_at_ms, "submitted_at_ms": None}
                 continue
             if event_type == "inbox.retrieval_submitted":
-                current = state.setdefault(
-                    key, {"pending_at_ms": 0, "submitted_at_ms": None}
-                )
+                current = state.get(key)
+                if current is None:
+                    current = {"pending_at_ms": 0, "submitted_at_ms": None}
+                    state[key] = current
                 current["submitted_at_ms"] = created_at_ms
                 continue
             current = state.get(key)
@@ -1239,8 +1240,7 @@ class Database:
             if attempt["action"] == "store" and attempt["status"] == "submitted"
         ]
         acknowledged = any(
-            attempt["action"] == "custody_ack"
-            and attempt["status"] in {"received", "confirmed"}
+            attempt["action"] == "custody_ack" and attempt["status"] in {"received", "confirmed"}
             for attempt in attempts
         )
         last_offer_at_ms = max(
@@ -1258,22 +1258,19 @@ class Database:
         timeout_count = sum(
             1
             for attempt in attempts
-            if attempt["action"] == "store_timeout"
-            and attempt["status"] in {"uncertain", "failed"}
+            if attempt["action"] == "store_timeout" and attempt["status"] in {"uncertain", "failed"}
         )
         last_manual_retry_at_ms = max(
             (
                 int(attempt["created_at_ms"])
                 for attempt in self.list_attempts(message_id)
-                if attempt["action"] == "manual_retry"
-                and attempt["status"] == "requested"
+                if attempt["action"] == "manual_retry" and attempt["status"] == "requested"
             ),
             default=None,
         )
         automatic_offer_count = len(submitted)
-        manual_override = (
-            last_manual_retry_at_ms is not None
-            and (last_offer_at_ms is None or last_manual_retry_at_ms >= last_offer_at_ms)
+        manual_override = last_manual_retry_at_ms is not None and (
+            last_offer_at_ms is None or last_manual_retry_at_ms >= last_offer_at_ms
         )
         if acknowledged:
             return {
@@ -1573,9 +1570,7 @@ class Database:
             item["peer_js8m"] = self.peer_capabilities(str(item["sender"])) is not None
             item["custodian_collection"] = retrieval_metadata.get(str(item["message_id"]))
             if item["custodian_collection"] is not None:
-                item["custodian_message_id"] = item["custodian_collection"][
-                    "custodian_message_id"
-                ]
+                item["custodian_message_id"] = item["custodian_collection"]["custodian_message_id"]
             result.append(item)
         return result
 

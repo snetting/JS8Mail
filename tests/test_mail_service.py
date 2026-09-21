@@ -55,9 +55,7 @@ def test_delete_is_idempotent_for_missing_messages(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("active_state", ["queued", "waiting_route", "in_progress"])
-def test_delete_requires_cancel_for_active_messages(
-    tmp_path: Path, active_state: str
-) -> None:
+def test_delete_requires_cancel_for_active_messages(tmp_path: Path, active_state: str) -> None:
     database = Database(tmp_path / f"mail-{active_state}.sqlite3")
     service = MailService(database)
     message_id = service.compose("M0SPN", "Test", "Active message")

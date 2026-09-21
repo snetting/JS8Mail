@@ -71,8 +71,8 @@ from js8mail.radio_policy import (
     estimate_airtime_ms,
 )
 from js8mail.reassembly import ActivityAssembler, ActivityFragment
-from js8mail.route_hints import RouteHintsClient, claims_from_observations
 from js8mail.rf_timing import TX_TRAIN_QUIET_MS, TxTrain
+from js8mail.route_hints import RouteHintsClient, claims_from_observations
 from js8mail.routing import RouteAction, RoutePlan
 from js8mail.storage import Database
 
@@ -128,6 +128,8 @@ def update_rx_activity_guard(
     if guard_slots >= MAX_RX_ACTIVITY_GUARD_SLOTS:
         return current_until_ms, guard_slots
     return now_ms + RX_ACTIVITY_GUARD_MS, guard_slots + 1
+
+
 ROUTE_HOP_PROBE_COOLDOWN_MS = 5 * 60 * 1000
 # A message may use a bounded burst, then continue in later rolling windows.
 # The total is intentionally larger than the three-day default message TTL;
@@ -893,7 +895,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/settings/route-hints":
                 enabled = bool(payload.get("enabled", False))
                 self.route_hints.set_enabled(enabled)
-                self.service.database.set_configuration("route_hints_enabled", "1" if enabled else "0")
+                self.service.database.set_configuration(
+                    "route_hints_enabled", "1" if enabled else "0"
+                )
                 self.service.database.audit(
                     "settings.route_hints_changed",
                     {"enabled": enabled, "configured": bool(self.route_hints.endpoint)},
@@ -1994,7 +1998,7 @@ async def run(args: argparse.Namespace) -> None:
     def retrieval_key_from_payload(payload: dict[str, Any]) -> tuple[str, int] | None:
         custodian = str(payload.get("custodian", "")).strip().upper()
         try:
-            stored_id = int(payload.get("js8call_message_id"))
+            stored_id = int(payload.get("js8call_message_id") or 0)
         except (TypeError, ValueError):
             return None
         if not custodian or not 0 <= stored_id <= 2_147_483_647:
@@ -2295,13 +2299,7 @@ async def run(args: argparse.Namespace) -> None:
                 )
                 remaining_seconds = max(
                     1,
-                    (
-                        pending.submitted_at_ms
-                        + pending.response_window_ms
-                        - now_wall
-                        + 999
-                    )
-                    // 1000,
+                    (pending.submitted_at_ms + pending.response_window_ms - now_wall + 999) // 1000,
                 )
                 return (
                     False,
@@ -2323,13 +2321,7 @@ async def run(args: argparse.Namespace) -> None:
                 )
                 remaining_seconds = max(
                     1,
-                    (
-                        pending.submitted_at_ms
-                        + pending.response_window_ms
-                        - now_wall
-                        + 999
-                    )
-                    // 1000,
+                    (pending.submitted_at_ms + pending.response_window_ms - now_wall + 999) // 1000,
                 )
                 return (
                     False,
@@ -2461,7 +2453,13 @@ async def run(args: argparse.Namespace) -> None:
                     controller.send_rf(retrieve_message_query(custodian, stored_id)),
                     timeout=30,
                 )
-            except (TimeoutError, ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
+            except (
+                TimeoutError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                AirtimeBudgetExceeded,
+            ) as exc:
                 # Base the backoff on the end of the handoff attempt. A
                 # timeout can consume the whole 30 seconds; using the loop's
                 # old timestamp would make the item immediately eligible and
@@ -2510,7 +2508,9 @@ async def run(args: argparse.Namespace) -> None:
         status["route_hints_activity_until_ms"] = utc_now_ms() + 2_000
 
     def route_hints_enabled() -> bool:
-        return route_hints.enabled and database.get_configuration("route_hints_enabled", "1") not in {
+        return route_hints.enabled and database.get_configuration(
+            "route_hints_enabled", "1"
+        ) not in {
             "0",
             "false",
             "off",
@@ -2601,7 +2601,13 @@ async def run(args: argparse.Namespace) -> None:
         status["route_hints"] = route_hints.public_status()
         database.audit(
             "route_hints.pull",
-            {"destination": target, "band": band, "reason": reason, "count": len(hints), "state": route_hints.state.state},
+            {
+                "destination": target,
+                "band": band,
+                "reason": reason,
+                "count": len(hints),
+                "state": route_hints.state.state,
+            },
         )
         applied = 0
         for claim in hints:
@@ -2611,10 +2617,9 @@ async def run(args: argparse.Namespace) -> None:
                 applied += 1
         if applied:
             for message in message_rows:
-                if (
-                    str(message.get("destination", "")).upper() == target
-                    and str(message.get("state", "")) in {"queued", "waiting_route", "in_progress"}
-                ):
+                if str(message.get("destination", "")).upper() == target and str(
+                    message.get("state", "")
+                ) in {"queued", "waiting_route", "in_progress"}:
                     database.record_attempt(
                         str(message["id"]),
                         "route_hints",
@@ -2652,7 +2657,12 @@ async def run(args: argparse.Namespace) -> None:
         status["route_hints"] = route_hints.public_status()
         database.audit(
             "route_hints.push",
-            {"band": band, "claims": len(claims), "accepted": accepted, "state": route_hints.state.state},
+            {
+                "band": band,
+                "claims": len(claims),
+                "accepted": accepted,
+                "state": route_hints.state.state,
+            },
         )
         return accepted
 
@@ -3325,19 +3335,14 @@ async def run(args: argparse.Namespace) -> None:
                     # Prefer a custodian that has not seen this message yet.
                     # A second offer is still allowed when no new candidate is
                     # known, but it should not crowd out route diversity.
-                    candidate_custodian = next(
-                        iter(untried_custodians or retry_custodians), None
-                    )
+                    candidate_custodian = next(iter(untried_custodians or retry_custodians), None)
                     # Legacy custodians do not provide a portable end-to-end
                     # receipt. Limit the number of distinct offers and never
                     # offer a second custodian while an earlier one is still
                     # pending or accepted. A submitted offer without an ACK is
                     # also retained in durable history, so repeated failures
                     # quarantine that custodian instead of creating a loop.
-                    if (
-                        candidate_custodian is not None
-                        and len(custody_history) < 3
-                    ):
+                    if candidate_custodian is not None and len(custody_history) < 3:
                         try:
                             await controller.transmit_store(str(message["id"]), candidate_custodian)
                         except (
@@ -3431,12 +3436,12 @@ async def run(args: argparse.Namespace) -> None:
                                 )
                                 query_submitted = query_submitted or candidate_submitted
                                 if candidate_submitted:
-                                        query_wait_ms = max(
+                                    query_wait_ms = max(
                                         query_wait_ms,
-                                            query_response_window_ms(
-                                                "candidate_query_call", status.get("speed", 0)
-                                            ),
-                                        )
+                                        query_response_window_ms(
+                                            "candidate_query_call", status.get("speed", 0)
+                                        ),
+                                    )
                             else:
                                 state = query_scheduler.state(candidate_key)
                                 remaining_seconds = max(
@@ -3570,11 +3575,13 @@ async def run(args: argparse.Namespace) -> None:
                         # decodes cannot starve the scheduler indefinitely.
                         now_activity_ms = utc_now_ms()
                         last_activity_ms = int(status.get("last_rx_activity_ms", 0) or 0)
-                        status["incoming_activity_until_ms"], status["rx_activity_guard_slots"] = update_rx_activity_guard(
-                            last_activity_ms,
-                            int(status.get("rx_activity_guard_slots", 0) or 0),
-                            now_activity_ms,
-                            int(status.get("incoming_activity_until_ms", 0) or 0),
+                        status["incoming_activity_until_ms"], status["rx_activity_guard_slots"] = (
+                            update_rx_activity_guard(
+                                last_activity_ms,
+                                int(status.get("rx_activity_guard_slots", 0) or 0),
+                                now_activity_ms,
+                                int(status.get("incoming_activity_until_ms", 0) or 0),
+                            )
                         )
                         status["last_rx_activity_ms"] = now_activity_ms
                     if event.event_type == "RX.ACTIVITY":
@@ -3974,25 +3981,24 @@ async def run(args: argparse.Namespace) -> None:
                     availability = parse_messages_available_context(availability_text)
                     if availability is not None:
                         announced_source, announced_destination, available_id = availability
-                        responder = (
+                        responder: str | None = (
                             source.upper()
                             if isinstance(source, str) and source
                             else announced_source
                         )
                         if not responder:
                             responder = str(event.params.get("FROM", "")).strip().upper() or None
-                        destination = (
-                            frame.destination
-                            if frame is not None
-                            else announced_destination
+                        response_destination: str | None = (
+                            frame.destination if frame is not None else announced_destination
                         )
-                        if not destination:
-                            destination = str(event.params.get("TO", "")).strip().upper() or None
+                        if not response_destination:
+                            response_destination = (
+                                str(event.params.get("TO", "")).strip().upper() or None
+                            )
                         if (
                             responder
-                            and destination
-                            and destination.upper()
-                            in {local_call, "@ALLCALL"}
+                            and response_destination
+                            and response_destination.upper() in {local_call, "@ALLCALL"}
                         ):
                             queue_message_retrieval(
                                 responder,
@@ -4263,8 +4269,7 @@ async def run(args: argparse.Namespace) -> None:
                             )
                         matching_retrieval = (
                             retrieval_key
-                            if retrieval_key is not None
-                            and retrieval_key in pending_retrievals
+                            if retrieval_key is not None and retrieval_key in pending_retrievals
                             else None
                         )
                         if partial and matching_retrieval is not None:

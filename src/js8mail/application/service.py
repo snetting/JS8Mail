@@ -13,7 +13,6 @@ from js8mail.domain import utc_now_ms
 from js8mail.routing import LinkEvidence, RouteEngine, RoutePlan, TemporalGraph
 from js8mail.storage import Database
 
-
 MESSAGE_GRAPH_EVIDENCE_MAX_AGE_MS = 48 * 60 * 60 * 1000
 MESSAGE_GRAPH_MAX_PATHS = 64
 MESSAGE_GRAPH_MAX_OPERATION_EDGES = 80
@@ -592,9 +591,7 @@ class MailService:
             for path in [tuple(str(node).upper() for node in item.get("path", []))]
             if len(path) >= 2
         }
-        operation_edges = [
-            edge for edge in edges.values() if int(edge.get("attempts", 0) or 0) > 0
-        ]
+        operation_edges = [edge for edge in edges.values() if int(edge.get("attempts", 0) or 0) > 0]
         if len(operation_edges) > MESSAGE_GRAPH_MAX_OPERATION_EDGES:
             keep_operation_keys = set(recent_path_pairs)
             keep_operation_keys.update(

@@ -59,8 +59,7 @@ def test_partial_legacy_inbox_fragment_can_be_reconciled(tmp_path: Path) -> None
 def test_inbox_collection_metadata_requires_matching_submission(tmp_path: Path) -> None:
     database = Database(tmp_path / "mail.sqlite3")
     database.upsert_inbox_message(
-        "ORIGIN", "local-1", "hello", 1, (1,), True,
-        ("ORIGIN", "CUST"), delivery="stored_collected"
+        "ORIGIN", "local-1", "hello", 1, (1,), True, ("ORIGIN", "CUST"), delivery="stored_collected"
     )
     database.audit(
         "inbox.retrieval_pending",
@@ -319,9 +318,7 @@ def test_relay_route_quarantine_uses_only_completed_timeouts(tmp_path: Path) -> 
         (2_000, second),
     )
     database.connection.commit()
-    policy = database.message_route_failure_policies(
-        "m1", now_ms=2_001, quarantine_ms=86_400_000
-    )
+    policy = database.message_route_failure_policies("m1", now_ms=2_001, quarantine_ms=86_400_000)
     assert policy[path]["blocked"] is True
     assert policy[path]["failure_count"] == 2
 

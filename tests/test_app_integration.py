@@ -64,8 +64,18 @@ def test_distinct_ack_count_coalesces_duplicate_decodes() -> None:
     attempts = [
         {"action": "standard_ack", "status": "received", "target": "F4LPU", "created_at_ms": 1000},
         {"action": "standard_ack", "status": "received", "target": "F4LPU", "created_at_ms": 1001},
-        {"action": "standard_ack", "status": "received", "target": "F4LPU", "created_at_ms": 40_000},
-        {"action": "standard_ack", "status": "received", "target": "OTHER", "created_at_ms": 50_000},
+        {
+            "action": "standard_ack",
+            "status": "received",
+            "target": "F4LPU",
+            "created_at_ms": 40_000,
+        },
+        {
+            "action": "standard_ack",
+            "status": "received",
+            "target": "OTHER",
+            "created_at_ms": 50_000,
+        },
     ]
     assert distinct_ack_count(attempts, "F4LPU") == 2
 

@@ -6,10 +6,10 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from typing import Any
 
 PROTOCOL = "j8rh/1"
 
@@ -37,7 +37,9 @@ class RouteHintsClient:
     def __init__(self, endpoint: str = "", timeout_seconds: float = 4.0) -> None:
         self.endpoint = endpoint.strip().rstrip("/")
         self.timeout_seconds = max(1.0, min(float(timeout_seconds), 20.0))
-        self.state = RouteHintsState(enabled=bool(self.endpoint), state="ready" if self.endpoint else "disabled")
+        self.state = RouteHintsState(
+            enabled=bool(self.endpoint), state="ready" if self.endpoint else "disabled"
+        )
 
     @property
     def enabled(self) -> bool:
@@ -60,7 +62,9 @@ class RouteHintsClient:
             "claims_published": self.state.claims_published,
         }
 
-    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _request(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         data = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
         request = Request(
             self.endpoint + path,
@@ -68,10 +72,10 @@ class RouteHintsClient:
             method=method,
             headers={"Accept": "application/json", "Content-Type": "application/json"},
         )
-        with urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310 - configured operator endpoint
+        with urlopen(request, timeout=self.timeout_seconds) as response:
             value = json.loads(response.read(512_000))
         if not isinstance(value, dict):
-            raise ValueError("route-hints service returned a non-object response")
+            raise TypeError("route-hints service returned a non-object response")
         return value
 
     async def pull(self, target: str, band: str, limit: int = 100) -> list[dict[str, Any]]:
@@ -80,20 +84,29 @@ class RouteHintsClient:
         now = int(time.time() * 1000)
         self.state.last_pull_at_ms = now
         try:
-            query = urlencode({"target": target.upper(), "band": band.lower(), "limit": max(1, min(limit, 100))})
+            query = urlencode(
+                {"target": target.upper(), "band": band.lower(), "limit": max(1, min(limit, 100))}
+            )
             result = await asyncio.to_thread(self._request, "GET", f"/v1/evidence?{query}")
             if result.get("protocol") != PROTOCOL:
                 raise ValueError("unsupported route-hints protocol")
             evidence = result.get("evidence", [])
             if not isinstance(evidence, list):
-                raise ValueError("invalid route-hints evidence list")
+                raise TypeError("invalid route-hints evidence list")
             hints = [item for item in evidence if isinstance(item, dict)]
             self.state.state = "online"
             self.state.last_success_at_ms = int(time.time() * 1000)
             self.state.last_error = ""
             self.state.hints_received += len(hints)
             return hints
-        except (OSError, HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        except (
+            OSError,
+            HTTPError,
+            URLError,
+            TimeoutError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
             self.state.state = "offline"
             self.state.last_error = str(exc)[:160] or type(exc).__name__
             return []
@@ -118,7 +131,14 @@ class RouteHintsClient:
             self.state.last_error = ""
             self.state.claims_published += max(0, accepted)
             return max(0, accepted)
-        except (OSError, HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        except (
+            OSError,
+            HTTPError,
+            URLError,
+            TimeoutError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
             self.state.state = "offline"
             self.state.last_error = str(exc)[:160] or type(exc).__name__
             return 0
