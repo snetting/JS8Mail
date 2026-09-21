@@ -35,6 +35,21 @@ does not lose a message that JS8Call has already announced. The UI and audit
 timeline distinguish a retrieval that was requested from one that was actually
 received.
 
+Retrieval correlation is deliberately conservative: JS8Mail allows only one
+`QUERY MSG <id>` response window per custodian. A normal directed message from
+that station does not complete unrelated pending IDs. A retrieval is marked
+complete only when a matching query was handed to JS8Call and the response
+arrived inside its bounded response window; otherwise it is retried or
+eventually exhausted according to the normal retrieval budget. This prevents
+an old message or an unrelated custodian transmission from permanently
+suppression of collection. Historical completion records from older builds that
+have no matching query submission are automatically re-armed on restart.
+
+For a genuinely correlated stored collection, the opened inbox view shows the
+custodian path followed by the custodian's local JS8Call message ID, for
+example `OH3SPN→MM0ZFG · MSG ID 431`. The ID is local to that custodian and is
+an analysis aid, not a globally unique JS8Mail message identifier.
+
 ## What JS8Mail is for
 
 The primary use case is reliable text delivery when speed is less important
@@ -384,8 +399,12 @@ Discovery proceeds from cheap and targeted evidence toward broader evidence:
 The query scheduler has its own cooldown separate from each message's retry
 timer. Therefore a message can become due while a particular query is still
 cooling down; the UI may show that the query was skipped or blocked while the
-message remains queued. This prevents a fleet of queued messages from turning
-into a broadcast beacon.
+message remains queued. The expanded outbox timeline explains why a query was
+blocked, for example `query cooldown active; next attempt in 120s`, another
+`@ALLCALL` query awaiting its response window, `JS8Call API disconnected`, or
+an RF handoff blocked because JS8Call is receiving/transmitting or a local
+airtime policy is full. This prevents a fleet of queued messages from turning
+into a broadcast beacon while making the reason visible to the operator.
 
 `QUERY CALL` replies are deliberately compact. For example:
 

@@ -646,6 +646,11 @@ let inboxCapabilityStyle=document.createElement('style');inboxCapabilityStyle.te
 const moveInboxCapabilityHint=renderInbox;renderInbox=items=>{moveInboxCapabilityHint(items);let rows=[...document.querySelectorAll('#inbox tr[data-inbox-row]')];(items||[]).forEach((item,index)=>{if(item?.protocol!=='standard'||!item.peer_js8m||!rows[index])return;let sender=rows[index].children[1],status=rows[index].children[2],dot=status?.querySelector('.inbox-capability-known');if(sender&&dot) sender.append(' ',dot)})};
 const ensureInboxCapabilityDot=renderInbox;renderInbox=items=>{ensureInboxCapabilityDot(items);let rows=[...document.querySelectorAll('#inbox tr[data-inbox-row]')];(items||[]).forEach((item,index)=>{if(!item?.peer_js8m||!rows[index])return;let sender=rows[index].children[1],dot=sender?.querySelector('.inbox-capability-known');if(!sender)return;if(!dot){dot=document.createElement('span');dot.className='inbox-capability-known';dot.setAttribute('aria-label','JS8Mail capable');dot.setAttribute('role','img');dot.textContent='●';sender.append(' ',dot)}dot.title='JS8Mail capable'})};
 const inboxMessageWithSubject=showInboxMessage;showInboxMessage=async item=>{await inboxMessageWithSubject(item);let content=document.getElementById('message-modal-content');if(!content||content.querySelector('[data-message-subject]'))return;let subject=document.createElement('p');subject.dataset.messageSubject='true';subject.innerHTML=`<b>Subject:</b> ${esc(item?.subject||'(no subject)')}`;let first=content.querySelector('p');if(first)first.before(subject);else content.prepend(subject)};
+// Show the remote JS8Call store ID only when a matching retrieval was
+// actually correlated.  This is deliberately presentation metadata; the
+// route string remains suitable for routing and graph calculations.
+const showInboxMessageWithCollectionPath=showInboxMessage;showInboxMessage=async item=>{await showInboxMessageWithCollectionPath(item);if(item?.delivery!=='stored_collected'||item?.custodian_message_id==null)return;let content=document.getElementById('message-modal-content'),path=item.path||item.sender||'Unknown';if(!content)return;let paragraph=[...content.querySelectorAll('p')].find(node=>node.innerHTML.includes('<b>Path:</b>'));if(paragraph){let marker='<b>Path:</b>',offset=paragraph.innerHTML.indexOf(marker);if(offset>=0)paragraph.innerHTML=paragraph.innerHTML.slice(0,offset)+`${marker} ${esc(path)} · MSG ID ${esc(item.custodian_message_id)}`}};
+const renderInboxWithCollectionPath=renderInbox;renderInbox=items=>{renderInboxWithCollectionPath(items);(items||[]).forEach((item,index)=>{if(item?.delivery!=='stored_collected'||item?.custodian_message_id==null)return;let row=document.querySelectorAll('#inbox tr[data-inbox-row]')[index],cell=row?.children?.[4];if(cell)cell.insertAdjacentHTML('beforeend',`<br><span class=mono>MSG ID ${esc(item.custodian_message_id)}</span>`)})};
 // Keep the release label and update popup in sync with the package version.
 document.querySelector('.version-button')?.replaceChildren(document.createTextNode('v0.0.8d · Updates'));
 const showReleaseInfo=showVersionInfo;showVersionInfo=()=>{showReleaseInfo();let title=document.querySelector('#version-modal h2');if(title)title.textContent='JS8Mail v0.0.8d';let list=document.querySelector('#version-modal ul');if(list)list.innerHTML='<li>Reassembles standard and JS8Mail activity frames, including bare multiframe receipts.</li><li>Preserves partial multipart mail and correlates selective acknowledgements and final delivery receipts.</li><li>Serializes TX trains, protects RX response windows, and retains routes across busy-radio deferrals.</li><li>Improves inbox selection, stable compact previews, protocol labels, and active-band RF evidence.</li><li>Adds semantic message-route graph outcomes, compact latest-route details, collision-aware labels, and readable sizing for long callsigns.</li><li>Color-codes Live RF Activity labels to match reciprocal, active one-way, aged, and JS8Mail evidence links.</li><li>Opportunistic mode actively learns JS8M capability from marked first contact, while Standard mode remains a complete one-message opt-out.</li><li>Group broadcasts now omit the JS8Mail marker to save airtime; capability records remain valid for seven days and refresh with valid JS8M evidence.</li><li>Queues stored-message retrieval after a JS8Call YES MSG ID response, retries safely outside the receive callback, and restores pending collection after daemon restart.</li><li>Special thanks to F4LPU for the message-graph readability report, and to everyone who helped with the local and on-air testing behind this release.</li>'};
@@ -1939,8 +1944,12 @@ async def run(args: argparse.Namespace) -> None:
     # JS8Call store is separate from our mailbox database.
     pending_retrievals: dict[tuple[str, int], tuple[int, int]] = {}
     completed_retrievals: set[tuple[str, int]] = set()
+    # Only one retrieval may be awaiting a response from a given custodian.
+    # A normal message from that custodian must not complete unrelated IDs.
+    retrieval_in_flight: dict[str, tuple[tuple[str, int], int]] = {}
     max_retrieval_attempts = 4
     retrieval_retry_delay_ms = 45_000
+    retrieval_response_window_ms = 4 * 60_000
 
     def retrieval_key_from_payload(payload: dict[str, Any]) -> tuple[str, int] | None:
         custodian = str(payload.get("custodian", "")).strip().upper()
@@ -1955,12 +1964,17 @@ async def run(args: argparse.Namespace) -> None:
     def restore_pending_retrievals(now_ms: int) -> None:
         """Recover retrievals that were announced or submitted before restart."""
         latest: dict[tuple[str, int], tuple[int, str, int]] = {}
+        pending_epoch: dict[tuple[str, int], int] = {}
+        submitted_after_pending: dict[tuple[str, int], int] = {}
         since_ms = now_ms - 7 * 24 * 60 * 60 * 1000
         events: list[tuple[int, str, dict[str, Any]]] = []
         for event_type in (
             "inbox.retrieval_pending",
             "inbox.retrieval_submitted",
             "inbox.retrieval_failed",
+            "inbox.retrieval_partial",
+            "inbox.retrieval_timeout",
+            "inbox.retrieval_rearmed",
             "inbox.retrieval_completed",
             "inbox.retrieval_exhausted",
         ):
@@ -1974,10 +1988,35 @@ async def run(args: argparse.Namespace) -> None:
                 attempts = int(payload.get("attempt", 0))
             except (TypeError, ValueError):
                 attempts = 0
-            latest[key] = (created_at_ms, event_type, max(0, attempts))
+            attempts = max(0, attempts)
+            if event_type in {"inbox.retrieval_pending", "inbox.retrieval_rearmed"}:
+                pending_epoch[key] = created_at_ms
+                submitted_after_pending.pop(key, None)
+            elif event_type == "inbox.retrieval_submitted":
+                pending_epoch.setdefault(key, 0)
+                submitted_after_pending[key] = created_at_ms
+            latest[key] = (created_at_ms, event_type, attempts)
         for key, (created_at_ms, event_type, attempts) in latest.items():
             if event_type == "inbox.retrieval_completed":
-                completed_retrievals.add(key)
+                # Older versions completed every pending ID when any full
+                # message arrived from a custodian.  Such a completion has no
+                # matching submitted QUERY MSG and must be re-armed instead
+                # of suppressing collection forever.
+                submitted_at = submitted_after_pending.get(key)
+                pending_at = pending_epoch.get(key, 0)
+                if submitted_at is not None and submitted_at >= pending_at:
+                    completed_retrievals.add(key)
+                else:
+                    database.audit(
+                        "inbox.retrieval_rearmed",
+                        {
+                            "custodian": key[0],
+                            "js8call_message_id": key[1],
+                            "attempt": 0,
+                            "reason": "historical completion had no matching retrieval submission",
+                        },
+                    )
+                    pending_retrievals[key] = (now_ms, 0)
                 continue
             if event_type == "inbox.retrieval_exhausted":
                 continue
@@ -2177,10 +2216,18 @@ async def run(args: argparse.Namespace) -> None:
         target: str,
         scheduler: QueryScheduler = query_scheduler,
         route_destination: str | None = None,
-    ) -> bool:
+    ) -> tuple[bool, str | None]:
         now = int(asyncio.get_running_loop().time() * 1000)
-        if not client.connected or not scheduler.due(key, now):
-            return False
+        if not client.connected:
+            return False, "JS8Call API disconnected"
+        if not scheduler.due(key, now):
+            state = scheduler.state(key)
+            remaining_ms = max(0, state.next_at_ms - now)
+            remaining_seconds = max(1, (remaining_ms + 999) // 1000)
+            return (
+                False,
+                f"query cooldown active; next attempt in {remaining_seconds}s",
+            )
         now_wall = utc_now_ms()
         pending_call_queries[:] = [
             query
@@ -2199,14 +2246,58 @@ async def run(args: argparse.Namespace) -> None:
                 # A compact ALLCALL YES cannot identify which queried
                 # destination it answers. Keep one outstanding ALLCALL
                 # destination so a valid answer is never misrouted.
-                return False
+                pending = next(
+                    query
+                    for query in pending_call_queries
+                    if query.responder == "@ALLCALL"
+                    and query.destination != destination
+                    and now_wall - query.submitted_at_ms <= query.response_window_ms
+                )
+                remaining_seconds = max(
+                    1,
+                    (
+                        pending.submitted_at_ms
+                        + pending.response_window_ms
+                        - now_wall
+                        + 999
+                    )
+                    // 1000,
+                )
+                return (
+                    False,
+                    (
+                        f"another @ALLCALL query for {pending.destination} is awaiting "
+                        f"replies ({remaining_seconds}s remaining)"
+                    ),
+                )
             if any(
                 query.responder == responder and query.destination != destination
                 for query in pending_call_queries
             ):
                 # CALL YES does not repeat the destination. Keep at most one
                 # outstanding destination per directed station/@ALLCALL.
-                return False
+                pending = next(
+                    query
+                    for query in pending_call_queries
+                    if query.responder == responder and query.destination != destination
+                )
+                remaining_seconds = max(
+                    1,
+                    (
+                        pending.submitted_at_ms
+                        + pending.response_window_ms
+                        - now_wall
+                        + 999
+                    )
+                    // 1000,
+                )
+                return (
+                    False,
+                    (
+                        f"{responder} query for {pending.destination} is awaiting "
+                        f"replies ({remaining_seconds}s remaining)"
+                    ),
+                )
         try:
             await controller.send_rf(text)
             database.audit(
@@ -2232,10 +2323,10 @@ async def run(args: argparse.Namespace) -> None:
                     )
                 )
                 del pending_call_queries[:-16]
-            return True
-        except (ConnectionError, RuntimeError):
+            return True, None
+        except (ConnectionError, OSError, RuntimeError, AirtimeBudgetExceeded) as exc:
             scheduler.record(key, now)
-            return False
+            return False, f"RF handoff blocked: {radio_exception_reason(exc)}"
 
     def queue_message_retrieval(custodian: str, stored_id: int, reason: str) -> None:
         """Queue a targeted QUERY MSG without blocking the RX event handler."""
@@ -2269,12 +2360,48 @@ async def run(args: argparse.Namespace) -> None:
             },
         )
 
+    def active_retrieval_for(custodian: str, now_ms: int | None = None) -> tuple[str, int] | None:
+        """Return the one retrieval whose response may be correlated now."""
+        now_ms = utc_now_ms() if now_ms is None else now_ms
+        active = retrieval_in_flight.get(custodian.strip().upper())
+        if active is None:
+            return None
+        key, deadline_ms = active
+        if now_ms >= deadline_ms:
+            return None
+        return key
+
     async def service_pending_retrievals(now_wall_ms: int) -> None:
         """Submit queued retrievals during normal scheduler opportunities."""
+        # A response window is measured from the retrieval handoff. Once it
+        # expires, let the normal retry budget decide whether to try again.
+        for custodian, (in_flight_key, deadline_ms) in list(retrieval_in_flight.items()):
+            if now_wall_ms >= deadline_ms:
+                retrieval_in_flight.pop(custodian, None)
+                pending_state = pending_retrievals.get(in_flight_key)
+                if pending_state is not None:
+                    pending_retrievals[in_flight_key] = (
+                        now_wall_ms,
+                        pending_state[1],
+                    )
+                    database.audit(
+                        "inbox.retrieval_timeout",
+                        {
+                            "custodian": custodian,
+                            "js8call_message_id": in_flight_key[1],
+                            "attempt": pending_state[1],
+                            "reason": "no matching message response before retrieval window",
+                        },
+                    )
         for key, (due_at_ms, submitted_count) in list(pending_retrievals.items()):
             if now_wall_ms < due_at_ms:
                 continue
             custodian, stored_id = key
+            active = retrieval_in_flight.get(custodian)
+            if active is not None:
+                # Serialize IDs for one custodian. A full message received
+                # while another ID is active cannot be attributed safely.
+                continue
             if submitted_count >= max_retrieval_attempts:
                 database.audit(
                     "inbox.retrieval_exhausted",
@@ -2311,13 +2438,16 @@ async def run(args: argparse.Namespace) -> None:
                 )
                 continue
             attempt = submitted_count + 1
-            pending_retrievals[key] = (now_wall_ms + retrieval_retry_delay_ms, attempt)
+            response_deadline = utc_now_ms() + retrieval_response_window_ms
+            pending_retrievals[key] = (response_deadline, attempt)
+            retrieval_in_flight[custodian] = (key, response_deadline)
             database.audit(
                 "inbox.retrieval_submitted",
                 {
                     "custodian": custodian,
                     "js8call_message_id": stored_id,
                     "attempt": attempt,
+                    "response_deadline_ms": response_deadline,
                 },
             )
 
@@ -3048,14 +3178,16 @@ async def run(args: argparse.Namespace) -> None:
 
                 call_key = f"call-query:{destination}"
                 query_submitted = False
+                query_block_reason: str | None = None
                 query_wait_ms = query_context_window_ms
                 if query_scheduler.due(call_key, now):
                     candidates = promising
+                    candidate_block_reasons: list[tuple[str, str]] = []
                     if candidates:
                         for candidate in candidates:
                             candidate_key = f"candidate-query:{candidate}:{destination}"
                             if query_scheduler.due(candidate_key, now):
-                                candidate_submitted = await submit_query(
+                                candidate_submitted, candidate_block_reason = await submit_query(
                                     candidate_key,
                                     f"{candidate} QUERY CALL {destination}",
                                     "candidate_query_call",
@@ -3067,18 +3199,44 @@ async def run(args: argparse.Namespace) -> None:
                                     "candidate_query_call",
                                     candidate,
                                     "submitted" if candidate_submitted else "blocked",
-                                    destination,
+                                    destination
+                                    if candidate_submitted
+                                    else f"{destination}; {candidate_block_reason or 'query not submitted'}",
                                 )
                                 query_submitted = query_submitted or candidate_submitted
                                 if candidate_submitted:
-                                    query_wait_ms = max(
+                                        query_wait_ms = max(
                                         query_wait_ms,
-                                        query_response_window_ms(
-                                            "candidate_query_call", status.get("speed", 0)
+                                            query_response_window_ms(
+                                                "candidate_query_call", status.get("speed", 0)
+                                            ),
+                                        )
+                            else:
+                                state = query_scheduler.state(candidate_key)
+                                remaining_seconds = max(
+                                    1,
+                                    (max(0, state.next_at_ms - now) + 999) // 1000,
+                                )
+                                candidate_block_reasons.append(
+                                    (
+                                        candidate,
+                                        (
+                                            f"query cooldown active; next attempt in "
+                                            f"{remaining_seconds}s"
                                         ),
                                     )
+                                )
+                        if not query_submitted and candidate_block_reasons:
+                            blocked_candidate, query_block_reason = candidate_block_reasons[0]
+                            database.record_attempt(
+                                str(message["id"]),
+                                "candidate_query_call",
+                                blocked_candidate,
+                                "blocked",
+                                f"{destination}; {query_block_reason}",
+                            )
                     else:
-                        allcall_submitted = await submit_query(
+                        allcall_submitted, allcall_block_reason = await submit_query(
                             call_key,
                             call_query(destination),
                             "allcall_query_call",
@@ -3090,13 +3248,31 @@ async def run(args: argparse.Namespace) -> None:
                             "allcall_query_call",
                             "@ALLCALL",
                             "submitted" if allcall_submitted else "blocked",
-                            destination,
+                            destination
+                            if allcall_submitted
+                            else f"{destination}; {allcall_block_reason or 'query not submitted'}",
                         )
                         query_submitted = allcall_submitted
                         if allcall_submitted:
                             query_wait_ms = query_response_window_ms(
                                 "allcall_query_call", status.get("speed", 0)
                             )
+                else:
+                    state = query_scheduler.state(call_key)
+                    remaining_seconds = max(
+                        1,
+                        (max(0, state.next_at_ms - now) + 999) // 1000,
+                    )
+                    query_block_reason = (
+                        f"query cooldown active; next attempt in {remaining_seconds}s"
+                    )
+                    database.record_attempt(
+                        str(message["id"]),
+                        "allcall_query_call",
+                        "@ALLCALL",
+                        "blocked",
+                        f"{destination}; {query_block_reason}",
+                    )
                 delay_ms = min(
                     60_000 * (2 ** min(int(message.get("retry_count", 0)), 8)),
                     21_600_000,
@@ -3732,7 +3908,12 @@ async def run(args: argparse.Namespace) -> None:
                             message_text = clean_user_message(message_text)
                             if not message_text:
                                 return
-                            collected = any(key[0] == source.upper() for key in pending_retrievals)
+                            retrieval_key = active_retrieval_for(source)
+                            # A custodian's ordinary message is only a stored
+                            # retrieval response when this daemon has actually
+                            # submitted the matching QUERY MSG and is still
+                            # inside its bounded response window.
+                            collected = retrieval_key is not None
                             original_sender = source
                             if collected:
                                 # JS8Call's stored-message response normally
@@ -3853,43 +4034,44 @@ async def run(args: argparse.Namespace) -> None:
                                     status.get("pending_capability_peer") or ""
                                 ),
                             )
-                        matching_retrievals = [
-                            (retrieval_key, state)
-                            for retrieval_key, state in pending_retrievals.items()
-                            if retrieval_key[0] == source.upper()
-                        ]
-                        if partial and matching_retrievals:
-                            retrieval_key, (next_retry_at, retry_count) = matching_retrievals[0]
+                        matching_retrieval = (
+                            retrieval_key
+                            if retrieval_key is not None
+                            and retrieval_key in pending_retrievals
+                            else None
+                        )
+                        if partial and matching_retrieval is not None:
+                            next_retry_at, retry_count = pending_retrievals[matching_retrieval]
                             now = utc_now_ms()
+                            retrieval_in_flight.pop(source.upper(), None)
                             if retry_count < max_retrieval_attempts and now >= next_retry_at:
-                                pending_retrievals[retrieval_key] = (
+                                pending_retrievals[matching_retrieval] = (
                                     now + retrieval_retry_delay_ms,
                                     retry_count,
                                 )
                                 database.audit(
                                     "inbox.retrieval_partial",
                                     {
-                                        "custodian": retrieval_key[0],
-                                        "js8call_message_id": retrieval_key[1],
+                                        "custodian": matching_retrieval[0],
+                                        "js8call_message_id": matching_retrieval[1],
                                         "attempt": retry_count,
                                         "message_id": legacy_id,
                                         "detail": "partial retrieval retained; scheduler will request the complete message again",
                                     },
                                 )
-                        elif not partial:
-                            for retrieval_key in tuple(pending_retrievals):
-                                if retrieval_key[0] == source.upper():
-                                    database.audit(
-                                        "inbox.retrieval_completed",
-                                        {
-                                            "custodian": retrieval_key[0],
-                                            "js8call_message_id": retrieval_key[1],
-                                            "attempt": pending_retrievals[retrieval_key][1],
-                                            "message_id": legacy_id,
-                                        },
-                                    )
-                                    completed_retrievals.add(retrieval_key)
-                                    pending_retrievals.pop(retrieval_key, None)
+                        elif not partial and matching_retrieval is not None:
+                            database.audit(
+                                "inbox.retrieval_completed",
+                                {
+                                    "custodian": matching_retrieval[0],
+                                    "js8call_message_id": matching_retrieval[1],
+                                    "attempt": pending_retrievals[matching_retrieval][1],
+                                    "message_id": legacy_id,
+                                },
+                            )
+                            completed_retrievals.add(matching_retrieval)
+                            pending_retrievals.pop(matching_retrieval, None)
+                            retrieval_in_flight.pop(source.upper(), None)
                     query_response = parse_query_call_response(
                         frame.wire_text if frame is not None else ""
                     )
