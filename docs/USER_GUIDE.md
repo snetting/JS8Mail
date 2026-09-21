@@ -591,14 +591,16 @@ mailbox contents, message identifiers, complete local history, or delivery
 receipts are shared—only short-lived observability of heard stations and
 paths.
 
-Network hints are advisory only. A remote claim is lower-confidence than local
-RF evidence and never authorizes a full payload without the normal local route
-validation. Local RF evidence takes priority when the same path is also known
-locally. Pulls follow the message retry/backoff cadence, so a fresh hint can
-wake a waiting message without creating a polling storm. Useful local claims
-are published every 10 minutes. HTTP failures and
-timeouts are recorded in the status indicator and do not stop JS8Mail or block
-ordinary RF routing. The Outbox records when hints were received and applied.
+Network hints are advisory only, but they are actionable routing clues. A hint
+can nominate a candidate path even when the path is not yet present in local
+RF observations. Before sending the full payload, JS8Mail probes the first
+hop; a response makes the candidate eligible for delivery. Local RF evidence
+takes priority when the same path is also known locally. Pulls follow the
+message retry/backoff cadence, so a fresh hint can wake a waiting message
+without creating a polling storm. Useful local claims are published every 10
+minutes. HTTP failures and timeouts are recorded in the status indicator and
+do not stop JS8Mail or block ordinary RF routing. The Outbox records when
+hints were received and applied.
 
 When an outgoing message graph contains a path known only through the network
 service, it is shown with a purple dashed edge and a `NET` label. These edges

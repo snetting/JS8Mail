@@ -2620,7 +2620,7 @@ async def run(args: argparse.Namespace) -> None:
                         "route_hints",
                         target,
                         "received",
-                        f"applied {applied} short-lived network route hint(s) for {band}; advisory only, local RF confirmation still required",
+                        f"applied {applied} short-lived network route hint(s) for {band}; candidate paths may be nominated, then the first hop is probed before full payload delivery",
                     )
                     database.wake_message_for_route(str(message["id"]))
             database.audit(
