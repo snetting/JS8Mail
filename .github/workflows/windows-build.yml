@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
   workflow_dispatch:
   schedule:
     # Nightly at 02:17 UTC; the job skips itself when main has not changed.
@@ -11,7 +13,7 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 jobs:
   check-main:
@@ -34,7 +36,8 @@ jobs:
             });
 
             const lastSuccessfulRun = data.workflow_runs[0];
-            const needsBuild = !lastSuccessfulRun ||
+            const isReleaseTag = context.ref.startsWith('refs/tags/');
+            const needsBuild = isReleaseTag || !lastSuccessfulRun ||
               lastSuccessfulRun.head_sha !== context.sha;
 
             core.setOutput('needs_build', String(needsBuild));
@@ -42,6 +45,7 @@ jobs:
               ? `Last successful Windows build: ${lastSuccessfulRun.head_sha}`
               : 'No successful Windows build found');
             core.info(`Current main commit: ${context.sha}`);
+            core.info(`Release tag: ${isReleaseTag}`);
             core.info(`Windows build required: ${needsBuild}`);
 
   build-windows:
@@ -62,3 +66,35 @@ jobs:
           name: JS8Mail-windows-x64
           path: builds/windows/dist/JS8Mail.exe
           if-no-files-found: error
+
+  publish-release:
+    name: Publish tagged Windows release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v') && needs.build-windows.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: JS8Mail-windows-x64
+          path: dist
+      - name: Package release asset
+        shell: bash
+        run: zip -j "JS8Mail-${GITHUB_REF_NAME}-windows-x64.zip" dist/JS8Mail.exe
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          ASSET: JS8Mail-${{ github.ref_name }}-windows-x64.zip
+        run: |
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" "$ASSET" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "JS8Mail $TAG" \
+              --generate-notes \
+              --prerelease
+          else
+            gh release upload "$TAG" "$ASSET" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          fi

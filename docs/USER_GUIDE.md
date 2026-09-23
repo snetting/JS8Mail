@@ -148,14 +148,18 @@ Windows workstation. The bundle has not yet been tested end-to-end with
 Windows JS8Call, audio devices, or a radio, so it should not yet be treated as
 production or emergency-communications software.
 
-The repository also provides a portable Windows executable build. Download the
-`JS8Mail-windows-x64` artifact from a successful `Windows bundle` workflow run,
-place `JS8Mail.exe` in a writable directory, and double-click it. The bundle
-starts with automatic RF handoff, connects to JS8Call at `127.0.0.1:2442`,
-serves the UI at `http://127.0.0.1:8765`, and opens that address automatically.
-Its local `js8mail.sqlite3` database is kept beside the executable. JS8Call
-must still be installed and configured separately; the bundle does not include
-JS8Call, audio drivers, or radio control software.
+The repository provides a portable Windows executable build. For a versioned
+tester download, use the [JS8Mail Releases
+page](https://github.com/snetting/JS8Mail/releases) and download the
+`JS8Mail-<version>-windows-x64.zip` asset. Nightly and manually requested
+builds remain available as the `JS8Mail-windows-x64` artifact on the successful
+`Windows bundle` workflow run. Place `JS8Mail.exe` in a writable directory and
+double-click it. The bundle starts with automatic RF handoff, connects to
+JS8Call at `127.0.0.1:2442`, serves the UI at `http://127.0.0.1:8765`, and
+opens that address automatically. Its local `js8mail.sqlite3` database is
+kept beside the executable. JS8Call must still be installed and configured
+separately; the bundle does not include JS8Call, audio drivers, or radio
+control software.
 
 The executable is built on a Windows runner with PyInstaller, so it is a
 bundled/frozen Python application rather than a cross-compiled Linux binary.

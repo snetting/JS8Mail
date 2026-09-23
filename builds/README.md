@@ -42,5 +42,10 @@ into the next nightly build. A maintainer can also start it immediately from
 the Actions page with **Run workflow**; the manual run uses the same main-branch
 checkout and produces the same artifact.
 
+Pushing a version tag such as `v0.1.0` also creates an experimental GitHub
+pre-release and attaches `JS8Mail-v0.1.0-windows-x64.zip`. Use the Releases page
+for the versioned tester download; use Actions artifacts for nightly or manual
+builds.
+
 This repository intentionally does not commit generated `.exe` files. They
 are platform-specific, large, and reproducible from the script and workflow.
